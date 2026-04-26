@@ -729,9 +729,12 @@ def volunteer_page():
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
+# ── Bootstrap on startup (runs under both gunicorn and direct execution) ──────
+
+bootstrap_db()
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    bootstrap_db()
     log.info(f'SIHAA Ops Hub starting on port {PORT}')
     app.run(host='0.0.0.0', port=PORT, debug=False)
