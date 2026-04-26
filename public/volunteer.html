@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volunteer — Sihha Charity</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --black: #111111;
+    --white: #ffffff;
+    --gray-1: #f6f6f6;
+    --gray-2: #e8e8e8;
+    --gray-3: #cccccc;
+    --gray-4: #888888;
+    --gray-5: #444444;
+  }
+
+  body {
+    font-family: Helvetica, Arial, sans-serif;
+    background: var(--white);
+    color: var(--black);
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  header {
+    border-bottom: 1px solid var(--gray-2);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .logo {
+    font-size: 24px;
+    font-weight: 300;
+    letter-spacing: 3px;
+    text-decoration: none;
+    color: var(--black);
+  }
+  .back-link {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--gray-4);
+    text-decoration: none;
+  }
+  .back-link:hover { color: var(--black); }
+
+  .page {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+  .page-title {
+    font-size: 28px;
+    font-weight: 300;
+    letter-spacing: -0.5px;
+    margin-bottom: 8px;
+  }
+  .page-desc {
+    font-size: 14px;
+    color: var(--gray-5);
+    line-height: 1.6;
+    margin-bottom: 40px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--gray-2);
+  }
+
+  .section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--gray-4);
+    margin-bottom: 20px;
+    margin-top: 36px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--gray-2);
+    font-weight: 600;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  .field { margin-bottom: 24px; }
+  .field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gray-5);
+    margin-bottom: 8px;
+  }
+  .required-star { color: var(--black); }
+  .field input,
+  .field select,
+  .field textarea {
+    width: 100%;
+    border: 1.5px solid var(--gray-3);
+    padding: 12px 14px;
+    font-size: 15px;
+    font-family: Helvetica, Arial, sans-serif;
+    outline: none;
+    background: var(--white);
+    color: var(--black);
+    -webkit-appearance: none;
+    border-radius: 0;
+  }
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus { border-color: var(--black); }
+  .field textarea { resize: vertical; min-height: 80px; }
+  .field-hint { font-size: 12px; color: var(--gray-4); margin-top: 6px; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 480px) { .field-row { grid-template-columns: 1fr; } }
+
+  /* Checkboxes */
+  .check-group { display: flex; flex-direction: column; gap: 10px; }
+  .check-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+    padding: 12px 14px;
+    border: 1.5px solid var(--gray-2);
+  }
+  .check-item:hover { border-color: var(--gray-3); background: var(--gray-1); }
+  .check-item input[type="checkbox"] {
+    width: 18px; height: 18px; min-width: 18px;
+    margin-top: 2px; cursor: pointer;
+    accent-color: var(--black); padding: 0;
+  }
+  .check-item.selected { border-color: var(--black); background: var(--gray-1); }
+  .check-label { font-size: 14px; line-height: 1.4; }
+
+  /* Radio */
+  .radio-group { display: flex; gap: 10px; flex-wrap: wrap; }
+  .radio-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 10px 16px;
+    border: 1.5px solid var(--gray-2);
+    font-size: 14px;
+  }
+  .radio-item:hover { border-color: var(--gray-3); background: var(--gray-1); }
+  .radio-item input[type="radio"] {
+    width: 16px; height: 16px; min-width: 16px;
+    cursor: pointer; accent-color: var(--black); padding: 0;
+  }
+  .radio-item.selected { border-color: var(--black); background: var(--gray-1); }
+
+  /* Availability grid */
+  .avail-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .avail-grid th {
+    text-align: center;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gray-4);
+    padding: 8px 6px;
+    font-weight: 600;
+    background: var(--gray-1);
+    border: 1px solid var(--gray-2);
+  }
+  .avail-grid td {
+    border: 1px solid var(--gray-2);
+    text-align: center;
+    padding: 6px;
+  }
+  .avail-grid tr:first-child th:first-child { background: var(--white); border: none; }
+  .avail-grid .day-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--gray-5);
+    font-weight: 600;
+    text-align: left;
+    padding-left: 10px;
+    background: var(--gray-1);
+  }
+  .avail-grid input[type="checkbox"] {
+    width: 16px; height: 16px;
+    cursor: pointer;
+    accent-color: var(--black);
+  }
+  .avail-grid tr:hover td { background: var(--gray-1); }
+
+  /* Scale */
+  .scale-group {
+    display: flex;
+    gap: 8px;
+  }
+  .scale-item {
+    flex: 1;
+    border: 1.5px solid var(--gray-2);
+    padding: 12px 6px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .scale-item:hover { border-color: var(--gray-3); background: var(--gray-1); }
+  .scale-item.selected { border-color: var(--black); background: var(--black); color: var(--white); }
+  .scale-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--gray-4);
+  }
+
+  /* Submit */
+  .submit-btn {
+    width: 100%;
+    background: var(--black);
+    color: var(--white);
+    border: none;
+    padding: 16px;
+    font-size: 13px;
+    font-family: Helvetica, Arial, sans-serif;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    margin-top: 40px;
+  }
+  .submit-btn:hover { background: var(--gray-5); }
+  .submit-btn:disabled { background: var(--gray-3); cursor: not-allowed; }
+
+  .form-error {
+    background: #fff0f0;
+    border: 1px solid #fcc;
+    color: #c00;
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-top: 16px;
+    display: none;
+  }
+
+  /* Success */
+  #success-state {
+    display: none;
+    text-align: center;
+    padding: 60px 24px;
+  }
+  .success-icon { font-size: 48px; margin-bottom: 24px; }
+  .success-title { font-size: 24px; font-weight: 300; margin-bottom: 12px; }
+  .success-text {
+    font-size: 14px; color: var(--gray-5); line-height: 1.6;
+    max-width: 400px; margin: 0 auto 32px;
+  }
+  .success-link {
+    display: inline-block;
+    border: 1.5px solid var(--black);
+    padding: 12px 28px;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--black);
+  }
+  .success-link:hover { background: var(--black); color: var(--white); }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="https://www.sihha.org">sihha</a>
+  <a class="back-link" href="https://www.sihha.org">← Back to sihha.org</a>
+</header>
+
+<div class="page">
+
+  <div id="form-state">
+    <h1 class="page-title">Volunteer with Sihha</h1>
+    <p class="page-desc">Thank you for your interest in volunteering. Please fill out this form and we will be in touch to discuss how you can help. Volunteering is typically bi-weekly.</p>
+
+    <form id="vol-form" onsubmit="submitForm(event)" novalidate>
+
+      <div class="section-label">Your Information</div>
+
+      <div class="field">
+        <label>Full Name <span class="required-star">*</span></label>
+        <input type="text" id="name" placeholder="Your full name" required autocomplete="name">
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Email <span class="required-star">*</span></label>
+          <input type="email" id="email" placeholder="your@email.com" required autocomplete="email">
+        </div>
+        <div class="field">
+          <label>Phone <span class="required-star">*</span></label>
+          <input type="tel" id="phone" placeholder="(585) 000-0000" required autocomplete="tel">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Preferred Contact Method <span class="required-star">*</span></label>
+        <div class="radio-group">
+          <label class="radio-item">
+            <input type="radio" name="contact_pref" value="Email"> Email
+          </label>
+          <label class="radio-item">
+            <input type="radio" name="contact_pref" value="Text Message"> Text Message
+          </label>
+        </div>
+      </div>
+
+      <div class="section-label">Volunteering Interests</div>
+
+      <div class="field">
+        <label>Areas you'd like to help with <span class="required-star">*</span></label>
+        <div class="check-group">
+          <label class="check-item">
+            <input type="checkbox" class="area-check" value="shopping">
+            <span class="check-label"><strong>Shopping & Supply Pickup</strong> — Collecting items based on our weekly list</span>
+          </label>
+          <label class="check-item">
+            <input type="checkbox" class="area-check" value="packing">
+            <span class="check-label"><strong>Packing & Organizing Bundles</strong> — Sorting and assembling items for delivery</span>
+          </label>
+          <label class="check-item">
+            <input type="checkbox" class="area-check" value="delivery">
+            <span class="check-label"><strong>Delivery</strong> — Dropping off bundles to homes in the community</span>
+          </label>
+          <label class="check-item">
+            <input type="checkbox" class="area-check" value="general">
+            <span class="check-label"><strong>General Help</strong> — Open to helping with any of the above</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="section-label">Availability</div>
+      <p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">Volunteering is bi-weekly. Please select the times that work for you.</p>
+
+      <div class="field">
+        <table class="avail-grid">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Morning<br><span style="font-weight:400">9am–12pm</span></th>
+              <th>Afternoon<br><span style="font-weight:400">12pm–4pm</span></th>
+              <th>Evening<br><span style="font-weight:400">4pm–7pm</span></th>
+            </tr>
+          </thead>
+          <tbody id="avail-body"></tbody>
+        </table>
+      </div>
+
+      <div class="section-label">About You</div>
+
+      <div class="field">
+        <label>Comfort working independently</label>
+        <div class="scale-group" id="comfort-scale">
+          <div class="scale-item" onclick="selectScale(1)">1</div>
+          <div class="scale-item" onclick="selectScale(2)">2</div>
+          <div class="scale-item" onclick="selectScale(3)">3</div>
+          <div class="scale-item" onclick="selectScale(4)">4</div>
+          <div class="scale-item" onclick="selectScale(5)">5</div>
+        </div>
+        <div class="scale-labels">
+          <span>Not comfortable</span>
+          <span>Very comfortable</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Relevant Skills or Experience <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <textarea id="skills" placeholder="e.g. driving, organizing, food handling experience…"></textarea>
+      </div>
+
+      <div class="field">
+        <label>Anything else we should know? <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <textarea id="other_info" placeholder="Any additional information about your availability or interests…"></textarea>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submit-btn">Submit Application</button>
+      <div class="form-error" id="form-error"></div>
+
+    </form>
+  </div>
+
+  <!-- Success -->
+  <div id="success-state">
+    <div class="success-icon">✓</div>
+    <h2 class="success-title">Application Received</h2>
+    <p class="success-text">Thank you for signing up to volunteer with Sihha. We truly appreciate your generosity. We will be in touch soon to discuss next steps.</p>
+    <a class="success-link" href="https://www.sihha.org">Return to sihha.org</a>
+  </div>
+
+</div>
+
+<script>
+  // Build availability grid
+  const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const SLOTS = ['morning','afternoon','evening'];
+  const tbody = document.getElementById('avail-body');
+  DAYS.forEach(day => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="day-label">${day}</td>` +
+      SLOTS.map(slot => `<td><input type="checkbox" data-day="${day}" data-slot="${slot}"></td>`).join('');
+    tbody.appendChild(tr);
+  });
+
+  // Highlight check/radio items
+  document.querySelectorAll('.check-item input, .radio-item input').forEach(inp => {
+    inp.addEventListener('change', function() {
+      const item = this.closest('.check-item, .radio-item');
+      if (this.type === 'radio') {
+        document.querySelectorAll(`input[name="${this.name}"]`).forEach(r =>
+          r.closest('.radio-item').classList.remove('selected'));
+        if (this.checked) item.classList.add('selected');
+      } else {
+        item.classList.toggle('selected', this.checked);
+      }
+    });
+  });
+
+  // Scale selector
+  let selectedScale = null;
+  function selectScale(val) {
+    selectedScale = val;
+    document.querySelectorAll('.scale-item').forEach((el, i) => {
+      el.classList.toggle('selected', i + 1 === val);
+    });
+  }
+
+  // Get availability grid values
+  function getAvailability() {
+    const avail = {};
+    document.querySelectorAll('#avail-body input[type="checkbox"]:checked').forEach(cb => {
+      const day = cb.dataset.day;
+      if (!avail[day]) avail[day] = [];
+      avail[day].push(cb.dataset.slot);
+    });
+    return avail;
+  }
+
+  async function submitForm(e) {
+    e.preventDefault();
+    const errEl = document.getElementById('form-error');
+    errEl.style.display = 'none';
+
+    const name = document.getElementById('name').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    const contact_pref = document.querySelector('input[name="contact_pref"]:checked');
+    const areas = Array.from(document.querySelectorAll('.area-check:checked')).map(c => c.value);
+
+    if (!name) return showError('Please enter your full name.');
+    if (!email) return showError('Please enter your email address.');
+    if (!phone) return showError('Please enter your phone number.');
+    if (!contact_pref) return showError('Please select your preferred contact method.');
+    if (areas.length === 0) return showError('Please select at least one area you would like to help with.');
+
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Submitting…';
+
+    try {
+      const res = await fetch('/api/volunteer-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name, email, phone,
+          contact_preference: contact_pref.value,
+          volunteer_areas: areas,
+          availability: getAvailability(),
+          comfort_level: selectedScale,
+          skills: document.getElementById('skills').value.trim() || null,
+          other_info: document.getElementById('other_info').value.trim() || null
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Submission failed');
+      document.getElementById('form-state').style.display = 'none';
+      document.getElementById('success-state').style.display = 'block';
+      window.scrollTo(0, 0);
+    } catch(err) {
+      showError(err.message);
+      btn.disabled = false;
+      btn.textContent = 'Submit Application';
+    }
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('form-error');
+    el.textContent = msg;
+    el.style.display = 'block';
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+</script>
+</body>
+</html>
