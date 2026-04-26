@@ -92,20 +92,25 @@ def bootstrap_db():
         );
 
         CREATE TABLE IF NOT EXISTS volunteers (
-            id              TEXT PRIMARY KEY,
-            name            TEXT NOT NULL,
-            phone           TEXT,
-            email           TEXT,
-            role            TEXT DEFAULT 'shopper'
-                            CHECK(role IN ('shopper','delivery','both')),
-            availability    TEXT,
-            service_area    TEXT,
-            status          TEXT NOT NULL DEFAULT 'pending'
-                            CHECK(status IN ('pending','active','inactive')),
-            notes           TEXT,
-            source          TEXT DEFAULT 'admin',
-            created_at      TEXT NOT NULL,
-            updated_at      TEXT
+            id                  TEXT PRIMARY KEY,
+            name                TEXT NOT NULL,
+            phone               TEXT,
+            email               TEXT,
+            role                TEXT DEFAULT 'shopper'
+                                CHECK(role IN ('shopper','delivery','both','general')),
+            availability        TEXT,
+            service_area        TEXT,
+            contact_preference  TEXT,
+            volunteer_areas     TEXT,
+            comfort_level       INTEGER,
+            skills              TEXT,
+            other_info          TEXT,
+            status              TEXT NOT NULL DEFAULT 'pending'
+                                CHECK(status IN ('pending','active','inactive')),
+            notes               TEXT,
+            source              TEXT DEFAULT 'admin',
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT
         );
 
         CREATE TABLE IF NOT EXISTS assignments (
@@ -693,17 +698,38 @@ def public_intake():
 
 @app.route('/api/volunteer-signup', methods=['POST'])
 def public_volunteer_signup():
+    import json as _json
     data = request.json or {}
     if not data.get('name') or not data.get('phone'):
         return jsonify({'error': 'Name and phone are required'}), 422
     vid = str(uuid.uuid4())
+    # Map volunteer areas to role field
+    areas = data.get('volunteer_areas', [])
+    if isinstance(areas, list):
+        if 'delivery' in areas and ('shopping' in areas or 'packing' in areas):
+            role = 'both'
+        elif 'delivery' in areas:
+            role = 'delivery'
+        elif areas:
+            role = 'shopper'
+        else:
+            role = 'general'
+    else:
+        role = 'shopper'
     db = get_db()
     db.execute(
         '''INSERT INTO volunteers
-           (id,name,phone,email,role,availability,service_area,status,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+           (id,name,phone,email,role,availability,contact_preference,
+            volunteer_areas,comfort_level,skills,other_info,status,source,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (vid, data['name'], data['phone'], data.get('email'),
-         data.get('role', 'shopper'), data.get('availability'), data.get('service_area'),
+         role,
+         _json.dumps(data.get('availability', {})) if isinstance(data.get('availability'), dict) else data.get('availability'),
+         data.get('contact_preference'),
+         _json.dumps(areas) if isinstance(areas, list) else areas,
+         data.get('comfort_level'),
+         data.get('skills'),
+         data.get('other_info'),
          'pending', 'signup_form', now())
     )
     db.commit()
