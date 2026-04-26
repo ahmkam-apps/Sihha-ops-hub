@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sihha — Ops Hub</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --black:   #111111;
+    --white:   #ffffff;
+    --gray-1:  #f6f6f6;
+    --gray-2:  #e8e8e8;
+    --gray-3:  #cccccc;
+    --gray-4:  #888888;
+    --gray-5:  #444444;
+    --sidebar-w: 220px;
+    --font: Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--white);
+    color: var(--black);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* ── Login ─────────────────────────────────────────────── */
+  #login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--white);
+  }
+  .login-box {
+    width: 360px;
+    padding: 48px 40px;
+    border: 1.5px solid var(--black);
+  }
+  .login-logo {
+    font-size: 28px;
+    font-weight: 300;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+  .login-sub {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--gray-4);
+    margin-bottom: 36px;
+  }
+  .login-box label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gray-5);
+    margin-bottom: 6px;
+  }
+  .login-box input {
+    width: 100%;
+    border: 1.5px solid var(--black);
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: var(--font);
+    outline: none;
+    margin-bottom: 20px;
+    background: var(--white);
+  }
+  .login-box input:focus { background: var(--gray-1); }
+  .btn-primary {
+    width: 100%;
+    background: var(--black);
+    color: var(--white);
+    border: none;
+    padding: 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .btn-primary:hover { background: var(--gray-5); }
+  .btn-primary:disabled { background: var(--gray-3); cursor: not-allowed; }
+  .login-error {
+    color: #c00;
+    font-size: 12px;
+    margin-top: 12px;
+    display: none;
+  }
+
+  /* ── App Shell ─────────────────────────────────────────── */
+  #app { display: none; height: 100vh; }
+
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: var(--sidebar-w);
+    background: var(--white);
+    border-right: 1.5px solid var(--black);
+    display: flex;
+    flex-direction: column;
+    z-index: 100;
+  }
+  .sidebar-logo {
+    padding: 24px 20px 20px;
+    border-bottom: 1px solid var(--gray-2);
+  }
+  .sidebar-logo .wordmark {
+    font-size: 22px;
+    font-weight: 300;
+    letter-spacing: 3px;
+  }
+  .sidebar-logo .tagline {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--gray-4);
+    margin-top: 2px;
+  }
+  .nav-section {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--gray-4);
+    padding: 16px 20px 6px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--gray-5);
+    border-left: 3px solid transparent;
+    transition: all 0.1s;
+  }
+  .nav-item:hover { background: var(--gray-1); color: var(--black); }
+  .nav-item.active {
+    color: var(--black);
+    font-weight: 600;
+    border-left-color: var(--black);
+    background: var(--gray-1);
+  }
+  .nav-item .icon { font-size: 14px; width: 18px; text-align: center; }
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 16px 20px;
+    border-top: 1px solid var(--gray-2);
+    font-size: 12px;
+    color: var(--gray-4);
+  }
+  .sidebar-user { font-weight: 600; color: var(--black); margin-bottom: 2px; }
+  .sidebar-role { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .logout-btn {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--gray-4);
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .logout-btn:hover { color: var(--black); }
+
+  .main {
+    margin-left: var(--sidebar-w);
+    min-height: 100vh;
+    background: var(--gray-1);
+  }
+  .topbar {
+    background: var(--white);
+    border-bottom: 1px solid var(--gray-2);
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .topbar h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  .topbar-actions { display: flex; gap: 10px; align-items: center; }
+
+  .content { padding: 28px 32px; }
+
+  /* ── Buttons ────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    font-size: 12px;
+    font-family: var(--font);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    border: 1.5px solid var(--black);
+    background: var(--black);
+    color: var(--white);
+  }
+  .btn:hover { background: var(--gray-5); border-color: var(--gray-5); }
+  .btn-outline {
+    background: var(--white);
+    color: var(--black);
+  }
+  .btn-outline:hover { background: var(--gray-1); }
+  .btn-sm { padding: 5px 12px; font-size: 11px; }
+
+  /* ── Stats Cards ────────────────────────────────────────── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--white);
+    border: 1.5px solid var(--black);
+    padding: 20px;
+    cursor: pointer;
+  }
+  .stat-card:hover { background: var(--gray-1); }
+  .stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--gray-4);
+    margin-bottom: 8px;
+  }
+  .stat-value {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+  .stat-sub {
+    font-size: 11px;
+    color: var(--gray-4);
+    margin-top: 4px;
+  }
+
+  /* ── Tables ─────────────────────────────────────────────── */
+  .table-card {
+    background: var(--white);
+    border: 1.5px solid var(--black);
+  }
+  .table-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--gray-2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .table-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .search-input {
+    border: 1.5px solid var(--gray-2);
+    padding: 7px 12px;
+    font-size: 12px;
+    font-family: var(--font);
+    outline: none;
+    width: 220px;
+  }
+  .search-input:focus { border-color: var(--black); }
+  .filter-tabs { display: flex; gap: 0; }
+  .filter-tab {
+    padding: 6px 14px;
+    font-size: 11px;
+    font-family: var(--font);
+    cursor: pointer;
+    border: 1px solid var(--gray-2);
+    background: var(--white);
+    margin-right: -1px;
+    color: var(--gray-5);
+  }
+  .filter-tab.active {
+    background: var(--black);
+    color: var(--white);
+    border-color: var(--black);
+    z-index: 1;
+    position: relative;
+  }
+  .filter-tab:hover:not(.active) { background: var(--gray-1); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gray-4);
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--gray-2);
+    font-weight: 600;
+    background: var(--gray-1);
+  }
+  td { padding: 12px 16px; border-bottom: 1px solid var(--gray-2); font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--gray-1); }
+  .empty-row td { text-align: center; color: var(--gray-4); padding: 40px; font-size: 13px; }
+
+  /* ── Status Badges ──────────────────────────────────────── */
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+  }
+  .badge-pending  { background: var(--gray-2); color: var(--gray-5); }
+  .badge-active   { background: var(--black);  color: var(--white); }
+  .badge-inactive { background: var(--gray-1); color: var(--gray-4); border: 1px solid var(--gray-3); }
+  .badge-paused   { background: var(--gray-3); color: var(--gray-5); }
+  .badge-approved { background: var(--black);  color: var(--white); }
+  .badge-rejected { background: #c00;          color: var(--white); }
+  .badge-completed{ background: var(--black);  color: var(--white); }
+
+  /* ── Drawer / Slide-in panel ────────────────────────────── */
+  .overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 200;
+  }
+  .overlay.open { display: block; }
+  .drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 480px;
+    background: var(--white);
+    border-left: 1.5px solid var(--black);
+    z-index: 201;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--gray-2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .drawer-title { font-size: 15px; font-weight: 700; }
+  .drawer-close {
+    font-size: 20px;
+    cursor: pointer;
+    color: var(--gray-4);
+    line-height: 1;
+    padding: 4px;
+  }
+  .drawer-close:hover { color: var(--black); }
+  .drawer-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .drawer-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--gray-2);
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  /* ── Forms ──────────────────────────────────────────────── */
+  .form-group { margin-bottom: 18px; }
+  .form-group label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gray-5);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .form-group input,
+  .form-group select,
+  .form-group textarea {
+    width: 100%;
+    border: 1.5px solid var(--gray-3);
+    padding: 10px 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    outline: none;
+    background: var(--white);
+    color: var(--black);
+  }
+  .form-group input:focus,
+  .form-group select:focus,
+  .form-group textarea:focus { border-color: var(--black); }
+  .form-group textarea { resize: vertical; min-height: 80px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-section {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--gray-4);
+    margin-bottom: 14px;
+    margin-top: 20px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--gray-2);
+  }
+  .form-section:first-child { margin-top: 0; }
+
+  /* ── Detail Panel ───────────────────────────────────────── */
+  .detail-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    align-items: flex-start;
+  }
+  .detail-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gray-4);
+    width: 130px;
+    flex-shrink: 0;
+    padding-top: 2px;
+    font-weight: 600;
+  }
+  .detail-value { font-size: 13px; flex: 1; }
+
+  /* ── Alert ───────────────────────────────────────────────── */
+  .alert {
+    padding: 10px 16px;
+    font-size: 12px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .alert-error { background: #fff0f0; border: 1px solid #fcc; color: #c00; }
+  .alert-success { background: #f0fff4; border: 1px solid #9f9; color: #060; }
+
+  /* ── Responsive ─────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); }
+    .main { margin-left: 0; }
+    .drawer { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Login Screen ────────────────────────────────────────────────────────── -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">sihha</div>
+    <div class="login-sub">Operations Hub</div>
+    <label>Username</label>
+    <input type="text" id="login-user" autocomplete="username" placeholder="username">
+    <label>Password</label>
+    <input type="password" id="login-pass" autocomplete="current-password" placeholder="••••••••">
+    <button class="btn-primary" id="login-btn" onclick="doLogin()">Sign In</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
+<!-- ── App Shell ───────────────────────────────────────────────────────────── -->
+<div id="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <div class="wordmark">sihha</div>
+      <div class="tagline">Operations Hub</div>
+    </div>
+
+    <div class="nav-section">Operations</div>
+    <div class="nav-item active" onclick="nav('dashboard')" id="nav-dashboard">
+      <span class="icon">◈</span> Dashboard
+    </div>
+    <div class="nav-item" onclick="nav('families')" id="nav-families">
+      <span class="icon">⌂</span> Families
+    </div>
+    <div class="nav-item" onclick="nav('volunteers')" id="nav-volunteers">
+      <span class="icon">◎</span> Volunteers
+    </div>
+    <div class="nav-item" onclick="nav('assignments')" id="nav-assignments">
+      <span class="icon">◷</span> Assignments
+    </div>
+
+    <div class="nav-section">Finance</div>
+    <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
+      <span class="icon">▦</span> Receipts
+    </div>
+    <div class="nav-item" onclick="nav('reimbursements')" id="nav-reimbursements">
+      <span class="icon">◫</span> Reimbursements
+    </div>
+
+    <div class="nav-section" id="nav-section-admin" style="display:none">Admin</div>
+    <div class="nav-item" onclick="nav('users')" id="nav-users" style="display:none">
+      <span class="icon">◉</span> Users
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-user" id="sidebar-username"></div>
+      <div class="sidebar-role" id="sidebar-role"></div>
+      <div class="logout-btn" onclick="doLogout()">Sign out</div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <h1 id="page-title">Dashboard</h1>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </div>
+    <div class="content" id="content"></div>
+  </div>
+</div>
+
+<!-- ── Drawer ──────────────────────────────────────────────────────────────── -->
+<div class="overlay" id="overlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-header">
+    <div class="drawer-title" id="drawer-title">—</div>
+    <div class="drawer-close" onclick="closeDrawer()">✕</div>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+  <div class="drawer-footer" id="drawer-footer"></div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let STATE = { token: null, user: null, page: 'dashboard', filter: 'all', editId: null };
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' }
+  };
+  if (STATE.token) opts.headers['Authorization'] = 'Bearer ' + STATE.token;
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch('/api' + path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+const GET  = (p)    => api('GET', p);
+const POST = (p, b) => api('POST', p, b);
+const PUT  = (p, b) => api('PUT', p, b);
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  const err  = document.getElementById('login-error');
+  const btn  = document.getElementById('login-btn');
+  err.style.display = 'none';
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const res = await POST('/auth/login', { username: user, password: pass });
+    STATE.token = res.token;
+    STATE.user  = res.user;
+    localStorage.setItem('sihaa_token', res.token);
+    showApp();
+  } catch (e) {
+    err.textContent = e.message;
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign In';
+  }
+}
+
+async function doLogout() {
+  try { await POST('/auth/logout', {}); } catch(e) {}
+  STATE.token = null; STATE.user = null;
+  localStorage.removeItem('sihaa_token');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+async function checkSession() {
+  const token = localStorage.getItem('sihaa_token');
+  if (!token) return;
+  try {
+    STATE.token = token;
+    STATE.user  = await GET('/auth/me');
+    showApp();
+  } catch(e) {
+    localStorage.removeItem('sihaa_token');
+    STATE.token = null;
+  }
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('sidebar-username').textContent = STATE.user.name || STATE.user.username;
+  document.getElementById('sidebar-role').textContent = STATE.user.role;
+  if (STATE.user.role === 'admin') {
+    document.getElementById('nav-section-admin').style.display = '';
+    document.getElementById('nav-users').style.display = '';
+  }
+  nav('dashboard');
+}
+
+// Allow Enter key on login
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('login-pass').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+  checkSession();
+});
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function nav(page) {
+  STATE.page = page; STATE.filter = 'all'; STATE.editId = null;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const navEl = document.getElementById('nav-' + page);
+  if (navEl) navEl.classList.add('active');
+  const titles = {
+    dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
+    assignments: 'Assignments', receipts: 'Receipts',
+    reimbursements: 'Reimbursements', users: 'Users'
+  };
+  document.getElementById('page-title').textContent = titles[page] || page;
+  closeDrawer();
+  const renders = {
+    dashboard: renderDashboard, families: renderFamilies,
+    volunteers: renderVolunteers, assignments: renderAssignments,
+    receipts: renderReceipts, reimbursements: renderReimbursements,
+    users: renderUsers
+  };
+  if (renders[page]) renders[page]();
+}
+
+// ── Drawer ────────────────────────────────────────────────────────────────────
+function openDrawer(title, bodyHTML, footerHTML) {
+  document.getElementById('drawer-title').textContent = title;
+  document.getElementById('drawer-body').innerHTML = bodyHTML;
+  document.getElementById('drawer-footer').innerHTML = footerHTML || '';
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+}
+function closeDrawer() {
+  document.getElementById('overlay').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  STATE.editId = null;
+}
+
+// ── Badge ─────────────────────────────────────────────────────────────────────
+function badge(status) {
+  return `<span class="badge badge-${status}">${status}</span>`;
+}
+function fmtDate(s) {
+  if (!s) return '—';
+  return s.slice(0,10);
+}
+function fmtMoney(n) {
+  if (n === null || n === undefined) return '—';
+  return '$' + Number(n).toFixed(2);
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+async function renderDashboard() {
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const s = await GET('/dashboard/stats');
+    document.getElementById('content').innerHTML = `
+      <div class="stats-grid">
+        <div class="stat-card" onclick="nav('families')">
+          <div class="stat-label">Families — Total</div>
+          <div class="stat-value">${s.families_total}</div>
+          <div class="stat-sub">${s.families_active} active · ${s.families_pending} pending</div>
+        </div>
+        <div class="stat-card" onclick="nav('volunteers')">
+          <div class="stat-label">Volunteers — Total</div>
+          <div class="stat-value">${s.volunteers_total}</div>
+          <div class="stat-sub">${s.volunteers_active} active · ${s.volunteers_pending} pending</div>
+        </div>
+        <div class="stat-card" onclick="nav('assignments')">
+          <div class="stat-label">Open Assignments</div>
+          <div class="stat-value">${s.assignments_open}</div>
+          <div class="stat-sub">Not yet completed</div>
+        </div>
+        <div class="stat-card" onclick="nav('receipts')">
+          <div class="stat-label">Receipts Pending</div>
+          <div class="stat-value">${s.receipts_pending}</div>
+          <div class="stat-sub">Awaiting approval</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Spend This Month</div>
+          <div class="stat-value">${fmtMoney(s.spend_this_month)}</div>
+          <div class="stat-sub">${fmtMoney(s.spend_total)} all time</div>
+        </div>
+      </div>
+      <div style="color:var(--gray-4);font-size:12px;margin-top:8px">
+        Click any card to navigate · Data updates on refresh
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+// ── Families ──────────────────────────────────────────────────────────────────
+async function renderFamilies(filter, search) {
+  filter = filter || STATE.filter || 'all';
+  STATE.filter = filter;
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn" onclick="openFamilyForm()">+ Add Family</button>`;
+
+  let url = '/families';
+  const params = [];
+  if (filter !== 'all') params.push('status=' + filter);
+  if (search) params.push('search=' + encodeURIComponent(search));
+  if (params.length) url += '?' + params.join('&');
+
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET(url);
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">All Families</span>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input class="search-input" placeholder="Search name, phone…"
+              id="family-search" value="${search||''}"
+              oninput="renderFamilies('${filter}', this.value)">
+            <div class="filter-tabs">
+              ${['all','pending','active','inactive','paused'].map(f =>
+                `<div class="filter-tab ${filter===f?'active':''}"
+                  onclick="renderFamilies('${f}', document.getElementById('family-search').value)">${f}</div>`
+              ).join('')}
+            </div>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Phone</th><th>City</th>
+            <th>Size</th><th>Status</th><th>Source</th><th>Added</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+              <tr>
+                <td><strong>${r.name}</strong></td>
+                <td>${r.phone||'—'}</td>
+                <td>${r.city||'—'}</td>
+                <td>${r.family_size||'—'}</td>
+                <td>${badge(r.status)}</td>
+                <td style="font-size:11px;color:var(--gray-4)">${r.source||'admin'}</td>
+                <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
+                <td>
+                  <button class="btn btn-outline btn-sm" onclick="viewFamily('${r.id}')">View</button>
+                  <button class="btn btn-sm" onclick="openFamilyForm('${r.id}')" style="margin-left:4px">Edit</button>
+                </td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="8">No families found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+function familyFormHTML(r) {
+  r = r || {};
+  return `
+    <div class="form-section">Basic Information</div>
+    <div class="form-group">
+      <label>Full Name *</label>
+      <input type="text" id="f-name" value="${r.name||''}">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="f-phone" value="${r.phone||''}">
+      </div>
+      <div class="form-group">
+        <label>City</label>
+        <input type="text" id="f-city" value="${r.city||''}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Address</label>
+      <input type="text" id="f-address" value="${r.address||''}">
+    </div>
+
+    <div class="form-section">Household</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Household Size</label>
+        <input type="number" id="f-size" min="1" value="${r.family_size||''}">
+      </div>
+      <div class="form-group">
+        <label>Children (0-18)</label>
+        <input type="number" id="f-children" min="0" value="${r.children_count||''}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Dietary Notes</label>
+      <input type="text" id="f-dietary" value="${r.dietary_notes||''}"
+        placeholder="e.g. Vegetarian, Gluten-free">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Frequency</label>
+        <select id="f-frequency">
+          <option value="">— Select —</option>
+          ${['Once (Immediate Need)','Bi-weekly','Monthly','As Needed'].map(v =>
+            `<option value="${v}" ${r.frequency===v?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Income Range</label>
+        <select id="f-income">
+          <option value="">— Select —</option>
+          ${['Under $25,000','$25,000-$40,000','$40,000-60,000','$60,000+','Prefer not to answer'].map(v =>
+            `<option value="${v}" ${r.income_range===v?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="form-section">Status & Notes</div>
+    <div class="form-group">
+      <label>Status</label>
+      <select id="f-status">
+        ${['pending','active','inactive','paused'].map(v =>
+          `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Admin Notes</label>
+      <textarea id="f-notes">${r.notes||''}</textarea>
+    </div>
+    <div class="alert alert-error" id="family-form-err"></div>`;
+}
+
+async function openFamilyForm(id) {
+  STATE.editId = id || null;
+  let r = {};
+  if (id) {
+    try { r = await GET('/families/' + id); } catch(e) {}
+  }
+  openDrawer(
+    id ? 'Edit Family' : 'Add Family',
+    familyFormHTML(r),
+    `<button class="btn" onclick="saveFamily()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveFamily() {
+  const showErr = msg => {
+    const el = document.getElementById('family-form-err');
+    el.textContent = msg; el.style.display = 'block';
+  };
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) return showErr('Name is required');
+  const payload = {
+    name, phone: document.getElementById('f-phone').value.trim(),
+    city: document.getElementById('f-city').value.trim(),
+    address: document.getElementById('f-address').value.trim(),
+    family_size: parseInt(document.getElementById('f-size').value)||null,
+    children_count: parseInt(document.getElementById('f-children').value)||null,
+    dietary_notes: document.getElementById('f-dietary').value.trim(),
+    frequency: document.getElementById('f-frequency').value,
+    income_range: document.getElementById('f-income').value,
+    status: document.getElementById('f-status').value,
+    notes: document.getElementById('f-notes').value.trim()
+  };
+  try {
+    if (STATE.editId) await PUT('/families/' + STATE.editId, payload);
+    else await POST('/families', payload);
+    closeDrawer();
+    renderFamilies(STATE.filter);
+  } catch(e) { showErr(e.message); }
+}
+
+async function viewFamily(id) {
+  try {
+    const r = await GET('/families/' + id);
+    openDrawer('Family Details',
+      `<div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
+       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
+       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${r.address||'—'}, ${r.city||''}</div></div>
+       <div class="detail-row"><div class="detail-label">Household Size</div><div class="detail-value">${r.family_size||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Children</div><div class="detail-value">${r.children_count||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Dietary</div><div class="detail-value">${r.dietary_notes||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Frequency</div><div class="detail-value">${r.frequency||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Income Range</div><div class="detail-value">${r.income_range||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
+       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
+       ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`,
+      `<button class="btn" onclick="openFamilyForm('${id}')">Edit</button>
+       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
+    );
+  } catch(e) {}
+}
+
+// ── Volunteers ────────────────────────────────────────────────────────────────
+async function renderVolunteers(filter, search) {
+  filter = filter || STATE.filter || 'all';
+  STATE.filter = filter;
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn" onclick="openVolunteerForm()">+ Add Volunteer</button>`;
+
+  let url = '/volunteers';
+  const params = [];
+  if (filter !== 'all') params.push('status=' + filter);
+  if (search) params.push('search=' + encodeURIComponent(search));
+  if (params.length) url += '?' + params.join('&');
+
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET(url);
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">All Volunteers</span>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input class="search-input" placeholder="Search name, phone, email…"
+              id="vol-search" value="${search||''}"
+              oninput="renderVolunteers('${filter}', this.value)">
+            <div class="filter-tabs">
+              ${['all','pending','active','inactive'].map(f =>
+                `<div class="filter-tab ${filter===f?'active':''}"
+                  onclick="renderVolunteers('${f}', document.getElementById('vol-search').value)">${f}</div>`
+              ).join('')}
+            </div>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Phone</th><th>Email</th><th>Role</th>
+            <th>Area</th><th>Status</th><th>Added</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+              <tr>
+                <td><strong>${r.name}</strong></td>
+                <td>${r.phone||'—'}</td>
+                <td>${r.email||'—'}</td>
+                <td><span style="font-size:11px;text-transform:capitalize">${r.role||'—'}</span></td>
+                <td>${r.service_area||'—'}</td>
+                <td>${badge(r.status)}</td>
+                <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
+                <td>
+                  <button class="btn btn-outline btn-sm" onclick="viewVolunteer('${r.id}')">View</button>
+                  <button class="btn btn-sm" onclick="openVolunteerForm('${r.id}')" style="margin-left:4px">Edit</button>
+                </td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="8">No volunteers found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+function volunteerFormHTML(r) {
+  r = r || {};
+  return `
+    <div class="form-section">Basic Information</div>
+    <div class="form-group">
+      <label>Full Name *</label>
+      <input type="text" id="v-name" value="${r.name||''}">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="v-phone" value="${r.phone||''}">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="v-email" value="${r.email||''}">
+      </div>
+    </div>
+
+    <div class="form-section">Role & Availability</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Role</label>
+        <select id="v-role">
+          ${['shopper','delivery','both'].map(v =>
+            `<option value="${v}" ${(r.role||'shopper')===v?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="v-status">
+          ${['pending','active','inactive'].map(v =>
+            `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Availability</label>
+      <input type="text" id="v-avail" value="${r.availability||''}"
+        placeholder="e.g. Weekends, Monday evenings">
+    </div>
+    <div class="form-group">
+      <label>Service Area</label>
+      <input type="text" id="v-area" value="${r.service_area||''}"
+        placeholder="e.g. North Rochester, Brighton">
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="v-notes">${r.notes||''}</textarea>
+    </div>
+    <div class="alert alert-error" id="vol-form-err"></div>`;
+}
+
+async function openVolunteerForm(id) {
+  STATE.editId = id || null;
+  let r = {};
+  if (id) {
+    try { r = await GET('/volunteers/' + id); } catch(e) {}
+  }
+  openDrawer(
+    id ? 'Edit Volunteer' : 'Add Volunteer',
+    volunteerFormHTML(r),
+    `<button class="btn" onclick="saveVolunteer()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveVolunteer() {
+  const showErr = msg => {
+    const el = document.getElementById('vol-form-err');
+    el.textContent = msg; el.style.display = 'block';
+  };
+  const name = document.getElementById('v-name').value.trim();
+  if (!name) return showErr('Name is required');
+  const payload = {
+    name, phone: document.getElementById('v-phone').value.trim(),
+    email: document.getElementById('v-email').value.trim(),
+    role: document.getElementById('v-role').value,
+    status: document.getElementById('v-status').value,
+    availability: document.getElementById('v-avail').value.trim(),
+    service_area: document.getElementById('v-area').value.trim(),
+    notes: document.getElementById('v-notes').value.trim()
+  };
+  try {
+    if (STATE.editId) await PUT('/volunteers/' + STATE.editId, payload);
+    else await POST('/volunteers', payload);
+    closeDrawer();
+    renderVolunteers(STATE.filter);
+  } catch(e) { showErr(e.message); }
+}
+
+async function viewVolunteer(id) {
+  try {
+    const r = await GET('/volunteers/' + id);
+    openDrawer('Volunteer Details',
+      `<div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
+       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
+       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Role</div><div class="detail-value" style="text-transform:capitalize">${r.role||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Availability</div><div class="detail-value">${r.availability||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Service Area</div><div class="detail-value">${r.service_area||'—'}</div></div>
+       <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
+       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
+       ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`,
+      `<button class="btn" onclick="openVolunteerForm('${id}')">Edit</button>
+       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
+    );
+  } catch(e) {}
+}
+
+// ── Assignments ───────────────────────────────────────────────────────────────
+async function renderAssignments(filter) {
+  filter = filter || STATE.filter || 'all';
+  STATE.filter = filter;
+  document.getElementById('topbar-actions').innerHTML =
+    STATE.user.role === 'admin'
+      ? `<button class="btn" onclick="openAssignmentForm()">+ New Assignment</button>` : '';
+
+  let url = '/assignments';
+  if (filter !== 'all') url += '?status=' + filter;
+
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET(url);
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Assignments</span>
+          <div class="filter-tabs">
+            ${['all','pending','assigned','in_progress','completed','cancelled'].map(f =>
+              `<div class="filter-tab ${filter===f?'active':''}"
+                onclick="renderAssignments('${f}')">${f.replace('_',' ')}</div>`
+            ).join('')}
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Family</th><th>Volunteer</th><th>Type</th>
+            <th>Due Date</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+              <tr>
+                <td><strong>${r.family_name||'—'}</strong></td>
+                <td>${r.volunteer_name||'<span style="color:var(--gray-4)">Unassigned</span>'}</td>
+                <td style="text-transform:capitalize">${r.task_type||'—'}</td>
+                <td>${fmtDate(r.due_date)}</td>
+                <td>${badge(r.status)}</td>
+                <td>
+                  <button class="btn btn-sm" onclick="openAssignmentForm('${r.id}')">Edit</button>
+                </td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="6">No assignments found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function openAssignmentForm(id) {
+  STATE.editId = id || null;
+  let families = [], volunteers = [], r = {};
+  try {
+    [families, volunteers] = await Promise.all([GET('/families?status=active'), GET('/volunteers?status=active')]);
+    if (id) r = await GET('/assignments');
+  } catch(e) {}
+
+  const html = `
+    <div class="form-group">
+      <label>Family *</label>
+      <select id="a-family">
+        <option value="">— Select Family —</option>
+        ${families.map(f => `<option value="${f.id}" ${r.family_id===f.id?'selected':''}>${f.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Volunteer</label>
+      <select id="a-volunteer">
+        <option value="">— Unassigned —</option>
+        ${volunteers.map(v => `<option value="${v.id}" ${r.volunteer_id===v.id?'selected':''}>${v.name} (${v.role})</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Task Type</label>
+        <select id="a-type">
+          ${['shopping','delivery','both'].map(v =>
+            `<option value="${v}" ${(r.task_type||'shopping')===v?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Due Date</label>
+        <input type="date" id="a-due" value="${r.due_date||''}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Status</label>
+      <select id="a-status">
+        ${['pending','assigned','in_progress','completed','cancelled'].map(v =>
+          `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="a-notes">${r.notes||''}</textarea>
+    </div>
+    <div class="alert alert-error" id="assign-err"></div>`;
+
+  openDrawer(id ? 'Edit Assignment' : 'New Assignment', html,
+    `<button class="btn" onclick="saveAssignment()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+}
+
+async function saveAssignment() {
+  const showErr = msg => {
+    const el = document.getElementById('assign-err');
+    el.textContent = msg; el.style.display = 'block';
+  };
+  const family_id = document.getElementById('a-family').value;
+  if (!family_id) return showErr('Please select a family');
+  const payload = {
+    family_id,
+    volunteer_id: document.getElementById('a-volunteer').value || null,
+    task_type: document.getElementById('a-type').value,
+    due_date: document.getElementById('a-due').value || null,
+    status: document.getElementById('a-status').value,
+    notes: document.getElementById('a-notes').value.trim()
+  };
+  try {
+    if (STATE.editId) await PUT('/assignments/' + STATE.editId, payload);
+    else await POST('/assignments', payload);
+    closeDrawer();
+    renderAssignments(STATE.filter);
+  } catch(e) { showErr(e.message); }
+}
+
+// ── Receipts ──────────────────────────────────────────────────────────────────
+async function renderReceipts(filter) {
+  filter = filter || STATE.filter || 'all';
+  STATE.filter = filter;
+  document.getElementById('topbar-actions').innerHTML = '';
+
+  let url = '/receipts';
+  if (filter !== 'all') url += '?status=' + filter;
+
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET(url);
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Receipts</span>
+          <div class="filter-tabs">
+            ${['all','pending','approved','rejected'].map(f =>
+              `<div class="filter-tab ${filter===f?'active':''}"
+                onclick="renderReceipts('${f}')">${f}</div>`
+            ).join('')}
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Volunteer</th><th>Family</th><th>Store</th>
+            <th>Date</th><th>Amount</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+              <tr>
+                <td><strong>${r.volunteer_name||'—'}</strong></td>
+                <td>${r.family_name||'—'}</td>
+                <td>${r.store||'—'}</td>
+                <td>${fmtDate(r.purchase_date)}</td>
+                <td>${fmtMoney(r.amount)}</td>
+                <td>${badge(r.status)}</td>
+                <td>
+                  ${r.status==='pending' ? `
+                    <button class="btn btn-sm" onclick="approveReceipt('${r.id}')">Approve</button>
+                    <button class="btn btn-outline btn-sm" onclick="rejectReceipt('${r.id}')" style="margin-left:4px">Reject</button>
+                  ` : ''}
+                </td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="7">No receipts found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function approveReceipt(id) {
+  if (!confirm('Approve this receipt?')) return;
+  try {
+    await PUT('/receipts/' + id, { status: 'approved' });
+    renderReceipts(STATE.filter);
+  } catch(e) { alert(e.message); }
+}
+
+async function rejectReceipt(id) {
+  if (!confirm('Reject this receipt?')) return;
+  try {
+    await PUT('/receipts/' + id, { status: 'rejected' });
+    renderReceipts(STATE.filter);
+  } catch(e) { alert(e.message); }
+}
+
+// ── Reimbursements ────────────────────────────────────────────────────────────
+async function renderReimbursements(filter) {
+  filter = filter || STATE.filter || 'all';
+  STATE.filter = filter;
+  document.getElementById('topbar-actions').innerHTML = '';
+
+  let url = '/reimbursements';
+  if (filter !== 'all') url += '?status=' + filter;
+
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET(url);
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Reimbursements</span>
+          <div class="filter-tabs">
+            ${['all','pending','approved','paid','rejected'].map(f =>
+              `<div class="filter-tab ${filter===f?'active':''}"
+                onclick="renderReimbursements('${f}')">${f}</div>`
+            ).join('')}
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Volunteer</th><th>Store</th><th>Amount</th>
+            <th>Method</th><th>Paid Date</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+              <tr>
+                <td><strong>${r.volunteer_name||'—'}</strong></td>
+                <td>${r.store||'—'}</td>
+                <td>${fmtMoney(r.amount)}</td>
+                <td>${r.payment_method||'—'}</td>
+                <td>${fmtDate(r.paid_date)}</td>
+                <td>${badge(r.status)}</td>
+                <td>
+                  ${r.status==='pending'?`<button class="btn btn-sm" onclick="markReimbPaid('${r.id}')">Mark Paid</button>`:''}
+                </td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="7">No reimbursements found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function markReimbPaid(id) {
+  openDrawer('Mark as Paid',
+    `<div class="form-group">
+       <label>Payment Method</label>
+       <select id="reimb-method">
+         ${['cash','bank_transfer','cheque','other'].map(v =>
+           `<option value="${v}">${v.replace('_',' ')}</option>`).join('')}
+       </select>
+     </div>
+     <div class="form-group">
+       <label>Paid Date</label>
+       <input type="date" id="reimb-date" value="${new Date().toISOString().slice(0,10)}">
+     </div>
+     <div class="alert alert-error" id="reimb-err"></div>`,
+    `<button class="btn" onclick="confirmReimbPaid('${id}')">Confirm Payment</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function confirmReimbPaid(id) {
+  try {
+    await PUT('/reimbursements/' + id, {
+      status: 'paid',
+      payment_method: document.getElementById('reimb-method').value,
+      paid_date: document.getElementById('reimb-date').value
+    });
+    closeDrawer();
+    renderReimbursements(STATE.filter);
+  } catch(e) {
+    const el = document.getElementById('reimb-err');
+    el.textContent = e.message; el.style.display = 'block';
+  }
+}
+
+// ── Users (admin only) ────────────────────────────────────────────────────────
+async function renderUsers() {
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn" onclick="openUserForm()">+ Add User</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET('/users');
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header"><span class="table-title">System Users</span></div>
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Username</th><th>Role</th><th>Active</th><th>Added</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td><strong>${r.name||'—'}</strong></td>
+                <td>${r.username}</td>
+                <td>${r.role}</td>
+                <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
+                <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
+                <td><button class="btn btn-sm" onclick="openUserForm('${r.id}','${r.username}','${r.name||''}','${r.role}',${r.active})">Edit</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+function openUserForm(id, username, name, role, active) {
+  STATE.editId = id || null;
+  openDrawer(id ? 'Edit User' : 'Add User',
+    `<div class="form-group">
+       <label>Name</label>
+       <input type="text" id="u-name" value="${name||''}">
+     </div>
+     <div class="form-group">
+       <label>Username *</label>
+       <input type="text" id="u-username" value="${username||''}" ${id?'readonly':''}>
+     </div>
+     <div class="form-group">
+       <label>${id?'New Password (leave blank to keep)':'Password *'}</label>
+       <input type="password" id="u-password">
+     </div>
+     <div class="form-row">
+       <div class="form-group">
+         <label>Role</label>
+         <select id="u-role">
+           ${['admin','finance','volunteer','viewer'].map(v =>
+             `<option value="${v}" ${role===v?'selected':''}>${v}</option>`).join('')}
+         </select>
+       </div>
+       ${id ? `<div class="form-group">
+         <label>Active</label>
+         <select id="u-active">
+           <option value="1" ${active?'selected':''}>Yes</option>
+           <option value="0" ${!active?'selected':''}>No</option>
+         </select>
+       </div>` : ''}
+     </div>
+     <div class="alert alert-error" id="user-err"></div>`,
+    `<button class="btn" onclick="saveUser()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveUser() {
+  const showErr = msg => {
+    const el = document.getElementById('user-err');
+    el.textContent = msg; el.style.display = 'block';
+  };
+  const username = document.getElementById('u-username').value.trim();
+  const password = document.getElementById('u-password').value;
+  if (!username) return showErr('Username is required');
+  if (!STATE.editId && !password) return showErr('Password is required');
+  const payload = {
+    name: document.getElementById('u-name').value.trim(),
+    username,
+    role: document.getElementById('u-role').value,
+  };
+  if (password) payload.password = password;
+  if (STATE.editId) payload.active = parseInt(document.getElementById('u-active').value);
+  try {
+    if (STATE.editId) await PUT('/users/' + STATE.editId, payload);
+    else await POST('/users', payload);
+    closeDrawer();
+    renderUsers();
+  } catch(e) { showErr(e.message); }
+}
+</script>
+</body>
+</html>
