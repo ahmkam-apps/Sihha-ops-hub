@@ -46,8 +46,21 @@ def now():
     return datetime.utcnow().isoformat()
 
 def bootstrap_db():
-    os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # ── Diagnostics: log exactly where the DB lives and whether it's fresh ────
+    abs_db = os.path.abspath(DB_PATH)
+    db_dir = os.path.dirname(abs_db)
+    log.info(f'DB_PATH={DB_PATH}  →  absolute={abs_db}')
+    log.info(f'Working directory: {os.getcwd()}')
+
+    if os.path.exists(abs_db):
+        size_kb = os.path.getsize(abs_db) / 1024
+        log.info(f'DB EXISTS ({size_kb:.1f} KB) — data will be preserved ✓')
+    else:
+        log.warning(f'DB NOT FOUND — creating fresh database. '
+                    f'If this happens every deploy, the Railway Volume is not mounted at: {db_dir}')
+
+    os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(abs_db)
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('PRAGMA foreign_keys=ON')
     c = conn.cursor()
@@ -440,7 +453,8 @@ def bootstrap_db():
 
     conn.commit()
     conn.close()
-    log.info('Database bootstrapped.')
+    final_size_kb = os.path.getsize(abs_db) / 1024
+    log.info(f'Database bootstrapped. Size: {final_size_kb:.1f} KB  Path: {abs_db}')
 
 # ── Auth Helpers ──────────────────────────────────────────────────────────────
 

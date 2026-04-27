@@ -2,13 +2,21 @@
 SIHAA Ops Hub — Live Smoke Test
 Hits the real Railway deployment to verify core routes are up and responding correctly.
 Usage:
-    python tests/smoke_test.py
-    python tests/smoke_test.py https://sihaa-ops-hub-production.up.railway.app
+    python3 tests/smoke_test.py
+    ADMIN_PASSWORD=yourpass python3 tests/smoke_test.py
 """
-import sys, urllib.request, urllib.error, json, time
+import sys, urllib.request, urllib.error, urllib.parse, json, ssl, os
 
-BASE_URL = sys.argv[1].rstrip('/') if len(sys.argv) > 1 \
-           else 'https://sihaa-ops-hub-production.up.railway.app'
+BASE_URL = 'https://sihaa-ops-hub-production.up.railway.app'
+
+# macOS Python doesn't use system certs by default — create unverified context
+_ctx = ssl.create_default_context()
+try:
+    import certifi
+    _ctx = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _ctx.check_hostname = False
+    _ctx.verify_mode = ssl.CERT_NONE
 
 PASS = '\033[92m✓\033[0m'
 FAIL = '\033[91m✗\033[0m'
@@ -27,7 +35,7 @@ def get(path, token=None):
     if token:
         req.add_header('Authorization', f'Bearer {token}')
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10, context=_ctx) as r:
             return r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read() or b'{}')
@@ -41,7 +49,7 @@ def post(path, body, token=None):
     if token:
         req.add_header('Authorization', f'Bearer {token}')
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10, context=_ctx) as r:
             return r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read() or b'{}')
@@ -64,7 +72,7 @@ for path, name in [('/', 'Admin SPA'), ('/intake', 'Intake form'),
                    ('/volunteer', 'Volunteer signup'), ('/portal', 'Volunteer portal')]:
     req = urllib.request.Request(BASE_URL + path)
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10, context=_ctx) as r:
             check(f'{name} ({path}) loads', r.status == 200, f'status={r.status}')
     except urllib.error.HTTPError as e:
         check(f'{name} ({path}) loads', False, f'status={e.code}')
