@@ -1500,8 +1500,8 @@ def sync_wix_donations():
     import urllib.request as _req
     import json as _json
 
-    api_key = os.environ.get('WIX_API_KEY', '')
-    site_id = os.environ.get('WIX_SITE_ID', '038c9d97-1ce8-4495-982b-37591dce50ee')
+    api_key = os.environ.get('WIX_API_KEY', '').strip()
+    site_id = os.environ.get('WIX_SITE_ID', '038c9d97-1ce8-4495-982b-37591dce50ee').strip()
 
     if not api_key:
         return jsonify({'error': 'WIX_API_KEY not configured in environment variables'}), 400
