@@ -7,6 +7,17 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  @font-face {
+    font-family: 'AreaExtrabold';
+    src: url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2');
+    font-weight: 800; font-style: normal;
+  }
+  @font-face {
+    font-family: 'AreaNormal';
+    src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
+    font-weight: 400; font-style: normal;
+  }
+
   :root {
     --black:   #111111;
     --white:   #ffffff;
@@ -16,7 +27,8 @@
     --gray-4:  #888888;
     --gray-5:  #444444;
     --sidebar-w: 220px;
-    --font: Helvetica, Arial, sans-serif;
+    --font: 'AreaNormal', Helvetica, Arial, sans-serif;
+    --font-head: 'AreaExtrabold', Helvetica, Arial, sans-serif;
   }
 
   body {
@@ -41,9 +53,10 @@
     border: 1.5px solid var(--black);
   }
   .login-logo {
+    font-family: var(--font-head);
     font-size: 28px;
-    font-weight: 300;
-    letter-spacing: 2px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
     margin-bottom: 8px;
   }
   .login-sub {
@@ -121,9 +134,10 @@
     flex-shrink: 0;
   }
   .sidebar-logo .wordmark {
+    font-family: var(--font-head);
     font-size: 22px;
-    font-weight: 300;
-    letter-spacing: 3px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
   }
   .sidebar-logo .tagline {
     font-size: 9px;
@@ -189,7 +203,7 @@
     align-items: center;
     justify-content: space-between;
   }
-  .topbar h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  .topbar h1 { font-family: var(--font-head); font-size: 18px; font-weight: 800; letter-spacing: -0.04em; }
   .topbar-actions { display: flex; gap: 10px; align-items: center; }
 
   .content { padding: 28px 32px; }
@@ -453,7 +467,7 @@
   .hist-stat-cell {
     border: 1px solid var(--gray-2); padding: 10px; text-align: center; background: var(--white);
   }
-  .hist-stat-num { font-size: 22px; font-weight: 700; line-height: 1; }
+  .hist-stat-num { font-family: var(--font-head); font-size: 22px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
   .hist-stat-lbl { font-size: 10px; color: var(--gray-4); text-transform: uppercase;
                    letter-spacing: 0.05em; margin-top: 3px; }
 
