@@ -487,6 +487,14 @@
       <span class="icon">◷</span> Assignments
     </div>
 
+    <div class="nav-section">Food Program</div>
+    <div class="nav-item" onclick="nav('cycles')" id="nav-cycles">
+      <span class="icon">↻</span> Cycles
+    </div>
+    <div class="nav-item" onclick="nav('catalog')" id="nav-catalog">
+      <span class="icon">☰</span> Food Catalog
+    </div>
+
     <div class="nav-section">Finance</div>
     <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
       <span class="icon">▦</span> Receipts
@@ -621,7 +629,9 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     assignments: 'Assignments', receipts: 'Receipts',
-    reimbursements: 'Reimbursements', users: 'Users'
+    reimbursements: 'Reimbursements', users: 'Users',
+    cycles: 'Delivery Cycles', catalog: 'Food Catalog',
+    cycle_detail: 'Cycle Detail'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   closeDrawer();
@@ -629,7 +639,7 @@ function nav(page) {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers, assignments: renderAssignments,
     receipts: renderReceipts, reimbursements: renderReimbursements,
-    users: renderUsers
+    users: renderUsers, cycles: renderCycles, catalog: renderCatalog
   };
   if (renders[page]) renders[page]();
 }
@@ -1443,6 +1453,527 @@ async function saveUser() {
     else await POST('/users', payload);
     closeDrawer();
     renderUsers();
+  } catch(e) { showErr(e.message); }
+}
+
+// ── Delivery Cycles ───────────────────────────────────────────────────────────
+
+let _cyclesCache = [];
+
+async function renderCycles(filterStatus) {
+  filterStatus = filterStatus || STATE.filter || 'all';
+  STATE.filter = filterStatus;
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn" onclick="openCycleForm()">+ New Cycle</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const url = filterStatus !== 'all' ? '/delivery-cycles?status=' + filterStatus : '/delivery-cycles';
+    _cyclesCache = await GET(url);
+    const statusColors = { draft:'badge-pending', open:'badge-active', closed:'badge-paused',
+                           shopping:'badge-approved', delivered:'badge-completed' };
+    document.getElementById('content').innerHTML = `
+      <div style="margin-bottom:16px">
+        <div class="filter-tabs">
+          ${['all','draft','open','closed','shopping','delivered'].map(s =>
+            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderCycles('${s}')">${s}</div>`
+          ).join('')}
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><span class="table-title">Delivery Cycles</span></div>
+        <table>
+          <thead><tr>
+            <th>Title</th><th>Delivery Dates</th><th>Request Window</th>
+            <th>Status</th><th>Orders</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${_cyclesCache.length ? _cyclesCache.map(c => `
+              <tr>
+                <td><strong>${c.title}</strong></td>
+                <td style="font-size:12px">${fmtDate(c.delivery_date_start)} – ${fmtDate(c.delivery_date_end)}</td>
+                <td style="font-size:12px;color:var(--gray-4)">${fmtDate(c.request_open_at)} → ${fmtDate(c.request_close_at)}</td>
+                <td><span class="badge ${statusColors[c.status]||'badge-pending'}">${c.status}</span></td>
+                <td><button class="btn btn-outline btn-sm" onclick="viewCycleDetail('${c.id}')">View Orders</button></td>
+                <td>
+                  <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
+                  ${c.status !== 'delivered' ? `<button class="btn btn-sm" style="margin-left:4px" onclick="advanceCycleStatus('${c.id}','${c.status}')">Advance</button>` : ''}
+                </td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="6">No cycles found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function advanceCycleStatus(id, current) {
+  const next = { draft:'open', open:'closed', closed:'shopping', shopping:'delivered' };
+  if (!next[current]) return;
+  if (!confirm(`Advance this cycle from "${current}" to "${next[current]}"?`)) return;
+  try {
+    await PUT('/delivery-cycles/' + id, { status: next[current] });
+    renderCycles();
+  } catch(e) { alert(e.message); }
+}
+
+function openCycleForm(id) {
+  STATE.editId = id || null;
+  const c = id ? _cyclesCache.find(x => x.id === id) : null;
+  const statusOptions = ['draft','open','closed','shopping','delivered'];
+  openDrawer(id ? 'Edit Cycle' : 'New Delivery Cycle', `
+    <div class="form-group">
+      <label>Cycle Title *</label>
+      <input type="text" id="cy-title" placeholder="e.g. May Delivery — Cycle 1" value="${c?.title||''}">
+    </div>
+    <div class="form-section">Delivery Days</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Delivery Start *</label>
+        <input type="date" id="cy-del-start" value="${c?.delivery_date_start?.slice(0,10)||''}">
+      </div>
+      <div class="form-group">
+        <label>Delivery End *</label>
+        <input type="date" id="cy-del-end" value="${c?.delivery_date_end?.slice(0,10)||''}">
+      </div>
+    </div>
+    <div class="form-section">Request Window</div>
+    <p style="font-size:12px;color:var(--gray-4);margin-bottom:12px">Families can submit orders between these dates. Close date should be ~1 week before delivery.</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Opens *</label>
+        <input type="date" id="cy-open" value="${c?.request_open_at?.slice(0,10)||''}">
+      </div>
+      <div class="form-group">
+        <label>Closes *</label>
+        <input type="date" id="cy-close" value="${c?.request_close_at?.slice(0,10)||''}">
+      </div>
+    </div>
+    ${id ? `<div class="form-group">
+      <label>Status</label>
+      <select id="cy-status">
+        ${statusOptions.map(s => `<option value="${s}" ${c?.status===s?'selected':''}>${s}</option>`).join('')}
+      </select>
+    </div>` : ''}
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="cy-notes">${c?.notes||''}</textarea>
+    </div>
+    <div class="alert alert-error" id="cy-err"></div>`,
+    `<button class="btn" onclick="saveCycle()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveCycle() {
+  const showErr = msg => { const el = document.getElementById('cy-err'); el.textContent=msg; el.style.display='block'; };
+  const title = document.getElementById('cy-title').value.trim();
+  const delStart = document.getElementById('cy-del-start').value;
+  const delEnd = document.getElementById('cy-del-end').value;
+  const openAt = document.getElementById('cy-open').value;
+  const closeAt = document.getElementById('cy-close').value;
+  if (!title || !delStart || !delEnd || !openAt || !closeAt)
+    return showErr('All fields except notes are required');
+  const payload = {
+    title, delivery_date_start: delStart, delivery_date_end: delEnd,
+    request_open_at: openAt, request_close_at: closeAt,
+    notes: document.getElementById('cy-notes').value.trim()
+  };
+  const statusEl = document.getElementById('cy-status');
+  if (statusEl) payload.status = statusEl.value;
+  try {
+    if (STATE.editId) await PUT('/delivery-cycles/' + STATE.editId, payload);
+    else await POST('/delivery-cycles', payload);
+    closeDrawer(); renderCycles();
+  } catch(e) { showErr(e.message); }
+}
+
+async function viewCycleDetail(cycleId) {
+  const cycle = _cyclesCache.find(c => c.id === cycleId);
+  document.getElementById('page-title').textContent = cycle ? cycle.title : 'Cycle Detail';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="renderCycles()">← Back to Cycles</button>
+     <button class="btn" onclick="viewShoppingList('${cycleId}')">Shopping List</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading orders…</p>';
+  try {
+    const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
+    document.getElementById('content').innerHTML = `
+      <div style="margin-bottom:16px;font-size:13px;color:var(--gray-4)">
+        ${orders.length} order${orders.length!==1?'s':''} submitted
+        · Delivery: ${fmtDate(cycle?.delivery_date_start)} – ${fmtDate(cycle?.delivery_date_end)}
+      </div>
+      <div class="table-card">
+        <div class="table-header"><span class="table-title">Orders for This Cycle</span></div>
+        <table>
+          <thead><tr>
+            <th>Family</th><th>Phone</th><th>Bundle</th><th>Items Selected</th><th>Status</th><th>Submitted</th>
+          </tr></thead>
+          <tbody>
+            ${orders.length ? orders.map(o => `
+              <tr>
+                <td><strong>${o.family_name}</strong></td>
+                <td style="font-size:12px">${o.family_phone||'—'}</td>
+                <td><span class="badge badge-pending">${o.bundle_size}</span></td>
+                <td style="font-size:12px;color:var(--gray-5)">
+                  ${o.selected_items.length ? o.selected_items.map(i=>i.name).join(', ') : '—'}
+                </td>
+                <td>${badge(o.status)}</td>
+                <td style="font-size:11px;color:var(--gray-4)">${fmtDate(o.submitted_at)}</td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="6">No orders yet for this cycle</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function viewShoppingList(cycleId) {
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Generating shopping list…</p>';
+  try {
+    const data = await GET('/delivery-cycles/' + cycleId + '/shopping-list');
+    const cycle = data.cycle;
+    const list = data.shopping_list;
+
+    // Group by category
+    const byCategory = {};
+    list.forEach(item => {
+      if (!byCategory[item.category]) byCategory[item.category] = [];
+      byCategory[item.category].push(item);
+    });
+
+    document.getElementById('content').innerHTML = `
+      <div style="margin-bottom:20px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px">${cycle.title||''}</div>
+        <div style="font-size:12px;color:var(--gray-4)">
+          Delivery: ${fmtDate(cycle.delivery_date_start)} – ${fmtDate(cycle.delivery_date_end)}
+          · ${data.total_orders} order${data.total_orders!==1?'s':''}
+        </div>
+      </div>
+      ${list.length === 0 ? '<p style="color:var(--gray-4)">No orders yet — shopping list will appear once families submit requests.</p>' :
+        Object.entries(byCategory).map(([cat, items]) => `
+          <div class="table-card" style="margin-bottom:16px">
+            <div class="table-header">
+              <span class="table-title">${cat}</span>
+            </div>
+            <table>
+              <thead><tr>
+                <th>Item</th><th>Small Orders</th><th>Medium Orders</th><th>Large Orders</th>
+              </tr></thead>
+              <tbody>
+                ${items.map(item => {
+                  const s = item.breakdown.find(b=>b.bundle_size==='S');
+                  const m = item.breakdown.find(b=>b.bundle_size==='M');
+                  const l = item.breakdown.find(b=>b.bundle_size==='L');
+                  return `<tr>
+                    <td><strong>${item.item_name}</strong> <span style="color:var(--gray-4);font-size:11px">(${item.unit})</span></td>
+                    <td>${s ? `${s.quantity} × ${s.order_count} = <strong>${s.order_count} orders</strong>` : '—'}</td>
+                    <td>${m ? `${m.quantity} × ${m.order_count} = <strong>${m.order_count} orders</strong>` : '—'}</td>
+                    <td>${l ? `${l.quantity} × ${l.order_count} = <strong>${l.order_count} orders</strong>` : '—'}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`).join('')}`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+// ── Food Catalog ──────────────────────────────────────────────────────────────
+
+let _catalogItems = [];
+let _catalogCats = [];
+
+async function renderCatalog() {
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-outline" onclick="openCategoryForm()">+ Category</button>
+    <button class="btn" onclick="openItemForm()">+ Item</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    [_catalogCats, _catalogItems] = await Promise.all([
+      GET('/food-categories'), GET('/food-items')
+    ]);
+
+    // Group items by category
+    const byCat = {};
+    _catalogCats.forEach(c => { byCat[c.id] = { cat: c, items: [] }; });
+    _catalogItems.forEach(i => { if (byCat[i.category_id]) byCat[i.category_id].items.push(i); });
+
+    document.getElementById('content').innerHTML = `
+      <div style="margin-bottom:16px;display:flex;gap:12px;align-items:center">
+        <span style="font-size:12px;color:var(--gray-4)">
+          ${_catalogCats.length} categories · ${_catalogItems.length} items
+        </span>
+        <button class="btn btn-outline btn-sm" onclick="openBundleRulesForm()">Bundle Size Rules</button>
+        <button class="btn btn-outline btn-sm" onclick="openBundleQuantitiesForm()">Edit Quantities</button>
+      </div>
+      ${Object.values(byCat).map(({ cat, items }) => `
+        <div class="table-card" style="margin-bottom:16px">
+          <div class="table-header">
+            <span class="table-title">${cat.name}</span>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span class="badge ${cat.is_active?'badge-active':'badge-inactive'}">${cat.is_active?'Active':'Hidden'}</span>
+              <button class="btn btn-outline btn-sm" onclick="openCategoryForm('${cat.id}')">Edit</button>
+              <button class="btn btn-sm" onclick="openItemForm(null,'${cat.id}')">+ Item</button>
+            </div>
+          </div>
+          <table>
+            <thead><tr>
+              <th>Item</th><th>Unit</th><th>Small</th><th>Medium</th><th>Large</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody>
+              ${items.length ? items.map(item => {
+                const bqs = item.bundle_quantities || {};
+                return `<tr>
+                  <td><strong>${item.name}</strong></td>
+                  <td style="font-size:12px;color:var(--gray-4)">${item.unit}</td>
+                  <td style="font-size:12px">—</td><td style="font-size:12px">—</td><td style="font-size:12px">—</td>
+                  <td><span class="badge ${item.is_active?'badge-active':'badge-inactive'}">${item.is_active?'Active':'Hidden'}</span></td>
+                  <td><button class="btn btn-outline btn-sm" onclick="openItemForm('${item.id}')">Edit</button></td>
+                </tr>`;
+              }).join('') :
+              '<tr class="empty-row"><td colspan="7">No items in this category</td></tr>'}
+            </tbody>
+          </table>
+        </div>`).join('')}
+      ${_catalogCats.length === 0 ? '<p style="color:var(--gray-4)">No categories yet. Add one to get started.</p>' : ''}`;
+
+    // Load and display bundle quantities
+    loadBundleQtysIntoTable();
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function loadBundleQtysIntoTable() {
+  try {
+    const bqs = await GET('/bundle-quantities');
+    // Map bqs by item_id + size
+    const map = {};
+    bqs.forEach(bq => { map[bq.food_item_id + '_' + bq.bundle_size] = bq.quantity; });
+
+    // Update all table cells for S/M/L
+    _catalogItems.forEach(item => {
+      const row = document.querySelector(`tr[data-item="${item.id}"]`);
+      // Since we used template literals, let's just find cells by traversal
+      // Re-render with quantities inline instead
+    });
+
+    // Simpler: re-render the quantities directly in cells
+    const tds = document.querySelectorAll('td[data-bq]');
+    tds.forEach(td => {
+      const key = td.getAttribute('data-bq');
+      td.textContent = map[key] || '—';
+    });
+  } catch(e) {}
+}
+
+function openCategoryForm(id) {
+  STATE.editId = id || null;
+  const cat = id ? _catalogCats.find(c => c.id === id) : null;
+  openDrawer(id ? 'Edit Category' : 'Add Category', `
+    <div class="form-group">
+      <label>Category Name *</label>
+      <input type="text" id="cat-name" value="${cat?.name||''}">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Display Order</label>
+        <input type="number" id="cat-order" min="1" value="${cat?.display_order||''}">
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="cat-active">
+          <option value="1" ${!cat||cat.is_active?'selected':''}>Active</option>
+          <option value="0" ${cat&&!cat.is_active?'selected':''}>Hidden</option>
+        </select>
+      </div>
+    </div>
+    <div class="alert alert-error" id="cat-err"></div>`,
+    `<button class="btn" onclick="saveCategory()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveCategory() {
+  const showErr = msg => { const el=document.getElementById('cat-err'); el.textContent=msg; el.style.display='block'; };
+  const name = document.getElementById('cat-name').value.trim();
+  if (!name) return showErr('Name is required');
+  const payload = {
+    name,
+    display_order: parseInt(document.getElementById('cat-order').value)||0,
+    is_active: parseInt(document.getElementById('cat-active').value)
+  };
+  try {
+    if (STATE.editId) await PUT('/food-categories/' + STATE.editId, payload);
+    else await POST('/food-categories', payload);
+    closeDrawer(); renderCatalog();
+  } catch(e) { showErr(e.message); }
+}
+
+function openItemForm(id, defaultCatId) {
+  STATE.editId = id || null;
+  const item = id ? _catalogItems.find(i => i.id === id) : null;
+  const catOptions = _catalogCats.map(c =>
+    `<option value="${c.id}" ${(item?.category_id||defaultCatId)===c.id?'selected':''}>${c.name}</option>`
+  ).join('');
+  openDrawer(id ? 'Edit Food Item' : 'Add Food Item', `
+    <div class="form-group">
+      <label>Category *</label>
+      <select id="item-cat">${catOptions}</select>
+    </div>
+    <div class="form-group">
+      <label>Item Name *</label>
+      <input type="text" id="item-name" value="${item?.name||''}">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Unit</label>
+        <input type="text" id="item-unit" placeholder="e.g. lb, can, bag" value="${item?.unit||''}">
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="item-active">
+          <option value="1" ${!item||item.is_active?'selected':''}>Active</option>
+          <option value="0" ${item&&!item.is_active?'selected':''}>Hidden</option>
+        </select>
+      </div>
+    </div>
+    <p style="font-size:11px;color:var(--gray-4);margin-top:4px">After saving, use "Edit Quantities" to set S/M/L amounts for this item.</p>
+    <div class="alert alert-error" id="item-err"></div>`,
+    `<button class="btn" onclick="saveItem()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveItem() {
+  const showErr = msg => { const el=document.getElementById('item-err'); el.textContent=msg; el.style.display='block'; };
+  const name = document.getElementById('item-name').value.trim();
+  const catId = document.getElementById('item-cat').value;
+  if (!name) return showErr('Name is required');
+  if (!catId) return showErr('Category is required');
+  const payload = {
+    name, category_id: catId,
+    unit: document.getElementById('item-unit').value.trim() || 'each',
+    is_active: parseInt(document.getElementById('item-active').value)
+  };
+  try {
+    if (STATE.editId) await PUT('/food-items/' + STATE.editId, payload);
+    else await POST('/food-items', payload);
+    closeDrawer(); renderCatalog();
+  } catch(e) { showErr(e.message); }
+}
+
+async function openBundleQuantitiesForm() {
+  let bqs, items;
+  try {
+    [bqs, items] = await Promise.all([GET('/bundle-quantities'), GET('/food-items?active=1')]);
+  } catch(e) { alert(e.message); return; }
+
+  const bqMap = {};
+  bqs.forEach(bq => { bqMap[bq.food_item_id + '_' + bq.bundle_size] = bq.quantity; });
+
+  const rows = items.map(item => `
+    <tr>
+      <td style="font-size:12px;padding:8px 10px">
+        <strong>${item.name}</strong>
+        <span style="color:var(--gray-4);font-size:11px"> (${item.unit})</span>
+        <div style="font-size:10px;color:var(--gray-4)">${item.category_name}</div>
+      </td>
+      ${['S','M','L'].map(size => `
+        <td style="padding:6px 8px">
+          <input type="text" style="width:80px;border:1px solid var(--gray-3);padding:5px 8px;font-size:12px;font-family:var(--font)"
+            id="bq-${item.id}-${size}"
+            value="${bqMap[item.id+'_'+size]||''}"
+            placeholder="${size}">
+        </td>`).join('')}
+    </tr>`).join('');
+
+  openDrawer('Bundle Quantities', `
+    <p style="font-size:12px;color:var(--gray-4);margin-bottom:16px">
+      Set how much of each item is included per bundle size. Use plain numbers or include units (e.g. "5 lb", "2").
+    </p>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid var(--gray-2)">
+          <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4)">Item</th>
+          <th style="text-align:left;padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4)">Small</th>
+          <th style="text-align:left;padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4)">Medium</th>
+          <th style="text-align:left;padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4)">Large</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="alert alert-error" id="bq-err"></div>`,
+    `<button class="btn" onclick="saveBundleQuantities(${JSON.stringify(items.map(i=>i.id))})">Save All</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveBundleQuantities(itemIds) {
+  const showErr = msg => { const el=document.getElementById('bq-err'); el.textContent=msg; el.style.display='block'; };
+  const updates = [];
+  itemIds.forEach(iid => {
+    ['S','M','L'].forEach(size => {
+      const val = (document.getElementById(`bq-${iid}-${size}`)?.value||'').trim();
+      if (val) updates.push({ food_item_id: iid, bundle_size: size, quantity: val });
+    });
+  });
+  try {
+    await fetch('/api/bundle-quantities', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+      body: JSON.stringify(updates)
+    });
+    closeDrawer(); renderCatalog();
+  } catch(e) { showErr(e.message); }
+}
+
+async function openBundleRulesForm() {
+  let rules;
+  try { rules = await GET('/bundle-size-rules'); } catch(e) { alert(e.message); return; }
+  openDrawer('Bundle Size Rules', `
+    <p style="font-size:12px;color:var(--gray-4);margin-bottom:16px">
+      Set the household size ranges that determine which bundle size a family receives. Families never see these labels.
+    </p>
+    ${rules.map(r => `
+      <div style="border:1px solid var(--gray-2);padding:14px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:700;margin-bottom:10px">${r.label} (${r.bundle_size})</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group" style="margin:0">
+            <label>Min Household Size</label>
+            <input type="number" min="1" id="br-min-${r.bundle_size}" value="${r.min_household}">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Max Household Size</label>
+            <input type="number" min="1" id="br-max-${r.bundle_size}" placeholder="Leave blank = no max" value="${r.max_household||''}">
+          </div>
+        </div>
+      </div>`).join('')}
+    <div class="alert alert-error" id="br-err"></div>`,
+    `<button class="btn" onclick="saveBundleRules(${JSON.stringify(rules.map(r=>r.bundle_size))})">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveBundleRules(sizes) {
+  const showErr = msg => { const el=document.getElementById('br-err'); el.textContent=msg; el.style.display='block'; };
+  const updates = sizes.map(size => ({
+    bundle_size: size,
+    min_household: parseInt(document.getElementById('br-min-' + size)?.value)||1,
+    max_household: parseInt(document.getElementById('br-max-' + size)?.value)||null,
+    label: size === 'S' ? 'Small' : size === 'M' ? 'Medium' : 'Large'
+  }));
+  try {
+    await fetch('/api/bundle-size-rules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+      body: JSON.stringify(updates)
+    });
+    closeDrawer(); renderCatalog();
   } catch(e) { showErr(e.message); }
 }
 </script>

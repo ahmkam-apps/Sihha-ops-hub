@@ -167,11 +167,146 @@ def bootstrap_db():
         CREATE TABLE IF NOT EXISTS donations (
             id          TEXT PRIMARY KEY,
             donor_name  TEXT,
+            donor_email TEXT,
             amount      REAL,
+            type        TEXT DEFAULT 'online'
+                        CHECK(type IN ('online','cash','check','bank')),
             date        TEXT,
-            source      TEXT,
+            source      TEXT DEFAULT 'manual',
+            reference_id TEXT,
+            cycle_id    TEXT,
             notes       TEXT,
             created_at  TEXT NOT NULL
+        );
+
+        -- ── Food Catalog ──────────────────────────────────────────────────────
+
+        CREATE TABLE IF NOT EXISTS food_categories (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            is_active     INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS food_items (
+            id            TEXT PRIMARY KEY,
+            category_id   TEXT NOT NULL,
+            name          TEXT NOT NULL,
+            unit          TEXT NOT NULL DEFAULT 'each',
+            is_active     INTEGER NOT NULL DEFAULT 1,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL,
+            FOREIGN KEY (category_id) REFERENCES food_categories(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS bundle_quantities (
+            id           TEXT PRIMARY KEY,
+            food_item_id TEXT NOT NULL,
+            bundle_size  TEXT NOT NULL CHECK(bundle_size IN ('S','M','L')),
+            quantity     TEXT NOT NULL,
+            UNIQUE(food_item_id, bundle_size),
+            FOREIGN KEY (food_item_id) REFERENCES food_items(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS bundle_size_rules (
+            id            TEXT PRIMARY KEY,
+            bundle_size   TEXT NOT NULL UNIQUE CHECK(bundle_size IN ('S','M','L')),
+            label         TEXT NOT NULL,
+            min_household INTEGER NOT NULL,
+            max_household INTEGER
+        );
+
+        -- ── Delivery Cycles ───────────────────────────────────────────────────
+
+        CREATE TABLE IF NOT EXISTS delivery_cycles (
+            id                  TEXT PRIMARY KEY,
+            title               TEXT NOT NULL,
+            delivery_date_start TEXT NOT NULL,
+            delivery_date_end   TEXT NOT NULL,
+            request_open_at     TEXT NOT NULL,
+            request_close_at    TEXT NOT NULL,
+            status              TEXT NOT NULL DEFAULT 'draft'
+                                CHECK(status IN ('draft','open','closed','shopping','delivered')),
+            notes               TEXT,
+            created_by          TEXT,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT
+        );
+
+        -- ── Food Orders ───────────────────────────────────────────────────────
+
+        CREATE TABLE IF NOT EXISTS food_requests (
+            id                  TEXT PRIMARY KEY,
+            cycle_id            TEXT NOT NULL,
+            family_id           TEXT NOT NULL,
+            bundle_size         TEXT NOT NULL CHECK(bundle_size IN ('S','M','L')),
+            submitted_at        TEXT NOT NULL,
+            status              TEXT NOT NULL DEFAULT 'submitted'
+                                CHECK(status IN ('submitted','assigned','delivered','cancelled')),
+            assigned_volunteer_id TEXT,
+            delivered_at        TEXT,
+            notes               TEXT,
+            UNIQUE(cycle_id, family_id),
+            FOREIGN KEY (cycle_id) REFERENCES delivery_cycles(id),
+            FOREIGN KEY (family_id) REFERENCES families(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS food_request_items (
+            id           TEXT PRIMARY KEY,
+            request_id   TEXT NOT NULL,
+            food_item_id TEXT NOT NULL,
+            selected     INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(request_id, food_item_id),
+            FOREIGN KEY (request_id) REFERENCES food_requests(id),
+            FOREIGN KEY (food_item_id) REFERENCES food_items(id)
+        );
+
+        -- ── Volunteer Cycle Assignments ────────────────────────────────────────
+
+        CREATE TABLE IF NOT EXISTS cycle_assignments (
+            id           TEXT PRIMARY KEY,
+            cycle_id     TEXT NOT NULL,
+            volunteer_id TEXT NOT NULL,
+            family_id    TEXT,
+            task_type    TEXT NOT NULL CHECK(task_type IN ('shopping','delivery')),
+            task_date    TEXT,
+            task_time    TEXT,
+            status       TEXT NOT NULL DEFAULT 'pending'
+                         CHECK(status IN ('pending','confirmed','completed','cancelled')),
+            notes        TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT,
+            FOREIGN KEY (cycle_id) REFERENCES delivery_cycles(id),
+            FOREIGN KEY (volunteer_id) REFERENCES volunteers(id),
+            FOREIGN KEY (family_id) REFERENCES families(id)
+        );
+
+        -- ── Financial Reconciliation ──────────────────────────────────────────
+
+        CREATE TABLE IF NOT EXISTS bank_transactions (
+            id                  TEXT PRIMARY KEY,
+            transaction_date    TEXT NOT NULL,
+            description         TEXT,
+            amount              REAL NOT NULL,
+            matched_donation_id TEXT,
+            reconcile_status    TEXT NOT NULL DEFAULT 'unmatched'
+                                CHECK(reconcile_status IN ('matched','unmatched','ignored')),
+            imported_at         TEXT NOT NULL,
+            FOREIGN KEY (matched_donation_id) REFERENCES donations(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reconciliation_runs (
+            id                      TEXT PRIMARY KEY,
+            run_date                TEXT NOT NULL,
+            period_start            TEXT,
+            period_end              TEXT,
+            total_online_donations  REAL DEFAULT 0,
+            total_bank_deposits     REAL DEFAULT 0,
+            variance                REAL DEFAULT 0,
+            notes                   TEXT,
+            run_by                  TEXT,
+            created_at              TEXT NOT NULL
         );
     ''')
 
@@ -184,6 +319,77 @@ def bootstrap_db():
         )
         log.info('Default admin created — username: admin  password: admin123')
         log.info('IMPORTANT: Change the default password after first login.')
+
+    # Seed bundle size rules if not present
+    if not conn.execute("SELECT id FROM bundle_size_rules LIMIT 1").fetchone():
+        rules = [
+            (str(uuid.uuid4()), 'S', 'Small',  1, 2),
+            (str(uuid.uuid4()), 'M', 'Medium', 3, 5),
+            (str(uuid.uuid4()), 'L', 'Large',  6, None),
+        ]
+        conn.executemany(
+            "INSERT INTO bundle_size_rules (id, bundle_size, label, min_household, max_household) VALUES (?,?,?,?,?)",
+            rules
+        )
+        log.info('Bundle size rules seeded.')
+
+    # Seed food catalog if not present
+    if not conn.execute("SELECT id FROM food_categories LIMIT 1").fetchone():
+        ts = now()
+        # Categories
+        cats = [
+            (str(uuid.uuid4()), 'Grains',  1, ts),
+            (str(uuid.uuid4()), 'Protein', 2, ts),
+            (str(uuid.uuid4()), 'Produce', 3, ts),
+        ]
+        conn.executemany(
+            "INSERT INTO food_categories (id, name, display_order, is_active, created_at) VALUES (?,?,?,1,?)",
+            cats
+        )
+        grains_id, protein_id, produce_id = cats[0][0], cats[1][0], cats[2][0]
+
+        # Items: (id, category_id, name, unit, display_order)
+        items_data = [
+            (str(uuid.uuid4()), grains_id,  'Rice',          'lb',     1),
+            (str(uuid.uuid4()), grains_id,  'Pasta',         'packet', 2),
+            (str(uuid.uuid4()), grains_id,  'Bread',         'loaf',   3),
+            (str(uuid.uuid4()), protein_id, 'Eggs',          'dozen',  1),
+            (str(uuid.uuid4()), protein_id, 'Canned Beans',  'can',    2),
+            (str(uuid.uuid4()), protein_id, 'Whole Chicken', 'each',   3),
+            (str(uuid.uuid4()), protein_id, 'Brown Lentils', 'lb',     4),
+            (str(uuid.uuid4()), produce_id, 'Potatoes',      'lb',     1),
+            (str(uuid.uuid4()), produce_id, 'Oranges',       'bag',    2),
+            (str(uuid.uuid4()), produce_id, 'Bananas',       'bunch',  3),
+        ]
+        conn.executemany(
+            "INSERT INTO food_items (id, category_id, name, unit, is_active, display_order, created_at) VALUES (?,?,?,?,1,?,?)",
+            [(i[0],i[1],i[2],i[3],i[4],ts) for i in items_data]
+        )
+
+        # Bundle quantities per item (S, M, L)
+        qty_map = {
+            'Rice':          [('S','2 lb'),  ('M','5 lb'),  ('L','10 lb')],
+            'Pasta':         [('S','2'),     ('M','3'),     ('L','4')],
+            'Bread':         [('S','1'),     ('M','2'),     ('L','3')],
+            'Eggs':          [('S','2'),     ('M','3'),     ('L','4')],
+            'Canned Beans':  [('S','4'),     ('M','6'),     ('L','8')],
+            'Whole Chicken': [('S','1'),     ('M','2'),     ('L','3')],
+            'Brown Lentils': [('S','1 lb'),  ('M','2 lb'),  ('L','3 lb')],
+            'Potatoes':      [('S','5 lb'),  ('M','8 lb'),  ('L','10 lb')],
+            'Oranges':       [('S','1'),     ('M','2'),     ('L','3')],
+            'Bananas':       [('S','1'),     ('M','2'),     ('L','2')],
+        }
+        item_name_to_id = {i[2]: i[0] for i in items_data}
+        bq_rows = []
+        for name, qtys in qty_map.items():
+            iid = item_name_to_id[name]
+            for size, qty in qtys:
+                bq_rows.append((str(uuid.uuid4()), iid, size, qty))
+        conn.executemany(
+            "INSERT INTO bundle_quantities (id, food_item_id, bundle_size, quantity) VALUES (?,?,?,?)",
+            bq_rows
+        )
+        log.info('Food catalog seeded with default items and bundle quantities.')
 
     conn.commit()
     conn.close()
@@ -673,6 +879,414 @@ def create_donation():
     get_db().commit()
     return jsonify({'id': did}), 201
 
+# ── Food Categories ───────────────────────────────────────────────────────────
+
+@app.route('/api/food-categories', methods=['GET'])
+@require_auth()
+def list_food_categories():
+    rows = get_db().execute(
+        "SELECT * FROM food_categories ORDER BY display_order, name"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/food-categories', methods=['POST'])
+@require_auth(roles=['admin'])
+def create_food_category():
+    data = request.json or {}
+    if not data.get('name'):
+        return jsonify({'error': 'Name is required'}), 422
+    cid = str(uuid.uuid4())
+    max_order = get_db().execute("SELECT COALESCE(MAX(display_order),0) FROM food_categories").fetchone()[0]
+    get_db().execute(
+        "INSERT INTO food_categories (id, name, display_order, is_active, created_at) VALUES (?,?,?,?,?)",
+        (cid, data['name'].strip(), data.get('display_order', max_order + 1),
+         data.get('is_active', 1), now())
+    )
+    get_db().commit()
+    return jsonify(dict(get_db().execute("SELECT * FROM food_categories WHERE id=?", (cid,)).fetchone())), 201
+
+@app.route('/api/food-categories/<cid>', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_food_category(cid):
+    db = get_db()
+    row = db.execute("SELECT * FROM food_categories WHERE id=?", (cid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    db.execute(
+        "UPDATE food_categories SET name=?, display_order=?, is_active=? WHERE id=?",
+        (d.get('name', row['name']), d.get('display_order', row['display_order']),
+         d.get('is_active', row['is_active']), cid)
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM food_categories WHERE id=?", (cid,)).fetchone()))
+
+@app.route('/api/food-categories/<cid>', methods=['DELETE'])
+@require_auth(roles=['admin'])
+def delete_food_category(cid):
+    db = get_db()
+    if db.execute("SELECT id FROM food_items WHERE category_id=? AND is_active=1", (cid,)).fetchone():
+        return jsonify({'error': 'Cannot delete category with active items'}), 409
+    db.execute("UPDATE food_categories SET is_active=0 WHERE id=?", (cid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+# ── Food Items ────────────────────────────────────────────────────────────────
+
+@app.route('/api/food-items', methods=['GET'])
+@require_auth()
+def list_food_items():
+    db = get_db()
+    active_only = request.args.get('active') == '1'
+    cat_id = request.args.get('category_id')
+    q = '''SELECT fi.*, fc.name as category_name
+           FROM food_items fi
+           JOIN food_categories fc ON fi.category_id = fc.id
+           WHERE 1=1'''
+    params = []
+    if active_only:
+        q += " AND fi.is_active=1 AND fc.is_active=1"
+    if cat_id:
+        q += " AND fi.category_id=?"; params.append(cat_id)
+    q += " ORDER BY fc.display_order, fi.display_order, fi.name"
+    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+
+@app.route('/api/food-items', methods=['POST'])
+@require_auth(roles=['admin'])
+def create_food_item():
+    data = request.json or {}
+    if not data.get('name') or not data.get('category_id'):
+        return jsonify({'error': 'Name and category_id are required'}), 422
+    iid = str(uuid.uuid4())
+    db = get_db()
+    if not db.execute("SELECT id FROM food_categories WHERE id=?", (data['category_id'],)).fetchone():
+        return jsonify({'error': 'Category not found'}), 404
+    max_order = db.execute(
+        "SELECT COALESCE(MAX(display_order),0) FROM food_items WHERE category_id=?",
+        (data['category_id'],)
+    ).fetchone()[0]
+    db.execute(
+        "INSERT INTO food_items (id, category_id, name, unit, is_active, display_order, created_at) VALUES (?,?,?,?,?,?,?)",
+        (iid, data['category_id'], data['name'].strip(),
+         data.get('unit', 'each'), data.get('is_active', 1),
+         data.get('display_order', max_order + 1), now())
+    )
+    db.commit()
+
+    # Seed empty bundle quantities for S/M/L
+    for size in ('S', 'M', 'L'):
+        db.execute(
+            "INSERT OR IGNORE INTO bundle_quantities (id, food_item_id, bundle_size, quantity) VALUES (?,?,?,?)",
+            (str(uuid.uuid4()), iid, size, '0')
+        )
+    db.commit()
+
+    item = dict(db.execute(
+        '''SELECT fi.*, fc.name as category_name FROM food_items fi
+           JOIN food_categories fc ON fi.category_id = fc.id WHERE fi.id=?''', (iid,)
+    ).fetchone())
+    return jsonify(item), 201
+
+@app.route('/api/food-items/<iid>', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_food_item(iid):
+    db = get_db()
+    row = db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    db.execute(
+        "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=? WHERE id=?",
+        (d.get('name', row['name']), d.get('unit', row['unit']),
+         d.get('is_active', row['is_active']), d.get('display_order', row['display_order']),
+         d.get('category_id', row['category_id']), iid)
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()))
+
+# ── Bundle Quantities ─────────────────────────────────────────────────────────
+
+@app.route('/api/bundle-quantities', methods=['GET'])
+@require_auth()
+def get_bundle_quantities():
+    db = get_db()
+    item_id = request.args.get('item_id')
+    if item_id:
+        rows = db.execute(
+            "SELECT * FROM bundle_quantities WHERE food_item_id=? ORDER BY bundle_size",
+            (item_id,)
+        ).fetchall()
+    else:
+        rows = db.execute(
+            '''SELECT bq.*, fi.name as item_name, fi.unit, fc.name as category_name
+               FROM bundle_quantities bq
+               JOIN food_items fi ON bq.food_item_id = fi.id
+               JOIN food_categories fc ON fi.category_id = fc.id
+               ORDER BY fc.display_order, fi.display_order, bq.bundle_size'''
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/bundle-quantities', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_bundle_quantities():
+    """Bulk update: expects list of {food_item_id, bundle_size, quantity}"""
+    items = request.json or []
+    if not isinstance(items, list):
+        return jsonify({'error': 'Expected array'}), 422
+    db = get_db()
+    for item in items:
+        if not all(k in item for k in ('food_item_id', 'bundle_size', 'quantity')):
+            continue
+        db.execute(
+            '''INSERT INTO bundle_quantities (id, food_item_id, bundle_size, quantity)
+               VALUES (?,?,?,?)
+               ON CONFLICT(food_item_id, bundle_size) DO UPDATE SET quantity=excluded.quantity''',
+            (str(uuid.uuid4()), item['food_item_id'], item['bundle_size'], item['quantity'])
+        )
+    db.commit()
+    return jsonify({'ok': True})
+
+# ── Bundle Size Rules ─────────────────────────────────────────────────────────
+
+@app.route('/api/bundle-size-rules', methods=['GET'])
+@require_auth()
+def get_bundle_size_rules():
+    rows = get_db().execute(
+        "SELECT * FROM bundle_size_rules ORDER BY min_household"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/bundle-size-rules', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_bundle_size_rules():
+    """Bulk update: expects list of {bundle_size, min_household, max_household, label}"""
+    items = request.json or []
+    db = get_db()
+    for item in items:
+        db.execute(
+            '''UPDATE bundle_size_rules
+               SET min_household=?, max_household=?, label=?
+               WHERE bundle_size=?''',
+            (item.get('min_household'), item.get('max_household'),
+             item.get('label'), item.get('bundle_size'))
+        )
+    db.commit()
+    return jsonify([dict(r) for r in db.execute(
+        "SELECT * FROM bundle_size_rules ORDER BY min_household"
+    ).fetchall()])
+
+# ── Delivery Cycles ───────────────────────────────────────────────────────────
+
+def auto_update_cycle_statuses(db):
+    """Auto-advance cycle status based on dates."""
+    n = now()
+    db.execute(
+        """UPDATE delivery_cycles SET status='open', updated_at=?
+           WHERE status='draft' AND request_open_at <= ?""", (n, n)
+    )
+    db.execute(
+        """UPDATE delivery_cycles SET status='closed', updated_at=?
+           WHERE status='open' AND request_close_at <= ?""", (n, n)
+    )
+    db.commit()
+
+@app.route('/api/delivery-cycles', methods=['GET'])
+@require_auth()
+def list_delivery_cycles():
+    db = get_db()
+    auto_update_cycle_statuses(db)
+    status = request.args.get('status')
+    q = "SELECT * FROM delivery_cycles WHERE 1=1"
+    params = []
+    if status:
+        q += " AND status=?"; params.append(status)
+    q += " ORDER BY delivery_date_start DESC"
+    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+
+@app.route('/api/delivery-cycles', methods=['POST'])
+@require_auth(roles=['admin'])
+def create_delivery_cycle():
+    data = request.json or {}
+    required = ('title', 'delivery_date_start', 'delivery_date_end',
+                'request_open_at', 'request_close_at')
+    if not all(data.get(k) for k in required):
+        return jsonify({'error': 'All date fields and title are required'}), 422
+    cid = str(uuid.uuid4())
+    get_db().execute(
+        '''INSERT INTO delivery_cycles
+           (id, title, delivery_date_start, delivery_date_end,
+            request_open_at, request_close_at, status, notes, created_by, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (cid, data['title'], data['delivery_date_start'], data['delivery_date_end'],
+         data['request_open_at'], data['request_close_at'],
+         data.get('status', 'draft'), data.get('notes'),
+         g.user['user_id'], now())
+    )
+    get_db().commit()
+    return jsonify(dict(get_db().execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone())), 201
+
+@app.route('/api/delivery-cycles/<cid>', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_delivery_cycle(cid):
+    db = get_db()
+    row = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    db.execute(
+        '''UPDATE delivery_cycles SET title=?, delivery_date_start=?, delivery_date_end=?,
+           request_open_at=?, request_close_at=?, status=?, notes=?, updated_at=? WHERE id=?''',
+        (d.get('title', row['title']),
+         d.get('delivery_date_start', row['delivery_date_start']),
+         d.get('delivery_date_end', row['delivery_date_end']),
+         d.get('request_open_at', row['request_open_at']),
+         d.get('request_close_at', row['request_close_at']),
+         d.get('status', row['status']),
+         d.get('notes', row['notes']), now(), cid)
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()))
+
+@app.route('/api/delivery-cycles/<cid>/orders', methods=['GET'])
+@require_auth()
+def get_cycle_orders(cid):
+    db = get_db()
+    orders = db.execute(
+        '''SELECT fr.*, f.name as family_name, f.phone as family_phone,
+                  f.address as family_address, f.city as family_city
+           FROM food_requests fr
+           JOIN families f ON fr.family_id = f.id
+           WHERE fr.cycle_id=?
+           ORDER BY fr.submitted_at''', (cid,)
+    ).fetchall()
+    result = []
+    for order in orders:
+        o = dict(order)
+        items = db.execute(
+            '''SELECT fri.*, fi.name, fi.unit, fc.name as category
+               FROM food_request_items fri
+               JOIN food_items fi ON fri.food_item_id = fi.id
+               JOIN food_categories fc ON fi.category_id = fc.id
+               WHERE fri.request_id=? AND fri.selected=1
+               ORDER BY fc.display_order, fi.display_order''',
+            (o['id'],)
+        ).fetchall()
+        o['selected_items'] = [dict(i) for i in items]
+        result.append(o)
+    return jsonify(result)
+
+@app.route('/api/delivery-cycles/<cid>/shopping-list', methods=['GET'])
+@require_auth()
+def get_cycle_shopping_list(db_arg=None, cid=None):
+    db = get_db()
+    # Get all selected items across all orders for this cycle, with bundle quantities
+    rows = db.execute(
+        '''SELECT fi.id as item_id, fi.name as item_name, fi.unit,
+                  fc.name as category, fc.display_order as cat_order, fi.display_order as item_order,
+                  fr.bundle_size,
+                  bq.quantity,
+                  COUNT(DISTINCT fr.id) as order_count
+           FROM food_requests fr
+           JOIN food_request_items fri ON fri.request_id = fr.id AND fri.selected = 1
+           JOIN food_items fi ON fri.food_item_id = fi.id
+           JOIN food_categories fc ON fi.category_id = fc.id
+           LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = fr.bundle_size
+           WHERE fr.cycle_id=? AND fr.status != 'cancelled'
+           GROUP BY fi.id, fr.bundle_size
+           ORDER BY fc.display_order, fi.display_order, fr.bundle_size''',
+        (cid,)
+    ).fetchall()
+
+    # Aggregate by item, summing across bundle sizes
+    from collections import defaultdict
+    items = defaultdict(lambda: {'category': '', 'unit': '', 'cat_order': 0, 'item_order': 0, 'breakdown': []})
+    for r in rows:
+        key = r['item_name']
+        items[key]['category'] = r['category']
+        items[key]['unit'] = r['unit']
+        items[key]['cat_order'] = r['cat_order']
+        items[key]['item_order'] = r['item_order']
+        items[key]['breakdown'].append({
+            'bundle_size': r['bundle_size'],
+            'quantity': r['quantity'],
+            'order_count': r['order_count']
+        })
+
+    shopping_list = []
+    for name, info in sorted(items.items(), key=lambda x: (x[1]['cat_order'], x[1]['item_order'])):
+        shopping_list.append({
+            'item_name': name,
+            'category': info['category'],
+            'unit': info['unit'],
+            'breakdown': info['breakdown']
+        })
+
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()
+    total_orders = db.execute(
+        "SELECT COUNT(*) FROM food_requests WHERE cycle_id=? AND status != 'cancelled'", (cid,)
+    ).fetchone()[0]
+
+    return jsonify({
+        'cycle': dict(cycle) if cycle else {},
+        'total_orders': total_orders,
+        'shopping_list': shopping_list
+    })
+
+# ── Cycle Assignments ─────────────────────────────────────────────────────────
+
+@app.route('/api/cycle-assignments', methods=['GET'])
+@require_auth()
+def list_cycle_assignments():
+    db = get_db()
+    cycle_id = request.args.get('cycle_id')
+    q = '''SELECT ca.*, v.name as volunteer_name, v.phone as volunteer_phone,
+                  f.name as family_name
+           FROM cycle_assignments ca
+           JOIN volunteers v ON ca.volunteer_id = v.id
+           LEFT JOIN families f ON ca.family_id = f.id
+           WHERE 1=1'''
+    params = []
+    if cycle_id:
+        q += " AND ca.cycle_id=?"; params.append(cycle_id)
+    q += " ORDER BY ca.task_type, ca.task_date, ca.created_at"
+    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+
+@app.route('/api/cycle-assignments', methods=['POST'])
+@require_auth(roles=['admin'])
+def create_cycle_assignment():
+    data = request.json or {}
+    if not data.get('cycle_id') or not data.get('volunteer_id') or not data.get('task_type'):
+        return jsonify({'error': 'cycle_id, volunteer_id, task_type required'}), 422
+    aid = str(uuid.uuid4())
+    get_db().execute(
+        '''INSERT INTO cycle_assignments
+           (id, cycle_id, volunteer_id, family_id, task_type, task_date, task_time, status, notes, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (aid, data['cycle_id'], data['volunteer_id'], data.get('family_id'),
+         data['task_type'], data.get('task_date'), data.get('task_time'),
+         'pending', data.get('notes'), now())
+    )
+    get_db().commit()
+    return jsonify({'id': aid}), 201
+
+@app.route('/api/cycle-assignments/<aid>', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_cycle_assignment(aid):
+    db = get_db()
+    row = db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    db.execute(
+        '''UPDATE cycle_assignments SET volunteer_id=?, family_id=?, task_date=?,
+           task_time=?, status=?, notes=?, updated_at=? WHERE id=?''',
+        (d.get('volunteer_id', row['volunteer_id']), d.get('family_id', row['family_id']),
+         d.get('task_date', row['task_date']), d.get('task_time', row['task_time']),
+         d.get('status', row['status']), d.get('notes', row['notes']), now(), aid)
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()))
+
 # ── Public Intake (no auth) ───────────────────────────────────────────────────
 
 @app.route('/api/intake', methods=['POST'])
@@ -749,6 +1363,146 @@ def intake_page():
 @app.route('/volunteer')
 def volunteer_page():
     return send_from_directory('public', 'volunteer.html')
+
+@app.route('/order')
+def order_page():
+    return send_from_directory('public', 'order.html')
+
+# ── Public Food Order (no auth) ───────────────────────────────────────────────
+
+@app.route('/api/food-order/check', methods=['GET'])
+def check_food_order_eligibility():
+    """Check if a phone number is registered and if there's an open cycle."""
+    phone = (request.args.get('phone') or '').strip()
+    if not phone:
+        return jsonify({'error': 'Phone number required'}), 400
+
+    db = get_db()
+    auto_update_cycle_statuses(db)
+
+    # Check family exists
+    family = db.execute(
+        "SELECT id, name, family_size FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+    ).fetchone()
+
+    if not family:
+        return jsonify({'registered': False,
+                        'message': 'Phone number not found. Please register first.'})
+
+    # Find open cycle
+    cycle = db.execute(
+        "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
+    ).fetchone()
+
+    if not cycle:
+        return jsonify({'registered': True, 'family_name': family['name'],
+                        'open_cycle': False,
+                        'message': 'There are no open delivery cycles at this time. Please check back soon.'})
+
+    # Check if already submitted for this cycle
+    existing = db.execute(
+        "SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
+        (cycle['id'], family['id'])
+    ).fetchone()
+
+    if existing:
+        return jsonify({
+            'registered': True, 'family_name': family['name'],
+            'open_cycle': True, 'already_submitted': True,
+            'delivery_start': cycle['delivery_date_start'],
+            'delivery_end': cycle['delivery_date_end'],
+            'message': 'You have already submitted a request for this delivery cycle.'
+        })
+
+    # Determine bundle size
+    size = db.execute(
+        "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
+        (family['family_size'] or 1, family['family_size'] or 1)
+    ).fetchone()
+    bundle_size = size['bundle_size'] if size else 'M'
+
+    # Get active food items
+    items = db.execute(
+        '''SELECT fi.id, fi.name, fi.unit, fi.display_order,
+                  fc.id as category_id, fc.name as category_name, fc.display_order as cat_order
+           FROM food_items fi
+           JOIN food_categories fc ON fi.category_id = fc.id
+           WHERE fi.is_active=1 AND fc.is_active=1
+           ORDER BY fc.display_order, fi.display_order''').fetchall()
+
+    return jsonify({
+        'registered': True, 'family_name': family['name'],
+        'family_id': family['id'],
+        'open_cycle': True, 'already_submitted': False,
+        'cycle_id': cycle['id'],
+        'cycle_title': cycle['title'],
+        'delivery_start': cycle['delivery_date_start'],
+        'delivery_end': cycle['delivery_date_end'],
+        'request_close_at': cycle['request_close_at'],
+        'bundle_size': bundle_size,
+        'food_items': [dict(i) for i in items]
+    })
+
+@app.route('/api/food-order', methods=['POST'])
+def submit_food_order():
+    data = request.json or {}
+    required = ('family_id', 'cycle_id', 'selected_items')
+    if not all(data.get(k) for k in required):
+        return jsonify({'error': 'family_id, cycle_id, and selected_items required'}), 422
+
+    db = get_db()
+    auto_update_cycle_statuses(db)
+
+    # Validate cycle is still open
+    cycle = db.execute(
+        "SELECT * FROM delivery_cycles WHERE id=? AND status='open'", (data['cycle_id'],)
+    ).fetchone()
+    if not cycle:
+        return jsonify({'error': 'This cycle is no longer accepting requests.'}), 409
+
+    # Validate family
+    family = db.execute("SELECT * FROM families WHERE id=?", (data['family_id'],)).fetchone()
+    if not family:
+        return jsonify({'error': 'Family not found.'}), 404
+
+    # Enforce one order per family per cycle
+    if db.execute("SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
+                  (data['cycle_id'], data['family_id'])).fetchone():
+        return jsonify({'error': 'You have already submitted a request for this cycle.'}), 409
+
+    # Determine bundle size
+    size = db.execute(
+        "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
+        (family['family_size'] or 1, family['family_size'] or 1)
+    ).fetchone()
+    bundle_size = size['bundle_size'] if size else 'M'
+
+    # Create food request
+    rid = str(uuid.uuid4())
+    db.execute(
+        '''INSERT INTO food_requests
+           (id, cycle_id, family_id, bundle_size, submitted_at, status)
+           VALUES (?,?,?,?,?,?)''',
+        (rid, data['cycle_id'], data['family_id'], bundle_size, now(), 'submitted')
+    )
+
+    # Save item selections
+    selected_ids = set(data.get('selected_items', []))
+    all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
+    for item in all_items:
+        db.execute(
+            "INSERT INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,?)",
+            (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
+        )
+
+    db.commit()
+    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]}')
+    return jsonify({
+        'ok': True,
+        'message': 'Your request has been submitted.',
+        'delivery_start': cycle['delivery_date_start'],
+        'delivery_end': cycle['delivery_date_end']
+    }), 201
 
 @app.route('/uploads/<path:filename>')
 @require_auth()
