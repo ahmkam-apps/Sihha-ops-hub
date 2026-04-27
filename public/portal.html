@@ -114,6 +114,23 @@
     font-size: 13px; margin-top: 8px; font-weight: 600;
   }
 
+  /* History */
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .stat-pill {
+    background: var(--white); border: 1px solid var(--gray-2);
+    padding: 12px 18px; flex: 1; min-width: 100px; text-align: center;
+  }
+  .stat-pill-num { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stat-pill-lbl { font-size: 10px; color: var(--gray-4); text-transform: uppercase;
+                   letter-spacing: 0.06em; margin-top: 4px; }
+  .history-row {
+    background: var(--white); border: 1px solid var(--gray-2);
+    padding: 12px 16px; margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  }
+  .history-row-left { font-size: 13px; }
+  .history-row-meta { font-size: 12px; color: var(--gray-4); margin-top: 2px; }
+
   /* Footer */
   .footer { text-align: center; font-size: 12px; color: var(--gray-3); margin-top: 40px; padding: 20px; }
   .footer a { color: var(--gray-3); }
@@ -155,8 +172,9 @@
 <div id="app-screen" style="display:none">
   <div class="container">
     <div class="tabs">
-      <div class="tab active" id="tab-open" onclick="showTab('open')">Open Slots</div>
-      <div class="tab" id="tab-mytasks" onclick="showTab('mytasks')">My Tasks</div>
+      <div class="tab active" id="tab-open"    onclick="showTab('open')">Open Slots</div>
+      <div class="tab"        id="tab-mytasks" onclick="showTab('mytasks')">My Tasks</div>
+      <div class="tab"        id="tab-history" onclick="showTab('history')">History</div>
     </div>
 
     <!-- OPEN SLOTS TAB -->
@@ -173,6 +191,11 @@
     <!-- MY TASKS TAB -->
     <div id="pane-mytasks" style="display:none">
       <div id="tasks-content"><div class="spinner">Loading…</div></div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div id="pane-history" style="display:none">
+      <div id="history-content"><div class="spinner">Loading…</div></div>
     </div>
   </div>
 </div>
@@ -238,11 +261,12 @@ function showApp() {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function showTab(tab) {
-  document.getElementById('pane-open').style.display    = tab === 'open'    ? '' : 'none';
-  document.getElementById('pane-mytasks').style.display = tab === 'mytasks' ? '' : 'none';
-  document.getElementById('tab-open').classList.toggle('active',    tab === 'open');
-  document.getElementById('tab-mytasks').classList.toggle('active', tab === 'mytasks');
+  ['open', 'mytasks', 'history'].forEach(t => {
+    document.getElementById('pane-' + t).style.display = tab === t ? '' : 'none';
+    document.getElementById('tab-'  + t).classList.toggle('active', tab === t);
+  });
   if (tab === 'mytasks') loadMyTasks();
+  if (tab === 'history') loadHistory();
 }
 
 // ── Cycles ────────────────────────────────────────────────────────────────────
@@ -379,6 +403,52 @@ async function completeTask(slotId) {
     await POST('/portal/complete/' + slotId, {});
     loadMyTasks();
   } catch(e) { alert(e.message); }
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+async function loadHistory() {
+  document.getElementById('history-content').innerHTML = '<div class="spinner">Loading…</div>';
+  try {
+    const data = await GET('/portal/history');
+    const s = data.stats;
+
+    const statsHtml = `
+      <div class="stat-row">
+        <div class="stat-pill"><div class="stat-pill-num">${s.completed}</div><div class="stat-pill-lbl">Tasks Done</div></div>
+        <div class="stat-pill"><div class="stat-pill-num">${s.shopping}</div><div class="stat-pill-lbl">Shopping</div></div>
+        <div class="stat-pill"><div class="stat-pill-num">${s.delivery}</div><div class="stat-pill-lbl">Deliveries</div></div>
+        <div class="stat-pill"><div class="stat-pill-num">${s.cycles_served}</div><div class="stat-pill-lbl">Cycles</div></div>
+        <div class="stat-pill"><div class="stat-pill-num">${s.families_served}</div><div class="stat-pill-lbl">Families Served</div></div>
+      </div>`;
+
+    if (!data.tasks.length) {
+      document.getElementById('history-content').innerHTML =
+        statsHtml + '<div class="empty">No completed tasks yet. Complete a task to see your history here.</div>';
+      return;
+    }
+
+    const tasksHtml = data.tasks.map(t => `
+      <div class="history-row">
+        <div class="history-row-left">
+          <div>
+            <span class="badge badge-${t.task_type}">${t.task_type}</span>
+            &nbsp;<strong>${t.cycle_title}</strong>
+          </div>
+          <div class="history-row-meta">
+            Family ID: ${t.family_id.slice(0,8)}… · Size: ${t.family_size || '?'}
+            ${t.completed_at ? ' · Done ' + fmtDate(t.completed_at) : ''}
+          </div>
+        </div>
+        <span class="badge badge-complete">✓ Complete</span>
+      </div>`).join('');
+
+    document.getElementById('history-content').innerHTML =
+      `<div class="section-heading">Your Lifetime Stats</div>${statsHtml}
+       <div class="section-heading">Completed Tasks</div>${tasksHtml}`;
+  } catch(e) {
+    if (e.message.includes('expired')) { logout(); return; }
+    document.getElementById('history-content').innerHTML = `<div class="empty">${e.message}</div>`;
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

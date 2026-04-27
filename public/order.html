@@ -306,6 +306,9 @@
     </div>
   </div>
 
+  <div id="last-order-banner" style="display:none;background:#f0f7f4;border:1px solid #c3e0d0;
+    padding:9px 14px;font-size:13px;color:#1a3a2a;margin-bottom:14px;border-radius:6px;"></div>
+
   <div class="cycle-box" id="cycle-info"></div>
 
   <div class="phase-title">Select Your Items</div>
@@ -351,6 +354,12 @@
   <div class="success-msg">Request Submitted!</div>
   <div class="success-sub">JazakAllah Khair. Your food request has been received.</div>
   <div class="success-detail" id="confirmed-detail"></div>
+  <div style="margin-top:20px;padding-top:16px;border-top:1px solid #eee;font-size:14px;color:#555;line-height:1.7;">
+    <strong style="color:#1a3a2a;">What happens next?</strong><br>
+    A SIHAA volunteer will shop for your items and arrange delivery within the window shown above.
+    You do not need to do anything else — a volunteer will be in touch.<br><br>
+    <a href="https://www.sihha.org" style="color:#1a3a2a;font-weight:600;">Return to sihha.org →</a>
+  </div>
 </div>
 
 <div class="footer">SIHAA Food Charity · Rochester, NY</div>
@@ -457,6 +466,23 @@
     document.getElementById('greeting-name').textContent = 'As-salamu alaykum, ' + data.family_name;
     const bLabel = {S:'Small', M:'Medium', L:'Large'}[data.bundle_size] || data.bundle_size;
     document.getElementById('greeting-meta').textContent = `Bundle size: ${bLabel}`;
+
+    // Last order context banner
+    const lastOrderEl = document.getElementById('last-order-banner');
+    if (lastOrderEl) {
+      const lo = data.last_order;
+      if (lo) {
+        const statusIcon = lo.status === 'delivered' ? '✓' : '⏳';
+        const statusText = lo.status === 'delivered'
+          ? `Delivered ${lo.delivered_at ? fmtDate(lo.delivered_at) : ''}`
+          : lo.status.charAt(0).toUpperCase() + lo.status.slice(1);
+        lastOrderEl.innerHTML =
+          `${statusIcon} Last order: <strong>${lo.cycle_title}</strong> — ${statusText}`;
+        lastOrderEl.style.display = '';
+      } else {
+        lastOrderEl.style.display = 'none';
+      }
+    }
 
     // Cycle info
     document.getElementById('cycle-info').innerHTML = `

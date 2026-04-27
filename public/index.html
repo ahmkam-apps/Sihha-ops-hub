@@ -411,6 +411,43 @@
   }
   .form-section:first-child { margin-top: 0; }
 
+  /* ── Drawer Tabs ─────────────────────────────────────────── */
+  .drawer-tabs { display: flex; border-bottom: 2px solid var(--gray-2); margin-bottom: 20px; }
+  .drawer-tab {
+    padding: 8px 16px; font-size: 12px; font-weight: 600; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+    color: var(--gray-4); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .drawer-tab.active { color: var(--black); border-bottom-color: var(--black); }
+  .drawer-pane { display: none; }
+  .drawer-pane.active { display: block; }
+
+  /* History rows in drawer */
+  .hist-row {
+    border: 1px solid var(--gray-2); margin-bottom: 8px; background: var(--white);
+  }
+  .hist-row-head {
+    padding: 10px 14px; display: flex; justify-content: space-between;
+    align-items: center; cursor: pointer; gap: 8px;
+  }
+  .hist-row-head:hover { background: var(--gray-1); }
+  .hist-row-body { padding: 0 14px 12px; font-size: 12px; display: none; }
+  .hist-row-body.open { display: block; }
+  .hist-items { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .hist-item-chip {
+    background: var(--gray-1); border: 1px solid var(--gray-2);
+    padding: 2px 8px; font-size: 11px; border-radius: 2px;
+  }
+  .hist-stat-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px;
+  }
+  .hist-stat-cell {
+    border: 1px solid var(--gray-2); padding: 10px; text-align: center; background: var(--white);
+  }
+  .hist-stat-num { font-size: 22px; font-weight: 700; line-height: 1; }
+  .hist-stat-lbl { font-size: 10px; color: var(--gray-4); text-transform: uppercase;
+                   letter-spacing: 0.05em; margin-top: 3px; }
+
   /* ── Detail Panel ───────────────────────────────────────── */
   .detail-row {
     display: flex;
@@ -974,24 +1011,88 @@ async function saveFamily() {
 
 async function viewFamily(id) {
   try {
-    const r = await GET('/families/' + id);
-    openDrawer('Family Details',
-      `<div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
-       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
-       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${r.address||'—'}, ${r.city||''}</div></div>
-       <div class="detail-row"><div class="detail-label">Household Size</div><div class="detail-value">${r.family_size||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Children</div><div class="detail-value">${r.children_count||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Dietary</div><div class="detail-value">${r.dietary_notes||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Frequency</div><div class="detail-value">${r.frequency||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Income Range</div><div class="detail-value">${r.income_range||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
-       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
-       ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`,
+    const [r, hist] = await Promise.all([
+      GET('/families/' + id),
+      GET('/families/' + id + '/history')
+    ]);
+
+    const detailsHTML = `
+      <div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
+      <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
+      <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${r.address||'—'}, ${r.city||''}</div></div>
+      <div class="detail-row"><div class="detail-label">Household Size</div><div class="detail-value">${r.family_size||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Children</div><div class="detail-value">${r.children_count||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Dietary</div><div class="detail-value">${r.dietary_notes||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Frequency</div><div class="detail-value">${r.frequency||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Income Range</div><div class="detail-value">${r.income_range||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
+      <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
+      ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`;
+
+    const orders = hist.orders || [];
+    const histHTML = orders.length === 0
+      ? '<p style="color:var(--gray-4);font-size:13px">No orders placed yet.</p>'
+      : orders.map((o, idx) => {
+          const shopper  = o.slots.find(s => s.task_type === 'shopping');
+          const delivery = o.slots.find(s => s.task_type === 'delivery');
+          const statusLabel = o.delivered_at
+            ? `<span style="color:#1a7a3c;font-weight:600">✓ Delivered ${fmtDate(o.delivered_at)}</span>`
+            : `${badge(o.status)}`;
+          return `
+            <div class="hist-row">
+              <div class="hist-row-head" onclick="toggleHistRow('fhr-${idx}')">
+                <div>
+                  <div style="font-size:13px;font-weight:600">${o.cycle_title}</div>
+                  <div style="font-size:11px;color:var(--gray-4);margin-top:2px">
+                    ${o.selected_items.length} items · Bundle ${o.bundle_size}
+                    · Submitted ${fmtDate(o.submitted_at)}
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  ${statusLabel}
+                  <span style="color:var(--gray-4);font-size:12px">▾</span>
+                </div>
+              </div>
+              <div class="hist-row-body" id="fhr-${idx}">
+                <div class="hist-items">
+                  ${o.selected_items.map(i =>
+                    `<span class="hist-item-chip">${i.name}</span>`).join('')}
+                </div>
+                <div style="margin-top:10px;font-size:12px;color:var(--gray-5)">
+                  <strong>Shopper:</strong> ${shopper?.volunteer_name || (shopper?.status === 'open' ? 'Unclaimed' : '—')} &nbsp;·&nbsp;
+                  <strong>Delivery:</strong> ${delivery?.volunteer_name || (delivery?.status === 'open' ? 'Unclaimed' : '—')}
+                  ${o.delivered_at ? `<br><strong>Delivered:</strong> ${fmtDate(o.delivered_at)}` : ''}
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+
+    openDrawer(r.name,
+      `<div class="drawer-tabs">
+         <div class="drawer-tab active" id="dtab-details" onclick="switchDrawerTab('details','family')">Details</div>
+         <div class="drawer-tab" id="dtab-history" onclick="switchDrawerTab('history','family')">Order History (${orders.length})</div>
+       </div>
+       <div class="drawer-pane active" id="dpane-details">${detailsHTML}</div>
+       <div class="drawer-pane" id="dpane-history">${histHTML}</div>`,
       `<button class="btn" onclick="openFamilyForm('${id}')">Edit</button>
        <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
     );
-  } catch(e) {}
+  } catch(e) { console.error(e); }
+}
+
+function toggleHistRow(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+function switchDrawerTab(tab, context) {
+  // Toggle tab active state
+  document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('dtab-' + tab)?.classList.add('active');
+  // Toggle pane visibility
+  document.querySelectorAll('.drawer-pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('dpane-' + tab)?.classList.add('active');
 }
 
 // ── Volunteers ────────────────────────────────────────────────────────────────
@@ -1167,22 +1268,72 @@ async function saveVolunteer() {
 
 async function viewVolunteer(id) {
   try {
-    const r = await GET('/volunteers/' + id);
-    openDrawer('Volunteer Details',
-      `<div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
-       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
-       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Role</div><div class="detail-value" style="text-transform:capitalize">${r.role||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Availability</div><div class="detail-value">${r.availability||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Service Area</div><div class="detail-value">${r.service_area||'—'}</div></div>
-       <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
-       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
-       ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`,
+    const [r, hist] = await Promise.all([
+      GET('/volunteers/' + id),
+      GET('/volunteers/' + id + '/history')
+    ]);
+
+    const detailsHTML = `
+      <div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
+      <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
+      <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Role</div><div class="detail-value" style="text-transform:capitalize">${r.role||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Availability</div><div class="detail-value">${r.availability||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Service Area</div><div class="detail-value">${r.service_area||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
+      <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
+      ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`;
+
+    const s = hist.stats || {};
+    const tasks = hist.tasks || [];
+
+    const statsHTML = `
+      <div class="hist-stat-grid">
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.completed||0}</div><div class="hist-stat-lbl">Completed</div></div>
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.shopping||0}</div><div class="hist-stat-lbl">Shopping</div></div>
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.delivery||0}</div><div class="hist-stat-lbl">Deliveries</div></div>
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.cycles_served||0}</div><div class="hist-stat-lbl">Cycles</div></div>
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.families_served||0}</div><div class="hist-stat-lbl">Families</div></div>
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.total_tasks||0}</div><div class="hist-stat-lbl">Total Tasks</div></div>
+      </div>`;
+
+    const taskRows = tasks.length === 0
+      ? '<p style="color:var(--gray-4);font-size:13px">No tasks yet.</p>'
+      : tasks.map(t => {
+          const isDone = t.status === 'complete';
+          return `
+            <div class="hist-row">
+              <div class="hist-row-head" style="cursor:default">
+                <div>
+                  <div style="font-size:13px;font-weight:600">${t.cycle_title}</div>
+                  <div style="font-size:11px;color:var(--gray-4);margin-top:2px">
+                    <span style="text-transform:capitalize">${t.task_type}</span>
+                    ${t.claimed_at ? '· Claimed ' + fmtDate(t.claimed_at) : ''}
+                    ${t.completed_at ? '· Done ' + fmtDate(t.completed_at) : ''}
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <span class="badge badge-${t.task_type}" style="font-size:10px">${t.task_type}</span>
+                  ${isDone
+                    ? '<span style="font-size:12px;color:#1a7a3c;font-weight:600">✓ Done</span>'
+                    : `<span style="font-size:12px;color:var(--gray-4);text-transform:capitalize">${t.status}</span>`}
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+
+    openDrawer(r.name,
+      `<div class="drawer-tabs">
+         <div class="drawer-tab active" id="dtab-details" onclick="switchDrawerTab('details','vol')">Details</div>
+         <div class="drawer-tab" id="dtab-history" onclick="switchDrawerTab('history','vol')">Task History (${s.total_tasks||0})</div>
+       </div>
+       <div class="drawer-pane active" id="dpane-details">${detailsHTML}</div>
+       <div class="drawer-pane" id="dpane-history">${statsHTML}${taskRows}</div>`,
       `<button class="btn" onclick="openVolunteerForm('${id}')">Edit</button>
        <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
     );
-  } catch(e) {}
+  } catch(e) { console.error(e); }
 }
 
 // ── Assignments ───────────────────────────────────────────────────────────────

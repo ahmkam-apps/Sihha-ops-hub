@@ -422,6 +422,13 @@ def bootstrap_db():
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+    # Add completed_at to volunteer_slots (tracks when a task was marked done)
+    try:
+        conn.execute('ALTER TABLE volunteer_slots ADD COLUMN completed_at TEXT')
+        log.info('Migration: added completed_at to volunteer_slots')
+    except sqlite3.OperationalError:
+        pass  # Already exists
+
     # ── Phase 3C tables ───────────────────────────────────────────────────────
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS volunteer_slots (
@@ -676,6 +683,14 @@ def dashboard_stats():
             "SELECT COALESCE(SUM(amount),0) FROM receipts WHERE status='approved'"
         ).fetchone()[0],
     }
+    # Orders submitted for the current open cycle (if any)
+    open_cycle = db.execute(
+        "SELECT id FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
+    ).fetchone()
+    stats['orders_this_cycle'] = db.execute(
+        "SELECT COUNT(*) FROM food_requests WHERE cycle_id=?",
+        (open_cycle['id'],)
+    ).fetchone()[0] if open_cycle else 0
     return jsonify(stats)
 
 # ── Families ──────────────────────────────────────────────────────────────────
@@ -1505,6 +1520,17 @@ def check_food_order_eligibility():
         return jsonify({'registered': False,
                         'message': 'Phone number not found. Please register first.'})
 
+    # Last order context (most recent completed order across all cycles)
+    last_order_row = db.execute(
+        '''SELECT fr.submitted_at, fr.status, fr.delivered_at, dc.title as cycle_title
+           FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+           WHERE fr.family_id=?
+           ORDER BY fr.submitted_at DESC LIMIT 1''',
+        (family['id'],)
+    ).fetchone()
+    last_order = dict(last_order_row) if last_order_row else None
+
     # Find open cycle
     cycle = db.execute(
         "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
@@ -1512,7 +1538,9 @@ def check_food_order_eligibility():
 
     if not cycle:
         return jsonify({'registered': True, 'family_name': family['name'],
+                        'family_id': family['id'],
                         'open_cycle': False,
+                        'last_order': last_order,
                         'message': 'There are no open delivery cycles at this time. Please check back soon.'})
 
     # Check if already submitted for this cycle
@@ -1524,7 +1552,9 @@ def check_food_order_eligibility():
     if existing:
         return jsonify({
             'registered': True, 'family_name': family['name'],
+            'family_id': family['id'],
             'open_cycle': True, 'already_submitted': True,
+            'last_order': last_order,
             'delivery_start': cycle['delivery_date_start'],
             'delivery_end': cycle['delivery_date_end'],
             'message': 'You have already submitted a request for this delivery cycle.'
@@ -1550,6 +1580,7 @@ def check_food_order_eligibility():
         'registered': True, 'family_name': family['name'],
         'family_id': family['id'],
         'open_cycle': True, 'already_submitted': False,
+        'last_order': last_order,
         'cycle_id': cycle['id'],
         'cycle_title': cycle['title'],
         'delivery_start': cycle['delivery_date_start'],
@@ -1611,8 +1642,19 @@ def submit_food_order():
             (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
         )
 
+    # ── Auto-generate shopping + delivery slots immediately ───────────────────
+    task_date = cycle['delivery_date_start']
+    for task_type in ('shopping', 'delivery'):
+        try:
+            db.execute(
+                "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), data['cycle_id'], data['family_id'], task_type, task_date, 'open', now())
+            )
+        except sqlite3.IntegrityError:
+            pass  # Slot already exists (UNIQUE constraint on cycle_id, family_id, task_type)
+
     db.commit()
-    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]}')
+    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]} — slots auto-created')
     return jsonify({
         'ok': True,
         'message': 'Your request has been submitted.',
@@ -1779,9 +1821,160 @@ def portal_complete_slot(slot_id):
     ).fetchone()
     if not slot:
         return jsonify({'error': 'Slot not found or not yours'}), 404
-    db.execute("UPDATE volunteer_slots SET status='complete', updated_at=? WHERE id=?", (now(), slot_id))
+    ts = now()
+    db.execute(
+        "UPDATE volunteer_slots SET status='complete', completed_at=?, updated_at=? WHERE id=?",
+        (ts, ts, slot_id)
+    )
+    # When a delivery slot is marked complete, auto-set delivered_at on the food_request
+    if slot['task_type'] == 'delivery':
+        db.execute(
+            "UPDATE food_requests SET delivered_at=?, status='delivered' WHERE cycle_id=? AND family_id=? AND delivered_at IS NULL",
+            (ts, slot['cycle_id'], slot['family_id'])
+        )
     db.commit()
     return jsonify({'ok': True})
+
+# ── History Endpoints ─────────────────────────────────────────────────────────
+
+@app.route('/api/families/<fid>/history')
+@require_auth()
+def family_history(fid):
+    """Per-cycle order history for a family. Includes items and volunteer info."""
+    db = get_db()
+    family = db.execute("SELECT id, name, family_size FROM families WHERE id=?", (fid,)).fetchone()
+    if not family:
+        return jsonify({'error': 'Not found'}), 404
+
+    orders = db.execute(
+        '''SELECT fr.id, fr.cycle_id, fr.bundle_size, fr.submitted_at,
+                  fr.status, fr.delivered_at,
+                  dc.title as cycle_title,
+                  dc.delivery_date_start, dc.delivery_date_end
+           FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+           WHERE fr.family_id=?
+           ORDER BY fr.submitted_at DESC''',
+        (fid,)
+    ).fetchall()
+
+    result = []
+    for order in orders:
+        o = dict(order)
+
+        # Selected items
+        items = db.execute(
+            '''SELECT fi.name, fi.unit, fc.name as category
+               FROM food_request_items fri
+               JOIN food_items fi ON fri.food_item_id = fi.id
+               JOIN food_categories fc ON fi.category_id = fc.id
+               WHERE fri.request_id=? AND fri.selected=1
+               ORDER BY fc.display_order, fi.display_order''',
+            (o['id'],)
+        ).fetchall()
+        o['selected_items'] = [dict(i) for i in items]
+
+        # Volunteer slots for this order
+        slots = db.execute(
+            '''SELECT vs.task_type, vs.status, vs.completed_at,
+                      v.name as volunteer_name, v.id as volunteer_id
+               FROM volunteer_slots vs
+               LEFT JOIN volunteers v ON vs.claimed_by = v.id
+               WHERE vs.cycle_id=? AND vs.family_id=?''',
+            (o['cycle_id'], fid)
+        ).fetchall()
+        o['slots'] = [dict(s) for s in slots]
+
+        result.append(o)
+
+    return jsonify({'family': dict(family), 'orders': result})
+
+
+@app.route('/api/volunteers/<vid>/history')
+@require_auth()
+def volunteer_history(vid):
+    """Task history for a volunteer: lifetime stats + per-task log."""
+    db = get_db()
+    vol = db.execute("SELECT id, name, role FROM volunteers WHERE id=?", (vid,)).fetchone()
+    if not vol:
+        return jsonify({'error': 'Not found'}), 404
+
+    tasks = db.execute(
+        '''SELECT vs.id, vs.task_type, vs.status, vs.task_date,
+                  vs.claimed_at, vs.completed_at,
+                  dc.title as cycle_title, dc.delivery_date_start,
+                  f.id as family_id, f.family_size
+           FROM volunteer_slots vs
+           JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+           JOIN families f ON vs.family_id = f.id
+           WHERE vs.claimed_by=?
+           ORDER BY vs.claimed_at DESC''',
+        (vid,)
+    ).fetchall()
+
+    task_list = [dict(t) for t in tasks]
+
+    # Lifetime stats
+    total      = len(task_list)
+    completed  = sum(1 for t in task_list if t['status'] == 'complete')
+    shopping   = sum(1 for t in task_list if t['task_type'] == 'shopping')
+    delivery   = sum(1 for t in task_list if t['task_type'] == 'delivery')
+    cycles_served = len({t['cycle_title'] for t in task_list})
+    families_served = len({t['family_id'] for t in task_list if t['status'] == 'complete'})
+
+    return jsonify({
+        'volunteer': dict(vol),
+        'stats': {
+            'total_tasks': total,
+            'completed':   completed,
+            'shopping':    shopping,
+            'delivery':    delivery,
+            'cycles_served':   cycles_served,
+            'families_served': families_served,
+        },
+        'tasks': task_list
+    })
+
+
+@app.route('/api/portal/history')
+@require_portal_auth()
+def portal_history():
+    """Volunteer's own history — privacy-safe: family_id only, no names or addresses."""
+    db = get_db()
+    vol_id = g.pv['volunteer_id']
+
+    tasks = db.execute(
+        '''SELECT vs.id, vs.task_type, vs.status, vs.task_date,
+                  vs.claimed_at, vs.completed_at,
+                  dc.title as cycle_title, dc.delivery_date_start,
+                  f.id as family_id, f.family_size
+           FROM volunteer_slots vs
+           JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+           JOIN families f ON vs.family_id = f.id
+           WHERE vs.claimed_by=? AND vs.status='complete'
+           ORDER BY vs.completed_at DESC''',
+        (vol_id,)
+    ).fetchall()
+
+    task_list = [dict(t) for t in tasks]
+
+    completed  = len(task_list)
+    shopping   = sum(1 for t in task_list if t['task_type'] == 'shopping')
+    delivery   = sum(1 for t in task_list if t['task_type'] == 'delivery')
+    cycles_served   = len({t['cycle_title'] for t in task_list})
+    families_served = len({t['family_id'] for t in task_list})
+
+    return jsonify({
+        'stats': {
+            'completed':       completed,
+            'shopping':        shopping,
+            'delivery':        delivery,
+            'cycles_served':   cycles_served,
+            'families_served': families_served,
+        },
+        'tasks': task_list
+    })
+
 
 # ── Admin: Generate Slots for a Cycle ─────────────────────────────────────────
 
