@@ -45,6 +45,42 @@ def close_db(error):
 def now():
     return datetime.utcnow().isoformat()
 
+def _bundle_letter(family_size):
+    """Return S / M / L based on household size."""
+    size = int(family_size or 1)
+    if size <= 2:   return 'S'
+    elif size <= 5: return 'M'
+    else:           return 'L'
+
+def _make_family_code(phone, family_size, db_conn=None, exclude_id=None):
+    """Generate unique human-readable family reference.
+    Format: last 6 digits of phone + '-' + bundle size letter.
+    Example: phone=5855551234, family_size=4 → '551234-M'
+    If a collision exists, appends -2, -3, … until unique.
+    Pass db_conn to enforce uniqueness against the families table.
+    """
+    digits = ''.join(c for c in (phone or '') if c.isdigit())
+    phone_part = digits[-6:].zfill(6) if digits else '000000'
+    bundle = _bundle_letter(family_size)
+    base = f'{phone_part}-{bundle}'
+
+    if db_conn is None:
+        return base
+
+    # Enforce uniqueness
+    candidate = base
+    suffix = 2
+    while True:
+        row = db_conn.execute(
+            "SELECT id FROM families WHERE family_code=?" +
+            (" AND id!=?" if exclude_id else ""),
+            (candidate, exclude_id) if exclude_id else (candidate,)
+        ).fetchone()
+        if not row:
+            return candidate
+        candidate = f'{base}-{suffix}'
+        suffix += 1
+
 def bootstrap_db():
     # ── Diagnostics: log exactly where the DB lives and whether it's fresh ────
     abs_db = os.path.abspath(DB_PATH)
@@ -429,6 +465,23 @@ def bootstrap_db():
     except sqlite3.OperationalError:
         pass  # Already exists
 
+    # Add family_code — human-readable reference (last 4 digits of phone + bundle size)
+    try:
+        conn.execute('ALTER TABLE families ADD COLUMN family_code TEXT')
+        log.info('Migration: added family_code to families')
+    except sqlite3.OperationalError:
+        pass  # Already exists
+
+    # Back-fill family_code for existing families that don't have one
+    existing = conn.execute(
+        "SELECT id, phone, family_size FROM families WHERE family_code IS NULL OR family_code=''"
+    ).fetchall()
+    for row in existing:
+        code = _make_family_code(row[1], row[2], db_conn=conn, exclude_id=row[0])
+        conn.execute("UPDATE families SET family_code=? WHERE id=?", (code, row[0]))
+    if existing:
+        log.info(f'Back-filled family_code for {len(existing)} existing families')
+
     # ── Phase 3C tables ───────────────────────────────────────────────────────
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS volunteer_slots (
@@ -717,18 +770,21 @@ def create_family():
     if not data.get('name'):
         return jsonify({'error': 'Name is required'}), 422
     fid = str(uuid.uuid4())
-    get_db().execute(
+    db = get_db()
+    family_code = _make_family_code(data.get('phone'), data.get('family_size'), db_conn=db)
+    db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
-            dietary_notes,frequency,income_range,status,notes,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            dietary_notes,frequency,income_range,status,notes,source,family_code,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (fid, data['name'], data.get('phone'), data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
-         data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'), now())
+         data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'),
+         family_code, now())
     )
-    get_db().commit()
-    return jsonify(dict(get_db().execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone())), 201
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone())), 201
 
 @app.route('/api/families/<fid>', methods=['GET'])
 @require_auth()
@@ -744,15 +800,18 @@ def update_family(fid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+    new_phone = d.get('phone', row['phone'])
+    new_size  = d.get('family_size', row['family_size'])
+    new_code  = _make_family_code(new_phone, new_size, db_conn=db, exclude_id=fid)
     db.execute(
         '''UPDATE families SET name=?,phone=?,address=?,city=?,family_size=?,children_count=?,
-           dietary_notes=?,frequency=?,income_range=?,status=?,notes=?,updated_at=? WHERE id=?''',
-        (d.get('name', row['name']), d.get('phone', row['phone']),
+           dietary_notes=?,frequency=?,income_range=?,status=?,notes=?,family_code=?,updated_at=? WHERE id=?''',
+        (d.get('name', row['name']), new_phone,
          d.get('address', row['address']), d.get('city', row['city']),
-         d.get('family_size', row['family_size']), d.get('children_count', row['children_count']),
+         new_size, d.get('children_count', row['children_count']),
          d.get('dietary_notes', row['dietary_notes']), d.get('frequency', row['frequency']),
          d.get('income_range', row['income_range']), d.get('status', row['status']),
-         d.get('notes', row['notes']), now(), fid)
+         d.get('notes', row['notes']), new_code, now(), fid)
     )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()))
@@ -1284,7 +1343,8 @@ def get_cycle_orders(cid):
     db = get_db()
     orders = db.execute(
         '''SELECT fr.*, f.name as family_name, f.phone as family_phone,
-                  f.address as family_address, f.city as family_city
+                  f.address as family_address, f.city as family_city,
+                  f.family_code
            FROM food_requests fr
            JOIN families f ON fr.family_id = f.id
            WHERE fr.cycle_id=?
@@ -1427,15 +1487,16 @@ def public_intake():
         return jsonify({'error': 'Name and phone are required'}), 422
     fid = str(uuid.uuid4())
     db = get_db()
+    family_code = _make_family_code(data['phone'], data.get('family_size'), db_conn=db)
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
-            dietary_notes,frequency,income_range,status,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            dietary_notes,frequency,income_range,status,source,family_code,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (fid, data['name'], data['phone'], data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
-         'pending', 'intake_form', now())
+         'pending', 'intake_form', family_code, now())
     )
     db.commit()
     log.info(f'New intake: {data["name"]} ({data["phone"]})')
@@ -1513,7 +1574,7 @@ def check_food_order_eligibility():
 
     # Check family exists
     family = db.execute(
-        "SELECT id, name, family_size FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+        "SELECT id, name, family_size, family_code FROM families WHERE phone=? AND status != 'inactive'", (phone,)
     ).fetchone()
 
     if not family:
@@ -1579,6 +1640,7 @@ def check_food_order_eligibility():
     return jsonify({
         'registered': True, 'family_name': family['name'],
         'family_id': family['id'],
+        'family_code': family['family_code'],
         'open_cycle': True, 'already_submitted': False,
         'last_order': last_order,
         'cycle_id': cycle['id'],
@@ -1716,7 +1778,7 @@ def portal_get_slots(cycle_id):
         return jsonify({'error': 'Cycle not found'}), 404
     vol_id = g.pv['volunteer_id']
     slots = db.execute(
-        '''SELECT vs.*, f.name as family_name, f.family_size,
+        '''SELECT vs.*, f.name as family_name, f.family_size, f.family_code,
                   1 as hide_address,
                   CASE WHEN vs.claimed_by=? THEN 1 ELSE 0 END as is_mine,
                   v.name as claimed_by_name
@@ -1761,9 +1823,10 @@ def portal_claim_slot():
     family = db.execute("SELECT * FROM families WHERE id=?", (slot['family_id'],)).fetchone()
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (slot['cycle_id'],)).fetchone()
     if vol['wa_phone'] and vol['wa_apikey']:
+        fcode = family['family_code'] or ''
         if slot['task_type'] == 'delivery':
             msg = (f"SIHAA Delivery Confirmed!\n"
-                   f"Family: {family['name']}\n"
+                   f"Family ID: {fcode}\n"
                    f"Address: {family['address']}, {family['city']}\n"
                    f"Deliver by: {cycle['delivery_date_end']} (by 5pm)\n"
                    f"JazakAllah Khair!")
@@ -1780,7 +1843,7 @@ def portal_claim_slot():
             ).fetchall()
             item_list = '\n'.join([f"- {i['name']}: {i['quantity']}" for i in items])
             msg = (f"SIHAA Shopping Confirmed!\n"
-                   f"Family: {family['name']} (Bundle {bsize})\n"
+                   f"Family ID: {fcode} (Bundle {bsize})\n"
                    f"Shopping list:\n{item_list}\n"
                    f"Drop off at Abu Baqr by Sunday 2pm.\n"
                    f"Send receipt to treasurer. JazakAllah Khair!")
@@ -1792,7 +1855,7 @@ def portal_claim_slot():
 def portal_my_tasks():
     vol_id = g.pv['volunteer_id']
     rows = get_db().execute(
-        '''SELECT vs.*, f.name as family_name, f.address, f.city, f.family_size,
+        '''SELECT vs.*, f.name as family_name, f.address, f.city, f.family_size, f.family_code,
                   dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
            FROM volunteer_slots vs
            JOIN families f ON vs.family_id = f.id
@@ -2008,7 +2071,7 @@ def generate_cycle_slots(cid):
 def list_volunteer_slots():
     db = get_db()
     cycle_id = request.args.get('cycle_id')
-    q = '''SELECT vs.*, f.name as family_name, f.family_size,
+    q = '''SELECT vs.*, f.name as family_name, f.family_size, f.family_code,
                   v.name as claimed_by_name
            FROM volunteer_slots vs
            JOIN families f ON vs.family_id = f.id
@@ -2049,7 +2112,7 @@ def _send_reminders_job():
         target_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
         slots = conn.execute(
             '''SELECT vs.*, v.name as vol_name, v.wa_phone, v.wa_apikey,
-                      f.name as family_name, f.address, f.city
+                      f.name as family_name, f.family_code, f.address, f.city
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                JOIN families f ON vs.family_id = f.id
@@ -2067,14 +2130,15 @@ def _send_reminders_job():
                 conn.commit()
             except sqlite3.IntegrityError:
                 continue  # Already sent to this volunteer for this slot
+            fcode = s['family_code'] or ''
             if s['task_type'] == 'delivery':
                 msg = (f"SIHAA Reminder: Delivery in 2 days!\n"
-                       f"Family: {s['family_name']}\n"
+                       f"Family ID: {fcode}\n"
                        f"Address: {s['address']}, {s['city']}\n"
                        f"Deliver by 5pm. JazakAllah Khair!")
             else:
                 msg = (f"SIHAA Reminder: Shopping in 2 days!\n"
-                       f"Family: {s['family_name']}\n"
+                       f"Family ID: {fcode}\n"
                        f"Drop off at Abu Baqr by Sunday 2pm.\n"
                        f"Send receipt to treasurer. JazakAllah Khair!")
             if _wa_send(s['wa_phone'], s['wa_apikey'], msg):

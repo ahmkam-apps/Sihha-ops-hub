@@ -891,12 +891,13 @@ async function renderFamilies(filter, search) {
         </div>
         <table>
           <thead><tr>
-            <th>Name</th><th>Phone</th><th>City</th>
+            <th>ID</th><th>Name</th><th>Phone</th><th>City</th>
             <th>Size</th><th>Status</th><th>Source</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr>
+                <td><span style="font-family:monospace;font-size:12px;font-weight:700;color:var(--black)">${r.family_code||'—'}</span></td>
                 <td><strong>${r.name}</strong></td>
                 <td>${r.phone||'—'}</td>
                 <td>${r.city||'—'}</td>
@@ -1040,6 +1041,7 @@ async function viewFamily(id) {
     ]);
 
     const detailsHTML = `
+      <div class="detail-row"><div class="detail-label">Family ID</div><div class="detail-value"><span style="font-family:monospace;font-size:16px;font-weight:700;letter-spacing:1px">${r.family_code||'—'}</span></div></div>
       <div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
@@ -1828,7 +1830,7 @@ async function loadOrdersForCycle(cycleId) {
     const shop = slotMap[o.family_id]?.shopping;
     const del  = slotMap[o.family_id]?.delivery;
     return `<tr>
-      <td><strong>${o.family_name}</strong></td>
+      <td><span style="font-family:monospace;font-weight:700;font-size:13px">${o.family_code||'—'}</span></td>
       <td style="color:var(--gray-4);">${o.family_size || '—'}</td>
       <td><span class="badge">${o.bundle_size}</span></td>
       <td>${statusBadge(o.status)}</td>
@@ -1841,7 +1843,7 @@ async function loadOrdersForCycle(cycleId) {
     <table>
       <thead>
         <tr>
-          <th>Family</th><th>Size</th><th>Bundle</th>
+          <th>Family ID</th><th>Size</th><th>Bundle</th>
           <th>Status</th><th>Shopper</th><th>Delivery</th>
         </tr>
       </thead>
@@ -2115,10 +2117,10 @@ async function viewSlotBoard(cycleId) {
     const slotTable = (rows, type) => {
       if (!rows.length) return `<p style="color:var(--gray-4);padding:12px">No ${type} slots generated yet — click "Generate Slots" above.</p>`;
       return `<table>
-        <thead><tr><th>Family</th><th>Size</th><th>Status</th><th>Assigned To</th><th>Task Date</th></tr></thead>
+        <thead><tr><th>Family ID</th><th>Size</th><th>Status</th><th>Assigned To</th><th>Task Date</th></tr></thead>
         <tbody>
           ${rows.map(s => `<tr>
-            <td><strong>${s.family_name}</strong></td>
+            <td><span style="font-family:monospace;font-weight:700;font-size:12px">${s.family_code||'—'}</span></td>
             <td style="font-size:12px;color:var(--gray-4)">${s.family_size || '?'} people</td>
             <td><span class="badge ${s.status==='open'?'badge-pending':s.status==='claimed'?'badge-active':'badge-inactive'}">${s.status}</span></td>
             <td>${s.claimed_by_name || '<span style="color:var(--gray-4)">—</span>'}</td>

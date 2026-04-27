@@ -332,7 +332,9 @@ function renderSlots(data) {
       <div class="card">
         <div class="card-row">
           <div>
-            <div class="card-title">${s.family_name}</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+              <span style="font-family:monospace;font-size:13px;font-weight:700;color:var(--black)">${s.family_code||'—'}</span>
+            </div>
             <div class="card-meta">Family size: ${s.family_size || '?'} · ${s.task_date ? 'By ' + fmtDate(s.task_date) : ''}</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px">${badge}${action}</div>
@@ -383,7 +385,7 @@ async function loadMyTasks() {
                 <span class="badge badge-${isDelivery?'delivery':'shopping'}">${t.task_type}</span>
                 <span class="badge badge-${t.status}">${t.status}</span>
               </div>
-              <div class="card-title">${t.family_name}</div>
+              <div class="card-title" style="font-family:monospace;letter-spacing:1px">${t.family_code||t.family_name}</div>
               <div class="card-meta">${t.cycle_title} · Delivery by ${fmtDate(t.delivery_date_end)}</div>
             </div>
             <div>${markBtn}</div>

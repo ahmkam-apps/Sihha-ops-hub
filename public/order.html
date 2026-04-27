@@ -436,6 +436,7 @@
 
       // Ready to order
       _state.familyId     = data.family_id;
+      _state.familyCode   = data.family_code || '';
       _state.cycleId      = data.cycle_id;
       _state.cycleTitle   = data.cycle_title;
       _state.deliveryStart = data.delivery_start;
@@ -605,9 +606,10 @@
       const sel = _state.selected.size;
       const total = _state.items.length;
       document.getElementById('confirmed-detail').innerHTML =
-        `<strong>Delivery:</strong> ${fmtDate(_state.deliveryStart)} – ${fmtDate(_state.deliveryEnd)}<br>
+        `${_state.familyCode ? `<div style="font-family:monospace;font-size:22px;font-weight:700;letter-spacing:2px;color:#1a3a2a;margin-bottom:12px;">🪪 ${_state.familyCode}</div>` : ''}
+         <strong>Delivery:</strong> ${fmtDate(_state.deliveryStart)} – ${fmtDate(_state.deliveryEnd)}<br>
          <strong>Items requested:</strong> ${sel} of ${total}<br><br>
-         A volunteer will be in touch about drop-off. If you have questions, contact your coordinator.`;
+         Save your Family ID above — you can use it to reference your account with a coordinator.`;
       show('step-confirmed');
 
     } catch(e) {
