@@ -1539,8 +1539,8 @@ def check_food_order_eligibility():
 @app.route('/api/food-order', methods=['POST'])
 def submit_food_order():
     data = request.json or {}
-    required = ('family_id', 'cycle_id', 'selected_items')
-    if not all(data.get(k) for k in required):
+    # selected_items can be [] (family skips all items) — check key presence, not truthiness
+    if not data.get('family_id') or not data.get('cycle_id') or 'selected_items' not in data:
         return jsonify({'error': 'family_id, cycle_id, and selected_items required'}), 422
 
     db = get_db()
