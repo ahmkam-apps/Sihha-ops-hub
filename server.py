@@ -1560,6 +1560,27 @@ def volunteer_page():
 def order_page():
     return send_from_directory('public', 'order.html')
 
+# ── PWA assets ────────────────────────────────────────────────────────────────
+
+@app.route('/sw.js')
+def service_worker():
+    resp = send_from_directory('public', 'sw.js', mimetype='application/javascript')
+    resp.headers['Service-Worker-Allowed'] = '/'
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+@app.route('/manifest-family.json')
+def manifest_family():
+    return send_from_directory('public', 'manifest-family.json', mimetype='application/manifest+json')
+
+@app.route('/manifest-volunteer.json')
+def manifest_volunteer():
+    return send_from_directory('public', 'manifest-volunteer.json', mimetype='application/manifest+json')
+
+@app.route('/icons/<path:filename>')
+def pwa_icons(filename):
+    return send_from_directory('public/icons', filename)
+
 # ── Public Food Order (no auth) ───────────────────────────────────────────────
 
 @app.route('/api/food-order/check', methods=['GET'])

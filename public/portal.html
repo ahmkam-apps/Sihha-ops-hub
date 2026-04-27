@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Volunteer Portal — Sihha</title>
+<link rel="manifest" href="/manifest-volunteer.json">
+<meta name="theme-color" content="#111111">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SIHAA Volunteer">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <style>
   @font-face {
     font-family: 'AreaExtrabold';
@@ -54,8 +61,8 @@
   label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
           letter-spacing: 0.06em; margin-bottom: 6px; color: var(--gray-5); }
   input[type="tel"], input[type="text"] {
-    width: 100%; border: 1px solid var(--gray-2); padding: 10px 12px;
-    font-family: var(--font); font-size: 15px; background: var(--white);
+    width: 100%; border: 1px solid var(--gray-2); padding: 12px 14px;
+    font-family: var(--font); font-size: 16px; background: var(--white);
     outline: none; -webkit-appearance: none;
   }
   input:focus { border-color: var(--black); }
@@ -78,9 +85,13 @@
   .error { color: var(--red); font-size: 13px; margin-top: 10px; display: none; }
 
   /* Tabs */
-  .tabs { display: flex; border-bottom: 2px solid var(--gray-2); margin-bottom: 24px; }
+  .tabs {
+    display: flex; border-bottom: 2px solid var(--gray-2); margin-bottom: 24px;
+    position: sticky; top: 0; background: var(--off-white); z-index: 50;
+  }
   .tab {
-    padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer;
+    flex: 1; text-align: center;
+    padding: 13px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
     border-bottom: 2px solid transparent; margin-bottom: -2px; color: var(--gray-4);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
@@ -132,7 +143,7 @@
     background: var(--white); border: 1px solid var(--gray-2);
     padding: 12px 18px; flex: 1; min-width: 100px; text-align: center;
   }
-  .stat-pill-num { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stat-pill-num { font-family: var(--font-head); font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -0.04em; }
   .stat-pill-lbl { font-size: 10px; color: var(--gray-4); text-transform: uppercase;
                    letter-spacing: 0.06em; margin-top: 4px; }
   .history-row {
@@ -217,6 +228,8 @@
 </div>
 
 <script>
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
 const BASE = '';
 let TOKEN = localStorage.getItem('portal_token');
 let VOL   = JSON.parse(localStorage.getItem('portal_vol') || 'null');

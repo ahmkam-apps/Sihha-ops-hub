@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SIHAA — Food Request</title>
+  <link rel="manifest" href="/manifest-family.json">
+  <meta name="theme-color" content="#111111">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SIHAA">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <style>
     @font-face {
       font-family: 'AreaExtrabold';
@@ -327,9 +334,50 @@
       letter-spacing: 0.08em;
     }
 
+    /* ── Sticky submit bar (mobile) ── */
+    .sticky-submit {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: var(--black);
+      color: var(--white);
+      padding: 12px 20px;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 200;
+      gap: 16px;
+    }
+    .sticky-submit.visible { display: flex; }
+    .sticky-count {
+      font-family: var(--font-head);
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+    }
+    .sticky-count span { font-size: 12px; font-weight: 400; opacity: 0.65; margin-left: 4px; }
+    .sticky-btn {
+      background: var(--white);
+      color: var(--black);
+      border: none;
+      padding: 12px 24px;
+      font-family: var(--font-body);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .sticky-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
     /* ── Responsive ── */
     @media (max-width: 560px) {
       .card { margin: 0; border-left: none; border-right: none; padding: 22px 16px; }
+      #step-order { padding-bottom: 80px; } /* room for sticky bar */
+    }
+    @media (min-width: 561px) {
+      .sticky-submit { display: none !important; }
     }
   </style>
 </head>
@@ -425,6 +473,12 @@
   </div>
 </div>
 
+<!-- ══ Sticky mobile submit bar ════════════════════════════════════════════════ -->
+<div class="sticky-submit" id="sticky-bar">
+  <div class="sticky-count" id="sticky-count">0 <span>items selected</span></div>
+  <button class="sticky-btn" id="sticky-submit-btn" onclick="submitOrder()">Submit →</button>
+</div>
+
 <div class="footer">SIHAA Food Charity · Rochester, NY · <a href="https://www.sihha.org" style="color:inherit;text-decoration:none;">sihha.org</a></div>
 
 <script>
@@ -442,9 +496,17 @@
   };
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Service worker ─────────────────────────────────────────────────────────
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
   function show(id) {
     ['step-phone','step-order','step-already','step-closed','step-confirmed']
       .forEach(s => document.getElementById(s).style.display = s === id ? '' : 'none');
+    // Show sticky bar only during item selection on mobile
+    const bar = document.getElementById('sticky-bar');
+    if (bar) bar.classList.toggle('visible', id === 'step-order');
   }
 
   function fmtDate(iso) {
@@ -624,7 +686,11 @@
   }
 
   function updateCount() {
-    document.getElementById('selected-count').textContent = _state.selected.size;
+    const n = _state.selected.size;
+    document.getElementById('selected-count').textContent = n;
+    // Keep sticky bar in sync
+    const sc = document.getElementById('sticky-count');
+    if (sc) sc.innerHTML = `${n} <span>item${n !== 1 ? 's' : ''} selected</span>`;
   }
 
   function updateSelectAllBtn() {
@@ -644,6 +710,8 @@
   async function submitOrder() {
     document.getElementById('order-error').style.display = 'none';
     setBtn('submit-btn', true, 'Submitting…');
+    const sb = document.getElementById('sticky-submit-btn');
+    if (sb) { sb.disabled = true; sb.textContent = '…'; }
 
     try {
       const res = await fetch('/api/food-order', {
@@ -680,6 +748,8 @@
       err.textContent = 'Connection error. Please try again.';
       err.style.display = '';
       setBtn('submit-btn', false, 'Submit Request');
+      const sb2 = document.getElementById('sticky-submit-btn');
+      if (sb2) { sb2.disabled = false; sb2.textContent = 'Submit →'; }
     }
   }
 </script>

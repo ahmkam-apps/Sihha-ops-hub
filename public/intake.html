@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Get Help — Sihha Charity</title>
+<link rel="manifest" href="/manifest-family.json">
+<meta name="theme-color" content="#111111">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SIHAA">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <style>
   @font-face {
     font-family: 'AreaExtrabold';
@@ -119,8 +126,8 @@
     width: 100%;
     border: 1.5px solid var(--gray-3);
     padding: 12px 14px;
-    font-size: 15px;
-    font-family: Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    font-family: var(--font-body);
     outline: none;
     background: var(--white);
     color: var(--black);
@@ -406,6 +413,8 @@
 </div>
 
 <script>
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
   // Highlight selected checkboxes/radios
   document.querySelectorAll('.check-item input, .radio-item input').forEach(inp => {
     inp.addEventListener('change', function() {
