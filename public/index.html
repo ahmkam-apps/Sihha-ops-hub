@@ -757,6 +757,16 @@ function fmtMoney(n) {
   if (n === null || n === undefined) return '—';
   return '$' + Number(n).toFixed(2);
 }
+function downloadPDF(path) {
+  // Open PDF in a new tab — browser will show it inline or prompt download
+  const url = '/api' + path;
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  // Add auth token as query param since we can't set headers on a direct link
+  a.href = url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(STATE.token);
+  a.click();
+}
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function renderDashboard() {
@@ -2134,9 +2144,11 @@ async function viewCycleDetail(cycleId) {
   const cycle = _cyclesCache.find(c => c.id === cycleId);
   document.getElementById('page-title').textContent = cycle ? cycle.title : 'Cycle Detail';
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="renderCycles()">← Back to Cycles</button>
+    `<button class="btn btn-outline" onclick="renderCycles()">← Back</button>
      <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
      <button class="btn btn-outline" onclick="viewSlotBoard('${cycleId}')">Slot Board</button>
+     <button class="btn btn-outline" onclick="downloadPDF('/reports/shopping-list/${cycleId}')">⬇ Shopping PDF</button>
+     <button class="btn btn-outline" onclick="downloadPDF('/reports/cycle-summary/${cycleId}')">⬇ Summary PDF</button>
      <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading orders…</p>';
   try {
