@@ -530,30 +530,35 @@ def bootstrap_db():
     ).fetchone()
     if users_sql and 'treasurer' not in users_sql[0]:
         log.info('Migration: upgrading users table for treasurer role')
-        conn.execute('PRAGMA foreign_keys=OFF')
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS users_new (
-                id            TEXT PRIMARY KEY,
-                username      TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                name          TEXT,
-                role          TEXT NOT NULL DEFAULT 'viewer'
-                              CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
-                email         TEXT,
-                wa_phone      TEXT,
-                wa_apikey     TEXT,
-                active        INTEGER NOT NULL DEFAULT 1,
-                created_at    TEXT NOT NULL
-            );
-            INSERT OR IGNORE INTO users_new
-                (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
-            SELECT id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at
-            FROM users;
-            DROP TABLE users;
-            ALTER TABLE users_new RENAME TO users;
-        ''')
-        conn.execute('PRAGMA foreign_keys=ON')
-        log.info('Migration: users table upgraded — treasurer role now supported')
+        try:
+            conn.execute('PRAGMA foreign_keys=OFF')
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS users_new (
+                    id            TEXT PRIMARY KEY,
+                    username      TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    name          TEXT,
+                    role          TEXT NOT NULL DEFAULT 'viewer'
+                                  CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
+                    email         TEXT,
+                    wa_phone      TEXT,
+                    wa_apikey     TEXT,
+                    active        INTEGER NOT NULL DEFAULT 1,
+                    created_at    TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO users_new
+                    (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
+                SELECT id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at
+                FROM users;
+                DROP TABLE IF EXISTS users;
+                ALTER TABLE users_new RENAME TO users;
+            ''')
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info('Migration: users table upgraded — treasurer role now supported')
+        except Exception as _e:
+            # Another worker already ran this migration — safe to skip
+            log.info(f'Migration: users table already upgraded or in progress — skipping ({_e})')
+            conn.execute('PRAGMA foreign_keys=ON')
 
     # Migrate reimbursements table: add venmo/zelle payment methods + payment_ref column
     reimb_sql = conn.execute(
@@ -561,33 +566,37 @@ def bootstrap_db():
     ).fetchone()
     if reimb_sql and 'venmo' not in reimb_sql[0]:
         log.info('Migration: upgrading reimbursements table for new payment methods')
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS reimbursements_new (
-                id              TEXT PRIMARY KEY,
-                receipt_id      TEXT NOT NULL,
-                volunteer_id    TEXT,
-                amount          REAL,
-                status          TEXT NOT NULL DEFAULT 'pending'
-                                CHECK(status IN ('pending','approved','paid','rejected')),
-                payment_method  TEXT CHECK(payment_method IN ('venmo','zelle','check','cash','bank_transfer','cheque','other')),
-                payment_ref     TEXT,
-                paid_date       TEXT,
-                approved_by     TEXT,
-                notes           TEXT,
-                created_at      TEXT NOT NULL,
-                updated_at      TEXT,
-                FOREIGN KEY (receipt_id) REFERENCES receipts(id)
-            );
-            INSERT OR IGNORE INTO reimbursements_new
-                (id, receipt_id, volunteer_id, amount, status, payment_method,
-                 payment_ref, paid_date, approved_by, notes, created_at, updated_at)
-            SELECT id, receipt_id, volunteer_id, amount, status, payment_method,
-                   NULL, paid_date, approved_by, notes, created_at, updated_at
-            FROM reimbursements;
-            DROP TABLE reimbursements;
-            ALTER TABLE reimbursements_new RENAME TO reimbursements;
-        ''')
-        log.info('Migration: reimbursements table upgraded — venmo/zelle/payment_ref added')
+        try:
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS reimbursements_new (
+                    id              TEXT PRIMARY KEY,
+                    receipt_id      TEXT NOT NULL,
+                    volunteer_id    TEXT,
+                    amount          REAL,
+                    status          TEXT NOT NULL DEFAULT 'pending'
+                                    CHECK(status IN ('pending','approved','paid','rejected')),
+                    payment_method  TEXT CHECK(payment_method IN ('venmo','zelle','check','cash','bank_transfer','cheque','other')),
+                    payment_ref     TEXT,
+                    paid_date       TEXT,
+                    approved_by     TEXT,
+                    notes           TEXT,
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT,
+                    FOREIGN KEY (receipt_id) REFERENCES receipts(id)
+                );
+                INSERT OR IGNORE INTO reimbursements_new
+                    (id, receipt_id, volunteer_id, amount, status, payment_method,
+                     payment_ref, paid_date, approved_by, notes, created_at, updated_at)
+                SELECT id, receipt_id, volunteer_id, amount, status, payment_method,
+                       NULL, paid_date, approved_by, notes, created_at, updated_at
+                FROM reimbursements;
+                DROP TABLE IF EXISTS reimbursements;
+                ALTER TABLE reimbursements_new RENAME TO reimbursements;
+            ''')
+            log.info('Migration: reimbursements table upgraded — venmo/zelle/payment_ref added')
+        except Exception as _e:
+            # Another worker already ran this migration — safe to skip
+            log.info(f'Migration: reimbursements table already upgraded or in progress — skipping ({_e})')
 
     # Back-fill family_code for existing families that don't have one
     existing = conn.execute(
