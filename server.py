@@ -721,14 +721,53 @@ def require_portal_auth():
 VALID_ROLES = {'admin', 'volunteer', 'finance', 'treasurer', 'viewer'}
 
 def _ensure_treasurer_role(conn):
-    """Ensure the users table CHECK constraint includes 'treasurer'.
-    Safe to call multiple times; no-op if already migrated."""
+    """Patch the users table CHECK constraint to include 'treasurer'.
+    Uses PRAGMA writable_schema to update sqlite_master directly — no exclusive
+    lock needed, safe with concurrent gunicorn workers in WAL mode."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
     ).fetchone()
     if not row or 'treasurer' in row[0]:
         return  # already migrated or table doesn't exist
-    log.info('_ensure_treasurer_role: running users table migration')
+
+    log.info('_ensure_treasurer_role: patching CHECK constraint via writable_schema')
+    old_sql = row[0]
+    # Replace the old CHECK list with one that includes treasurer
+    old_check = "'admin','volunteer','finance','viewer'"
+    new_check = "'admin','volunteer','finance','treasurer','viewer'"
+    if old_check in old_sql:
+        new_sql = old_sql.replace(old_check, new_check)
+    else:
+        # Fallback: try without spaces variant
+        old_check2 = "'admin', 'volunteer', 'finance', 'viewer'"
+        new_check2 = "'admin', 'volunteer', 'finance', 'treasurer', 'viewer'"
+        if old_check2 in old_sql:
+            new_sql = old_sql.replace(old_check2, new_check2)
+        else:
+            log.warning(f'_ensure_treasurer_role: unrecognised CHECK format, falling back to table recreation\nSQL: {old_sql}')
+            _recreate_users_table(conn)
+            return
+
+    try:
+        conn.execute('PRAGMA writable_schema = ON')
+        conn.execute(
+            "UPDATE sqlite_master SET sql=? WHERE type='table' AND name='users'",
+            (new_sql,)
+        )
+        # Bump schema_version so all connections reparse the schema
+        ver = conn.execute('PRAGMA schema_version').fetchone()[0]
+        conn.execute(f'PRAGMA schema_version = {ver + 1}')
+        conn.execute('PRAGMA writable_schema = OFF')
+        conn.commit()
+        log.info('_ensure_treasurer_role: CHECK constraint patched successfully')
+    except Exception as _e:
+        conn.execute('PRAGMA writable_schema = OFF')
+        log.warning(f'_ensure_treasurer_role: writable_schema patch failed ({_e}), trying table recreation')
+        _recreate_users_table(conn)
+
+
+def _recreate_users_table(conn):
+    """Full table-recreation migration as fallback. Requires an exclusive DB lock."""
     try:
         conn.execute('PRAGMA foreign_keys=OFF')
         conn.executescript('''
@@ -753,10 +792,10 @@ def _ensure_treasurer_role(conn):
             ALTER TABLE users_new RENAME TO users;
         ''')
         conn.execute('PRAGMA foreign_keys=ON')
-        log.info('_ensure_treasurer_role: migration complete')
+        log.info('_recreate_users_table: migration complete')
     except Exception as _e:
         conn.execute('PRAGMA foreign_keys=ON')
-        log.warning(f'_ensure_treasurer_role: migration failed ({_e})')
+        log.warning(f'_recreate_users_table: failed ({_e})')
 
 # ── WhatsApp (CallMeBot) ──────────────────────────────────────────────────────
 
@@ -952,18 +991,38 @@ def update_user(uid):
         db.commit()
     except sqlite3.IntegrityError as e:
         if 'CHECK constraint' in str(e):
-            # Schema migration didn't complete on this instance — fix it now and retry
+            # Schema migration didn't complete — patch it now and retry
             _ensure_treasurer_role(db)
-            db.execute(
-                "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
-                params
-            )
-            db.commit()
+            try:
+                db.execute(
+                    "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
+                    params
+                )
+                db.commit()
+            except Exception as retry_e:
+                return jsonify({'error': f'Role update failed after schema fix attempt: {retry_e}'}), 500
         else:
             return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify({'ok': True})
+
+
+@app.route('/api/admin/fix-schema', methods=['POST'])
+@require_auth(roles=['admin'])
+def fix_schema():
+    """Manual schema repair endpoint — call if role migrations fail at startup."""
+    db = get_db()
+    before = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+    _ensure_treasurer_role(db)
+    after = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+    had_treasurer_before = before and 'treasurer' in before[0]
+    has_treasurer_after  = after  and 'treasurer' in after[0]
+    return jsonify({
+        'had_treasurer_before': had_treasurer_before,
+        'has_treasurer_after':  has_treasurer_after,
+        'fixed': not had_treasurer_before and has_treasurer_after,
+    })
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
