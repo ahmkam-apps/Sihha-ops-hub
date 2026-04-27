@@ -2084,6 +2084,56 @@ def _send_reminders_job():
     finally:
         conn.close()
 
+@app.route('/api/admin/seed-cycles-2026', methods=['POST'])
+@require_auth(roles=['admin'])
+def seed_cycles_2026():
+    """Create all bi-weekly 2026 delivery cycles (May–Dec). Idempotent — skips existing."""
+    from datetime import date, timedelta
+
+    def build_cycles():
+        cycles = []
+        d = date(2026, 5, 9)   # first Saturday after April 25-26 delivery
+        while d <= date(2026, 12, 31):
+            sat = d
+            sun = d + timedelta(days=1)
+            order_close = sat - timedelta(days=7)
+            order_open  = sat - timedelta(days=13)
+            month_name  = sat.strftime('%B')
+            cycles.append({
+                'title':               f'{month_name} {sat.day}–{sun.day}, 2026',
+                'delivery_date_start': sat.isoformat(),
+                'delivery_date_end':   sun.isoformat(),
+                'request_open_at':     f'{order_open.isoformat()}T08:00:00',
+                'request_close_at':    f'{order_close.isoformat()}T23:59:00',
+                'status':              'draft',
+                'notes':               'Auto-seeded by admin endpoint',
+            })
+            d += timedelta(days=14)
+        return cycles
+
+    db = get_db()
+    existing_starts = {r['delivery_date_start'] for r in
+                       db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
+    created = skipped = 0
+    for c in build_cycles():
+        if c['delivery_date_start'] in existing_starts:
+            skipped += 1
+            continue
+        db.execute(
+            '''INSERT INTO delivery_cycles
+               (id, title, delivery_date_start, delivery_date_end,
+                request_open_at, request_close_at, status, notes, created_by, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (str(uuid.uuid4()), c['title'], c['delivery_date_start'], c['delivery_date_end'],
+             c['request_open_at'], c['request_close_at'], c['status'], c['notes'],
+             g.user['user_id'], now())
+        )
+        created += 1
+    db.commit()
+    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}')
+    return jsonify({'ok': True, 'created': created, 'skipped': skipped})
+
+
 @app.route('/api/reminders/trigger', methods=['POST'])
 @require_auth(roles=['admin'])
 def trigger_reminders():

@@ -736,7 +736,8 @@ function fmtMoney(n) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function renderDashboard() {
-  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Cycles</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const [s, cycles] = await Promise.all([
@@ -784,9 +785,12 @@ async function renderDashboard() {
         </div>`;
     } else {
       cycleHTML = `
-        <div style="background:#f9f9f9;border:1.5px dashed #ddd;border-radius:8px;padding:16px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;">
+        <div style="background:#f9f9f9;border:1.5px dashed #ddd;border-radius:8px;padding:16px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
           <span style="color:#888;font-size:14px;">No active delivery cycle</span>
-          <button class="btn" onclick="nav('cycles')">+ Create Cycle</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Cycles</button>
+            <button class="btn" onclick="nav('cycles')">+ Create Cycle</button>
+          </div>
         </div>`;
     }
 
@@ -842,6 +846,14 @@ async function triggerRemindersFromDash() {
   try {
     const res = await POST('/reminders/trigger', {});
     alert(`Reminders sent: ${res.reminders_sent}`);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function seedCycles2026() {
+  try {
+    const res = await POST('/admin/seed-cycles-2026', {});
+    alert(`Done! Created: ${res.created} cycles · Skipped (already existed): ${res.skipped}`);
+    renderDashboard();
   } catch(e) { alert('Error: ' + e.message); }
 }
 
