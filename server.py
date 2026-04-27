@@ -332,7 +332,16 @@ def bootstrap_db():
         (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
          'Administrator', 'admin', now())
     )
-    if admin_pw == 'admin123':
+    # If ADMIN_PASSWORD env var is explicitly set, always sync it to the DB.
+    # This means changing ADMIN_PASSWORD in Railway takes effect on the next deploy
+    # even if the admin user already existed with a different password.
+    if os.environ.get('ADMIN_PASSWORD'):
+        conn.execute(
+            "UPDATE users SET password_hash=? WHERE username='admin'",
+            (generate_password_hash(admin_pw),)
+        )
+        log.info('Admin password synced from ADMIN_PASSWORD env var.')
+    else:
         log.warning('Admin password is default admin123 — set ADMIN_PASSWORD env var in Railway!')
 
     # Seed bundle size rules if not present

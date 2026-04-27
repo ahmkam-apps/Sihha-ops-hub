@@ -7,7 +7,7 @@ Usage:
 """
 import sys, urllib.request, urllib.error, urllib.parse, json, ssl, os
 
-BASE_URL = 'https://sihaa-ops-hub-production.up.railway.app'
+BASE_URL = 'https://sihha-ops-hub-production.up.railway.app'
 
 # macOS Python doesn't use system certs by default — create unverified context
 _ctx = ssl.create_default_context()
