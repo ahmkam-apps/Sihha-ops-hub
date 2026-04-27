@@ -491,6 +491,9 @@
     <div class="nav-item" onclick="nav('cycles')" id="nav-cycles">
       <span class="icon">↻</span> Cycles
     </div>
+    <div class="nav-item" onclick="nav('orders')" id="nav-orders">
+      <span class="icon">▤</span> Food Orders
+    </div>
     <div class="nav-item" onclick="nav('catalog')" id="nav-catalog">
       <span class="icon">☰</span> Food Catalog
     </div>
@@ -506,6 +509,17 @@
     <div class="nav-section" id="nav-section-admin" style="display:none">Admin</div>
     <div class="nav-item" onclick="nav('users')" id="nav-users" style="display:none">
       <span class="icon">◉</span> Users
+    </div>
+
+    <div class="nav-section">Public Links</div>
+    <div class="nav-item" onclick="window.open('/order','_blank')" style="font-size:12px;">
+      <span class="icon">⇗</span> Family Order Form
+    </div>
+    <div class="nav-item" onclick="window.open('/intake','_blank')" style="font-size:12px;">
+      <span class="icon">⇗</span> Family Registration
+    </div>
+    <div class="nav-item" onclick="window.open('/portal','_blank')" style="font-size:12px;">
+      <span class="icon">⇗</span> Volunteer Portal
     </div>
 
     <div class="sidebar-footer">
@@ -631,7 +645,7 @@ function nav(page) {
     assignments: 'Assignments', receipts: 'Receipts',
     reimbursements: 'Reimbursements', users: 'Users',
     cycles: 'Delivery Cycles', catalog: 'Food Catalog',
-    cycle_detail: 'Cycle Detail'
+    cycle_detail: 'Cycle Detail', orders: 'Food Orders'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   closeDrawer();
@@ -639,7 +653,8 @@ function nav(page) {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers, assignments: renderAssignments,
     receipts: renderReceipts, reimbursements: renderReimbursements,
-    users: renderUsers, cycles: renderCycles, catalog: renderCatalog
+    users: renderUsers, cycles: renderCycles, catalog: renderCatalog,
+    orders: renderOrders
   };
   if (renders[page]) renders[page]();
 }
@@ -1473,6 +1488,108 @@ async function saveUser() {
     closeDrawer();
     renderUsers();
   } catch(e) { showErr(e.message); }
+}
+
+// ── Food Orders ───────────────────────────────────────────────────────────────
+
+async function renderOrders() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = '<p style="padding:24px;color:#888">Loading orders…</p>';
+
+  const [cycles, families] = await Promise.all([
+    GET('/delivery-cycles'),
+    GET('/families')
+  ]);
+
+  const familyMap = {};
+  families.forEach(f => familyMap[f.id] = f);
+
+  const openCycle = cycles.find(c => c.status === 'open');
+  const defaultCycleId = openCycle ? openCycle.id : (cycles[0] ? cycles[0].id : null);
+
+  const cycleOptions = cycles.map(c =>
+    `<option value="${c.id}" ${c.id === defaultCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
+  ).join('');
+
+  main.innerHTML = `
+    <div style="padding:24px;">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+        <select id="orders-cycle-select" class="search-input" style="width:280px;" onchange="loadOrdersForCycle(this.value)">
+          <option value="">— Select a cycle —</option>
+          ${cycleOptions}
+        </select>
+        <button class="btn" onclick="window.open('/order','_blank')">⇗ Open Family Order Form</button>
+      </div>
+      <div id="orders-table-wrap"></div>
+    </div>`;
+
+  if (defaultCycleId) loadOrdersForCycle(defaultCycleId);
+}
+
+async function loadOrdersForCycle(cycleId) {
+  if (!cycleId) {
+    document.getElementById('orders-table-wrap').innerHTML = '';
+    return;
+  }
+  document.getElementById('orders-table-wrap').innerHTML =
+    '<p style="color:#888;padding:8px 0;">Loading…</p>';
+
+  const [orders, slots] = await Promise.all([
+    GET('/delivery-cycles/' + cycleId + '/orders'),
+    GET('/volunteer-slots?cycle_id=' + cycleId)
+  ]);
+
+  const slotMap = {};
+  slots.forEach(s => {
+    if (!slotMap[s.family_id]) slotMap[s.family_id] = {};
+    slotMap[s.family_id][s.task_type] = s;
+  });
+
+  const statusBadge = s => {
+    const map = { submitted:'#2e86c1', assigned:'#1a8754', delivered:'#666', cancelled:'#c0392b' };
+    return `<span class="badge" style="background:${map[s]||'#888'};color:#fff;border:none">${s}</span>`;
+  };
+
+  const slotBadge = slot => {
+    if (!slot) return '<span style="color:#aaa;font-size:12px;">—</span>';
+    const colors = { open:'#e0a800', claimed:'#1a8754', complete:'#155724', cancelled:'#c0392b' };
+    const label = slot.status === 'claimed' || slot.status === 'complete'
+      ? `${slot.claimed_by_name || '?'} (${slot.status})`
+      : slot.status;
+    return `<span class="badge" style="background:${colors[slot.status]||'#888'};color:#fff;border:none;font-size:11px;">${label}</span>`;
+  };
+
+  const rows = orders.length === 0
+    ? `<tr class="empty-row"><td colspan="6">No orders for this cycle yet.<br>
+        Share the <a href="/order" target="_blank" style="color:#1a3a2a;">family order form</a> to start collecting requests.</td></tr>`
+    : orders.map(o => {
+        const shop = slotMap[o.family_id]?.shopping;
+        const del  = slotMap[o.family_id]?.delivery;
+        return `<tr>
+          <td><strong>${o.family_name}</strong></td>
+          <td>${o.family_size || '—'}</td>
+          <td><span class="badge">${o.bundle_size}</span></td>
+          <td>${statusBadge(o.status)}</td>
+          <td>${slotBadge(shop)}</td>
+          <td>${slotBadge(del)}</td>
+        </tr>`;
+      }).join('');
+
+  document.getElementById('orders-table-wrap').innerHTML = `
+    <p style="font-size:13px;color:#666;margin-bottom:12px;">${orders.length} order${orders.length!==1?'s':''} submitted</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Family</th>
+          <th>Size</th>
+          <th>Bundle</th>
+          <th>Order Status</th>
+          <th>Shopper</th>
+          <th>Delivery</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 // ── Delivery Cycles ───────────────────────────────────────────────────────────
