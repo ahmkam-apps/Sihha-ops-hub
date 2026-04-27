@@ -1749,7 +1749,8 @@ async function renderDonations(filter) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn" onclick="openDonationForm()">+ Log Donation</button>`;
+    `<button class="btn btn-outline" onclick="syncWixDonations()" id="wix-sync-btn">🔄 Sync Wix</button>
+     <button class="btn" onclick="openDonationForm()" style="margin-left:8px">+ Log Donation</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const rows = await GET('/donations');
@@ -1761,24 +1762,52 @@ async function renderDonations(filter) {
         </div>
         <table>
           <thead><tr>
-            <th>Donor</th><th>Amount</th><th>Type</th><th>Date</th><th>Source</th><th>Notes</th>
+            <th>Donor</th><th>Amount</th><th>Type</th><th>Date</th><th>Campaign</th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr>
-                <td><strong>${r.donor_name||'Anonymous'}</strong>${r.donor_email ? `<br><span style="font-size:11px;color:var(--gray-4)">${r.donor_email}</span>` : ''}</td>
+                <td>
+                  <strong>${r.donor_name||'Anonymous'}</strong>
+                  ${r.donor_email ? `<br><span style="font-size:11px;color:var(--gray-4)">${r.donor_email}</span>` : ''}
+                </td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
-                <td>${r.type||'—'}</td>
+                <td>
+                  <span style="font-size:12px;padding:2px 8px;border-radius:10px;background:${r.type==='monthly'?'#e8f5e9':'#fff3e0'};color:${r.type==='monthly'?'#1a8754':'#e67e22'}">
+                    ${r.type||'one-time'}
+                  </span>
+                </td>
                 <td style="white-space:nowrap">${fmtDate(r.date)}</td>
-                <td style="font-size:12px">${r.source||'—'}</td>
-                <td style="font-size:12px;color:var(--gray-4)">${r.notes||''}</td>
+                <td style="font-size:12px;color:var(--gray-4)">${r.notes||r.source||'—'}</td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="6">No donations recorded yet</td></tr>'}
+              '<tr class="empty-row"><td colspan="5">No donations yet — click Sync Wix to import</td></tr>'}
           </tbody>
         </table>
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function syncWixDonations() {
+  const btn = document.getElementById('wix-sync-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing…'; }
+  try {
+    const res = await POST('/donations/sync-wix', {});
+    renderDonations();
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync Wix'; }
+    if (res.imported > 0) {
+      alert(`✅ Synced ${res.imported} new donation${res.imported>1?'s':''} from Wix.${res.skipped_duplicates>0?' ('+res.skipped_duplicates+' already imported)':''}`);
+    } else {
+      alert(`✓ Already up to date — no new donations found.`);
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync Wix'; }
+    if (e.message.includes('WIX_API_KEY')) {
+      alert('Wix API key not configured.\n\nTo set it up:\n1. Go to wix.com → Account Settings → API Keys\n2. Create a key with eCommerce read permissions\n3. Add WIX_API_KEY=<your key> in Railway Variables\n4. Redeploy');
+    } else {
+      alert('Sync failed: ' + e.message);
+    }
   }
 }
 

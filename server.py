@@ -1466,13 +1466,131 @@ def list_donations():
 def create_donation():
     data = request.json or {}
     did = str(uuid.uuid4())
-    get_db().execute(
-        "INSERT INTO donations (id,donor_name,amount,date,source,notes,created_at) VALUES (?,?,?,?,?,?,?)",
-        (did, data.get('donor_name'), data.get('amount'), data.get('date'),
-         data.get('source'), data.get('notes'), now())
+    db = get_db()
+    # ensure donor_email column exists
+    try:
+        db.execute("ALTER TABLE donations ADD COLUMN donor_email TEXT")
+        db.commit()
+    except Exception:
+        pass
+    try:
+        db.execute("ALTER TABLE donations ADD COLUMN type TEXT")
+        db.commit()
+    except Exception:
+        pass
+    try:
+        db.execute("ALTER TABLE donations ADD COLUMN reference_id TEXT")
+        db.commit()
+    except Exception:
+        pass
+    db.execute(
+        '''INSERT INTO donations (id,donor_name,donor_email,amount,type,date,source,reference_id,notes,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (did, data.get('donor_name'), data.get('donor_email'), data.get('amount'),
+         data.get('type'), data.get('date'), data.get('source'),
+         data.get('reference_id'), data.get('notes'), now())
     )
-    get_db().commit()
+    db.commit()
     return jsonify({'id': did}), 201
+
+@app.route('/api/donations/sync-wix', methods=['POST'])
+@require_auth(roles=['admin', 'treasurer'])
+def sync_wix_donations():
+    """Pull all PAID donation orders from Wix eCommerce API and upsert into donations table."""
+    import urllib.request as _req
+    import json as _json
+
+    api_key = os.environ.get('WIX_API_KEY', '')
+    site_id = os.environ.get('WIX_SITE_ID', '038c9d97-1ce8-4495-982b-37591dce50ee')
+
+    if not api_key:
+        return jsonify({'error': 'WIX_API_KEY not configured in environment variables'}), 400
+
+    db = get_db()
+    # ensure columns exist
+    for col in [('donor_email','TEXT'), ('type','TEXT'), ('reference_id','TEXT')]:
+        try:
+            db.execute(f"ALTER TABLE donations ADD COLUMN {col[0]} {col[1]}")
+            db.commit()
+        except Exception:
+            pass
+
+    url       = 'https://www.wixapis.com/ecom/v1/orders/search'
+    headers   = {'Content-Type': 'application/json', 'Authorization': api_key, 'wix-site-id': site_id}
+    cursor    = None
+    imported  = 0
+    skipped   = 0
+
+    while True:
+        body = {'search': {'cursorPaging': {'limit': 100}},
+                'sort': [{'fieldName': 'createdDate', 'order': 'DESC'}]}
+        if cursor:
+            body['search']['cursorPaging']['cursor'] = cursor
+
+        req_obj = _req.Request(url, data=_json.dumps(body).encode(),
+                               headers=headers, method='POST')
+        try:
+            with _req.urlopen(req_obj, timeout=15) as resp:
+                result = _json.loads(resp.read())
+        except Exception as e:
+            return jsonify({'error': f'Wix API error: {e}', 'imported': imported}), 502
+
+        orders = result.get('orders', [])
+        for order in orders:
+            # Only process PAID donation orders
+            if order.get('paymentStatus') != 'PAID':
+                continue
+            line_items = order.get('lineItems', [])
+            is_donation = any(
+                li.get('itemType', {}).get('custom') == 'DONATION'
+                for li in line_items
+            )
+            if not is_donation:
+                continue
+
+            wix_order_id = order['id']
+            # Check if already imported
+            existing = db.execute(
+                "SELECT id FROM donations WHERE reference_id=?", (wix_order_id,)
+            ).fetchone()
+            if existing:
+                skipped += 1
+                continue
+
+            li       = line_items[0]
+            opts     = li.get('catalogReference', {}).get('options', {})
+            amount   = float(opts.get('amount') or li.get('price', {}).get('amount') or 0)
+            freq     = opts.get('frequency', 'ONE_TIME')
+            don_type = 'monthly' if freq == 'MONTH' else 'one-time'
+            product  = li.get('productName', {}).get('original', 'Food Donation')
+
+            buyer    = order.get('buyerInfo', {})
+            billing  = order.get('billingInfo', {}).get('contactDetails', {})
+            fname    = billing.get('firstName', '')
+            lname    = billing.get('lastName', '')
+            donor    = f"{fname} {lname}".strip() or buyer.get('email', 'Anonymous')
+            email    = buyer.get('email', '')
+            date_str = (order.get('purchasedDate') or order.get('createdDate', ''))[:10]
+
+            did = str(uuid.uuid4())
+            db.execute(
+                '''INSERT INTO donations
+                   (id,donor_name,donor_email,amount,type,date,source,reference_id,notes,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                (did, donor, email, amount, don_type, date_str,
+                 'wix', wix_order_id, product, now())
+            )
+            imported += 1
+
+        db.commit()
+
+        # Check for next page
+        meta   = result.get('metadata', {})
+        cursor = meta.get('cursors', {}).get('next')
+        if not cursor or not orders:
+            break
+
+    return jsonify({'ok': True, 'imported': imported, 'skipped_duplicates': skipped})
 
 # ── Food Categories ───────────────────────────────────────────────────────────
 
