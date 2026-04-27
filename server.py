@@ -1517,6 +1517,35 @@ def sync_wix_donations():
             except Exception:
                 pass
 
+        # Anonymize any previously synced full names (one-time cleanup)
+        # Detects unabbreviated names: no period, source='wix', more than one word
+        existing_full = db.execute(
+            "SELECT id, donor_name, donor_email FROM donations WHERE source='wix' AND donor_name NOT LIKE '%.%'"
+        ).fetchall()
+        for row in existing_full:
+            parts = (row['donor_name'] or '').split()
+            if len(parts) >= 2:
+                f_abbr = parts[0][:2].capitalize()
+                l_abbr = parts[-1][:1].upper()
+                new_name = f"{f_abbr}. {l_abbr}."
+            elif len(parts) == 1:
+                new_name = parts[0][:2].capitalize() + '.'
+            else:
+                new_name = 'Anonymous'
+            # Mask email domain if it looks like a full address
+            raw_e = row['donor_email'] or ''
+            if '@' in raw_e and not raw_e.startswith('***'):
+                new_email = '***@' + raw_e.split('@', 1)[1]
+            else:
+                new_email = raw_e
+            db.execute(
+                "UPDATE donations SET donor_name=?, donor_email=? WHERE id=?",
+                (new_name, new_email, row['id'])
+            )
+        if existing_full:
+            db.commit()
+            log.info(f'Anonymized {len(existing_full)} existing Wix donor records')
+
         url      = 'https://www.wixapis.com/ecom/v1/orders/search'
         headers  = {'Content-Type': 'application/json',
                     'Authorization': api_key,
@@ -1573,10 +1602,22 @@ def sync_wix_donations():
 
                 buyer    = order.get('buyerInfo', {})
                 billing  = order.get('billingInfo', {}).get('contactDetails', {})
-                fname    = billing.get('firstName', '')
-                lname    = billing.get('lastName', '')
-                donor    = f"{fname} {lname}".strip() or buyer.get('email', 'Anonymous')
-                email    = buyer.get('email', '')
+                fname    = billing.get('firstName', '').strip()
+                lname    = billing.get('lastName', '').strip()
+                # Abbreviate for privacy: first 2 letters of first name + first letter of last name
+                # e.g. "Ahmer Kamal" → "Ah. K."
+                f_abbr   = fname[:2].capitalize() if fname else ''
+                l_abbr   = lname[:1].upper() if lname else ''
+                if f_abbr or l_abbr:
+                    donor = f"{f_abbr}. {l_abbr}.".strip() if (f_abbr and l_abbr) else f"{f_abbr or l_abbr}."
+                else:
+                    donor = 'Anonymous'
+                # Store only email domain for privacy (e.g. "***@gmail.com")
+                raw_email = buyer.get('email', '')
+                if '@' in raw_email:
+                    email = '***@' + raw_email.split('@', 1)[1]
+                else:
+                    email = ''
                 date_str = (order.get('purchasedDate') or order.get('createdDate', ''))[:10]
 
                 did = str(uuid.uuid4())
