@@ -978,7 +978,7 @@ async function renderFamilies(filter, search) {
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
-              <tr>
+              <tr id="frow-${r.id}">
                 <td><span style="font-family:monospace;font-size:12px;font-weight:700;color:var(--black)">${r.family_code||'—'}</span></td>
                 <td><strong>${r.name}</strong></td>
                 <td>${r.phone||'—'}</td>
@@ -987,9 +987,14 @@ async function renderFamilies(filter, search) {
                 <td>${badge(r.status)}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${r.source||'admin'}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
-                <td>
-                  <button class="btn btn-outline btn-sm" onclick="viewFamily('${r.id}')">View</button>
-                  <button class="btn btn-sm" onclick="openFamilyForm('${r.id}')" style="margin-left:4px">Edit</button>
+                <td style="white-space:nowrap">
+                  ${r.status==='pending' ? `
+                    <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
+                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00" onclick="quickStatusFamily('${r.id}','inactive')" style="margin-left:4px">✗</button>
+                  ` : `
+                    <button class="btn btn-outline btn-sm" onclick="viewFamily('${r.id}')">View</button>
+                    <button class="btn btn-sm" onclick="openFamilyForm('${r.id}')" style="margin-left:4px">Edit</button>
+                  `}
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="8">No families found</td></tr>'}
@@ -998,6 +1003,18 @@ async function renderFamilies(filter, search) {
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function quickStatusFamily(id, status) {
+  const row = document.getElementById('frow-' + id);
+  if (row) row.style.opacity = '0.4';
+  try {
+    await PUT('/families/' + id, { status });
+    renderFamilies(STATE.filter, document.getElementById('family-search')?.value);
+  } catch(e) {
+    if (row) row.style.opacity = '1';
+    alert(e.message);
   }
 }
 
@@ -1241,7 +1258,7 @@ async function renderVolunteers(filter, search) {
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
-              <tr>
+              <tr id="vrow-${r.id}">
                 <td><strong>${r.name}</strong></td>
                 <td>${r.phone||'—'}</td>
                 <td>${r.email||'—'}</td>
@@ -1249,9 +1266,14 @@ async function renderVolunteers(filter, search) {
                 <td>${r.service_area||'—'}</td>
                 <td>${badge(r.status)}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
-                <td>
-                  <button class="btn btn-outline btn-sm" onclick="viewVolunteer('${r.id}')">View</button>
-                  <button class="btn btn-sm" onclick="openVolunteerForm('${r.id}')" style="margin-left:4px">Edit</button>
+                <td style="white-space:nowrap">
+                  ${r.status==='pending' ? `
+                    <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusVolunteer('${r.id}','active')">✓ Approve</button>
+                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusVolunteer('${r.id}','inactive')">✗</button>
+                  ` : `
+                    <button class="btn btn-outline btn-sm" onclick="viewVolunteer('${r.id}')">View</button>
+                    <button class="btn btn-sm" onclick="openVolunteerForm('${r.id}')" style="margin-left:4px">Edit</button>
+                  `}
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="8">No volunteers found</td></tr>'}
@@ -1260,6 +1282,18 @@ async function renderVolunteers(filter, search) {
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function quickStatusVolunteer(id, status) {
+  const row = document.getElementById('vrow-' + id);
+  if (row) row.style.opacity = '0.4';
+  try {
+    await PUT('/volunteers/' + id, { status });
+    renderVolunteers(STATE.filter, document.getElementById('vol-search')?.value);
+  } catch(e) {
+    if (row) row.style.opacity = '1';
+    alert(e.message);
   }
 }
 
@@ -1625,7 +1659,6 @@ async function renderReceipts(filter) {
 }
 
 async function approveReceipt(id) {
-  if (!confirm('Approve this receipt?')) return;
   try {
     await PUT('/receipts/' + id, { status: 'approved' });
     renderReceipts(STATE.filter);
@@ -1633,7 +1666,6 @@ async function approveReceipt(id) {
 }
 
 async function rejectReceipt(id) {
-  if (!confirm('Reject this receipt?')) return;
   try {
     await PUT('/receipts/' + id, { status: 'rejected' });
     renderReceipts(STATE.filter);
@@ -1681,13 +1713,18 @@ async function renderReimbursements(filter) {
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${r.payment_ref}</span>` : ''}</td>
                 <td>${badge(r.status)}</td>
-                <td style="white-space:nowrap">
-                  ${r.status==='pending' || r.status==='approved'
-                    ? `<button class="btn btn-sm" style="background:var(--green)" onclick="markReimbPaid('${r.id}',${r.amount||0})">Pay</button>`
-                    : ''}
-                  ${r.status==='pending'
-                    ? `<button class="btn btn-sm btn-outline" onclick="rejectReimb('${r.id}')" style="margin-left:4px">Reject</button>`
-                    : ''}
+                <td style="white-space:nowrap" id="reimb-actions-${r.id}">
+                  ${r.status==='pending' ? `
+                    <div style="display:flex;gap:4px;flex-wrap:wrap">
+                      ${['venmo','zelle','check','cash'].map(m =>
+                        `<button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 7px;font-size:11px"
+                          onclick="quickPayReimb('${r.id}','${m}',${r.amount||0})">${m.charAt(0).toUpperCase()+m.slice(1)}</button>`
+                      ).join('')}
+                      <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;padding:3px 7px;font-size:11px"
+                        onclick="rejectReimb('${r.id}')">✗</button>
+                    </div>` : r.status==='paid' ? `
+                    <span style="font-size:11px;color:#1a8754">✓ Paid</span>` : ''
+                  }
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="8">No reimbursements found</td></tr>'}
@@ -1696,6 +1733,21 @@ async function renderReimbursements(filter) {
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function quickPayReimb(id, method, amount) {
+  const cell = document.getElementById('reimb-actions-' + id);
+  if (cell) cell.innerHTML = '<span style="font-size:11px;color:#888">Sending…</span>';
+  try {
+    await PUT('/reimbursements/' + id, {
+      status: 'paid',
+      payment_method: method,
+      paid_date: new Date().toISOString().slice(0,10)
+    });
+    renderReimbursements(STATE.filter);
+  } catch(e) {
+    if (cell) cell.innerHTML = `<span style="color:#c00;font-size:11px">${e.message}</span>`;
   }
 }
 
@@ -1751,7 +1803,6 @@ async function confirmReimbPaid(id) {
 }
 
 async function rejectReimb(id) {
-  if (!confirm('Reject this reimbursement request?')) return;
   try {
     await PUT('/reimbursements/' + id, { status: 'rejected' });
     renderReimbursements(STATE.filter);
