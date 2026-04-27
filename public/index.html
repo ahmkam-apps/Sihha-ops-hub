@@ -1707,6 +1707,8 @@ async function renderUsers() {
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const rows = await GET('/users');
+    window._users = {};
+    rows.forEach(r => { window._users[r.id] = r; });
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header"><span class="table-title">System Users</span></div>
@@ -1723,7 +1725,7 @@ async function renderUsers() {
                 <td style="font-size:12px">${r.email||'—'}</td>
                 <td style="font-size:12px">${r.wa_phone ? '✓ Set' : '—'}</td>
                 <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
-                <td><button class="btn btn-sm" onclick="openUserForm(${JSON.stringify(r)})">Edit</button></td>
+                <td><button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -1733,9 +1735,14 @@ async function renderUsers() {
   }
 }
 
-function openUserForm(userObj) {
-  // Accept either a user object (edit) or nothing (create)
-  const r = (typeof userObj === 'object' && userObj !== null) ? userObj : {};
+function openUserForm(idOrObj) {
+  // Accept a user ID string (from onclick), user object, or nothing (create new)
+  let r = {};
+  if (typeof idOrObj === 'string' || typeof idOrObj === 'number') {
+    r = (window._users && window._users[idOrObj]) ? window._users[idOrObj] : {};
+  } else if (typeof idOrObj === 'object' && idOrObj !== null) {
+    r = idOrObj;
+  }
   STATE.editId = r.id || null;
   openDrawer(r.id ? 'Edit User' : 'Add User',
     `<div class="form-section">Account</div>
