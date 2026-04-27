@@ -1525,11 +1525,11 @@ def sync_wix_donations():
         for row in existing_full:
             parts = (row['donor_name'] or '').split()
             if len(parts) >= 2:
-                f_abbr = parts[0][:2].capitalize()
+                f_abbr = parts[0][:3].capitalize()
                 l_abbr = parts[-1][:1].upper()
                 new_name = f"{f_abbr}. {l_abbr}."
             elif len(parts) == 1:
-                new_name = parts[0][:2].capitalize() + '.'
+                new_name = parts[0][:3].capitalize() + '.'
             else:
                 new_name = 'Anonymous'
             # Mask email domain if it looks like a full address
@@ -1606,7 +1606,7 @@ def sync_wix_donations():
                 lname    = billing.get('lastName', '').strip()
                 # Abbreviate for privacy: first 2 letters of first name + first letter of last name
                 # e.g. "Ahmer Kamal" → "Ah. K."
-                f_abbr   = fname[:2].capitalize() if fname else ''
+                f_abbr   = fname[:3].capitalize() if fname else ''
                 l_abbr   = lname[:1].upper() if lname else ''
                 if f_abbr or l_abbr:
                     donor = f"{f_abbr}. {l_abbr}.".strip() if (f_abbr and l_abbr) else f"{f_abbr or l_abbr}."
