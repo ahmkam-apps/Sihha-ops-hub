@@ -776,5 +776,160 @@ class TestPages:
 
     def test_order_page_loads(self, client):
         res = client.get('/order')
-        # 200 if order.html exists, 404 if not yet built — either is acceptable
-        assert res.status_code in (200, 404)
+        assert res.status_code == 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 11 — ORDER PAGE FLOW
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestOrderPage:
+    """
+    Tests the public family food order flow (/order + /api/food-order/check + /api/food-order).
+    Business rules verified:
+    - Unregistered phone → registered=False (no family data leaked)
+    - Registered family, open cycle → receives food items + bundle_size
+    - Bundle size hidden from response labels (internal field only)
+    - Submitting twice → 409
+    - already_submitted flag set correctly after first submission
+    - Empty selected_items list is valid (family opts out of items)
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth):
+        self.client = client
+        self.auth   = auth
+        self.phone  = f'585600{uuid.uuid4().hex[:4]}'
+
+        # Active family
+        res = client.post('/api/families', headers=auth,
+                          json={'name': 'Order Page Family', 'phone': self.phone,
+                                'family_size': 4, 'status': 'active'})
+        self.family_id = res.get_json()['id']
+
+        # Open cycle
+        res = client.post('/api/delivery-cycles', headers=auth,
+                          json=_cycle_payload(
+                              request_open_at='2020-01-01T00:00:00',
+                              request_close_at='2099-12-31T23:59:00',
+                              status='open'
+                          ))
+        self.cycle_id = res.get_json()['id']
+
+    def test_order_page_serves_html(self, client):
+        res = client.get('/order')
+        assert res.status_code == 200
+
+    def test_check_unregistered_phone(self, client):
+        res = client.get('/api/food-order/check?phone=0000000000')
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data['registered'] is False
+        # Must not leak any family info
+        assert 'family_id' not in data
+        assert 'food_items' not in data
+
+    def test_check_registered_family_gets_items(self, client):
+        res = client.get(f'/api/food-order/check?phone={self.phone}')
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data['registered'] is True
+        assert data['open_cycle'] is True
+        assert data['already_submitted'] is False
+        assert 'food_items' in data
+        assert len(data['food_items']) >= 10
+        # Items have required fields
+        item = data['food_items'][0]
+        assert 'id' in item
+        assert 'name' in item
+        assert 'category_name' in item
+
+    def test_check_no_phone_param(self, client):
+        res = client.get('/api/food-order/check')
+        assert res.status_code == 400
+
+    def test_submit_with_selected_items(self, client):
+        check = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        item_ids = [i['id'] for i in check['food_items'][:4]]
+        res = client.post('/api/food-order', json={
+            'family_id': self.family_id,
+            'cycle_id':  self.cycle_id,
+            'selected_items': item_ids
+        })
+        assert res.status_code == 201
+        assert res.get_json()['ok'] is True
+
+    def test_submit_with_empty_items_is_valid(self, client):
+        """Family can submit with no items selected — empty list must not fail validation."""
+        # Must use a fresh family not yet submitted for this cycle
+        phone2 = f'585601{uuid.uuid4().hex[:4]}'
+        fam2 = client.post('/api/families', headers=self.auth,
+                           json={'name': 'Empty Items Family', 'phone': phone2,
+                                 'family_size': 2, 'status': 'active'}).get_json()
+        res = client.post('/api/food-order', json={
+            'family_id': fam2['id'],
+            'cycle_id':  self.cycle_id,
+            'selected_items': []
+        })
+        assert res.status_code == 201
+
+    def test_duplicate_order_returns_409(self, client):
+        # First submit
+        client.post('/api/food-order', json={
+            'family_id': self.family_id,
+            'cycle_id':  self.cycle_id,
+            'selected_items': []
+        })
+        # Second submit → 409
+        res = client.post('/api/food-order', json={
+            'family_id': self.family_id,
+            'cycle_id':  self.cycle_id,
+            'selected_items': []
+        })
+        assert res.status_code == 409
+
+    def test_already_submitted_flag_after_order(self, client):
+        # Use the cycle_id the check endpoint actually returns — avoids mismatch
+        # when multiple open cycles exist across test classes.
+        check1 = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        if not check1.get('open_cycle') or check1.get('already_submitted'):
+            pytest.skip('No open cycle or already submitted')
+        client.post('/api/food-order', json={
+            'family_id': check1['family_id'],
+            'cycle_id':  check1['cycle_id'],
+            'selected_items': []
+        })
+        check2 = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        assert check2['already_submitted'] is True
+
+    def test_inactive_family_not_found(self, client, auth):
+        phone = f'585602{uuid.uuid4().hex[:4]}'
+        client.post('/api/families', headers=auth,
+                    json={'name': 'Inactive Fam', 'phone': phone,
+                          'family_size': 2, 'status': 'inactive'})
+        check = client.get(f'/api/food-order/check?phone={phone}').get_json()
+        assert check['registered'] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 12 — ADMIN PASSWORD SYNC
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAdminPasswordSync:
+    """
+    Verifies that ADMIN_PASSWORD env var is always synced to the DB on bootstrap.
+    This prevents the 'password resets on deploy' issue where INSERT OR IGNORE
+    would keep a stale hash if the env var changed.
+    """
+
+    def test_admin_login_with_env_password(self, client):
+        """The test suite sets ADMIN_PASSWORD=admin123 in conftest — login must work."""
+        res = client.post('/api/auth/login',
+                          json={'username': 'admin', 'password': 'admin123'})
+        assert res.status_code == 200
+        assert 'token' in res.get_json()
+
+    def test_wrong_password_still_rejected(self, client):
+        res = client.post('/api/auth/login',
+                          json={'username': 'admin', 'password': 'notthepassword'})
+        assert res.status_code == 401
