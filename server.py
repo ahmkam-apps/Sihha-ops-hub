@@ -1394,17 +1394,21 @@ def upload_receipt():
 def list_reimbursements():
     db = get_db()
     status = request.args.get('status')
-    q = '''SELECT rb.*, v.name as volunteer_name, v.wa_phone, v.wa_apikey,
-                  r.store, r.purchase_date, r.file_url as receipt_photo, r.amount as receipt_amount
-           FROM reimbursements rb
-           LEFT JOIN volunteers v ON rb.volunteer_id = v.id
-           LEFT JOIN receipts r ON rb.receipt_id = r.id
-           WHERE 1=1'''
-    params = []
-    if status:
-        q += " AND rb.status=?"; params.append(status)
-    q += " ORDER BY rb.created_at DESC"
-    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+    try:
+        q = '''SELECT rb.*, v.name as volunteer_name,
+                      r.store, r.purchase_date, r.file_url as receipt_photo, r.amount as receipt_amount
+               FROM reimbursements rb
+               LEFT JOIN volunteers v ON rb.volunteer_id = v.id
+               LEFT JOIN receipts r ON rb.receipt_id = r.id
+               WHERE 1=1'''
+        params = []
+        if status:
+            q += " AND rb.status=?"; params.append(status)
+        q += " ORDER BY rb.created_at DESC"
+        return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+    except Exception as e:
+        log.error(f'list_reimbursements error: {e}')
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/reimbursements/<rid>', methods=['PUT'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
