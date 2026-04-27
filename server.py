@@ -1031,31 +1031,76 @@ def fix_schema():
 def dashboard_stats():
     db = get_db()
     this_month = datetime.utcnow().strftime('%Y-%m')
+
     stats = {
-        'families_total':   db.execute("SELECT COUNT(*) FROM families").fetchone()[0],
-        'families_active':  db.execute("SELECT COUNT(*) FROM families WHERE status='active'").fetchone()[0],
-        'families_pending': db.execute("SELECT COUNT(*) FROM families WHERE status='pending'").fetchone()[0],
-        'volunteers_total': db.execute("SELECT COUNT(*) FROM volunteers").fetchone()[0],
-        'volunteers_active':db.execute("SELECT COUNT(*) FROM volunteers WHERE status='active'").fetchone()[0],
+        # Families
+        'families_total':    db.execute("SELECT COUNT(*) FROM families").fetchone()[0],
+        'families_active':   db.execute("SELECT COUNT(*) FROM families WHERE status='active'").fetchone()[0],
+        'families_pending':  db.execute("SELECT COUNT(*) FROM families WHERE status='pending'").fetchone()[0],
+        # Volunteers
+        'volunteers_total':  db.execute("SELECT COUNT(*) FROM volunteers").fetchone()[0],
+        'volunteers_active': db.execute("SELECT COUNT(*) FROM volunteers WHERE status='active'").fetchone()[0],
         'volunteers_pending':db.execute("SELECT COUNT(*) FROM volunteers WHERE status='pending'").fetchone()[0],
-        'assignments_open': db.execute("SELECT COUNT(*) FROM assignments WHERE status NOT IN ('completed','cancelled')").fetchone()[0],
-        'receipts_pending': db.execute("SELECT COUNT(*) FROM receipts WHERE status='pending'").fetchone()[0],
-        'spend_this_month': db.execute(
+        # Receipts
+        'receipts_pending':  db.execute("SELECT COUNT(*) FROM receipts WHERE status='pending'").fetchone()[0],
+        # Reimbursements
+        'reimb_pending_count': db.execute(
+            "SELECT COUNT(*) FROM reimbursements WHERE status='pending'"
+        ).fetchone()[0],
+        'reimb_pending_amount': db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='pending'"
+        ).fetchone()[0],
+        'reimb_paid_month': db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='paid' AND paid_date LIKE ?",
+            (f'{this_month}%',)
+        ).fetchone()[0],
+        'reimb_paid_total': db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='paid'"
+        ).fetchone()[0],
+        # Spend (receipts approved)
+        'spend_this_month':  db.execute(
             "SELECT COALESCE(SUM(amount),0) FROM receipts WHERE status='approved' AND purchase_date LIKE ?",
             (f'{this_month}%',)
         ).fetchone()[0],
-        'spend_total':      db.execute(
+        'spend_total':       db.execute(
             "SELECT COALESCE(SUM(amount),0) FROM receipts WHERE status='approved'"
         ).fetchone()[0],
+        # Donations
+        'donations_month':   db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ?",
+            (f'{this_month}%',)
+        ).fetchone()[0],
+        'donations_total':   db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM donations"
+        ).fetchone()[0],
+        'donations_count':   db.execute("SELECT COUNT(*) FROM donations").fetchone()[0],
     }
-    # Orders submitted for the current open cycle (if any)
-    open_cycle = db.execute(
-        "SELECT id FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
+
+    # Active cycle stats
+    active_cycle = db.execute(
+        "SELECT id, title, status FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start LIMIT 1"
     ).fetchone()
-    stats['orders_this_cycle'] = db.execute(
-        "SELECT COUNT(*) FROM food_requests WHERE cycle_id=?",
-        (open_cycle['id'],)
-    ).fetchone()[0] if open_cycle else 0
+    if active_cycle:
+        cid = active_cycle['id']
+        stats['cycle_id']      = cid
+        stats['cycle_title']   = active_cycle['title']
+        stats['cycle_status']  = active_cycle['status']
+        stats['orders_this_cycle'] = db.execute(
+            "SELECT COUNT(*) FROM food_requests WHERE cycle_id=?", (cid,)
+        ).fetchone()[0]
+        stats['slots_open']    = db.execute(
+            "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='open'", (cid,)
+        ).fetchone()[0]
+        stats['slots_claimed'] = db.execute(
+            "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='claimed'", (cid,)
+        ).fetchone()[0]
+        stats['slots_complete']= db.execute(
+            "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='complete'", (cid,)
+        ).fetchone()[0]
+    else:
+        stats.update({'cycle_id': None, 'cycle_title': None, 'cycle_status': None,
+                      'orders_this_cycle': 0, 'slots_open': 0, 'slots_claimed': 0, 'slots_complete': 0})
+
     return jsonify(stats)
 
 # ── Families ──────────────────────────────────────────────────────────────────

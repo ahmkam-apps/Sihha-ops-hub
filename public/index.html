@@ -769,77 +769,122 @@ async function renderDashboard() {
       GET('/delivery-cycles')
     ]);
 
-    // Find the most relevant cycle: open first, then most recent
+    // ── Active Cycle Banner ──────────────────────────────────────────────────
     const activeCycle = cycles.find(c => c.status === 'open')
                      || cycles.find(c => c.status === 'shopping')
                      || cycles.find(c => c.status === 'closed')
                      || cycles[0];
 
+    const statusColors = { draft:'#888', open:'#1a8754', closed:'#e0a800', shopping:'#2e86c1', delivered:'#555' };
+    const statusBg     = { draft:'#f5f5f5', open:'#f0faf5', closed:'#fffbec', shopping:'#eaf4fb', delivered:'#f5f5f5' };
+
     let cycleHTML = '';
     if (activeCycle) {
-      const statusColors = {
-        draft:'#888', open:'#1a8754', closed:'#e0a800',
-        shopping:'#2e86c1', delivered:'#555'
-      };
-      const statusColor = statusColors[activeCycle.status] || '#888';
+      const sc = statusColors[activeCycle.status] || '#888';
+      const sb = statusBg[activeCycle.status]     || '#f9f9f9';
       const actions = [];
-      if (activeCycle.status === 'open' || activeCycle.status === 'closed') {
-        actions.push(`<button class="btn" onclick="nav('orders')">View Orders</button>`);
+      if (['open','closed'].includes(activeCycle.status))
+        actions.push(`<button class="btn btn-sm" onclick="nav('orders')">Orders</button>`);
+      if (['closed','shopping'].includes(activeCycle.status)) {
+        actions.push(`<button class="btn btn-sm" onclick="generateSlotsFromDash('${activeCycle.id}')">Slots</button>`);
+        actions.push(`<button class="btn btn-sm" onclick="triggerRemindersFromDash()">Remind</button>`);
       }
-      if (activeCycle.status === 'closed' || activeCycle.status === 'shopping') {
-        actions.push(`<button class="btn" onclick="generateSlotsFromDash('${activeCycle.id}')">Generate Slots</button>`);
-        actions.push(`<button class="btn" onclick="triggerRemindersFromDash()">Send Reminders</button>`);
-      }
-      actions.push(`<button class="btn" onclick="nav('cycles')">Manage Cycles →</button>`);
+      actions.push(`<button class="btn btn-sm btn-outline" onclick="nav('cycles')">Manage →</button>`);
+
+      const slotsTotal = s.slots_open + s.slots_claimed + s.slots_complete;
+      const slotsPct   = slotsTotal > 0 ? Math.round((s.slots_claimed + s.slots_complete) / slotsTotal * 100) : 0;
+      const slotsBar   = slotsTotal > 0 ? `
+        <div style="margin-top:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:4px;">
+            <span>Volunteer slots</span>
+            <span>${s.slots_claimed + s.slots_complete} / ${slotsTotal} filled</span>
+          </div>
+          <div style="background:#e0e0e0;border-radius:4px;height:6px;">
+            <div style="background:${sc};border-radius:4px;height:6px;width:${slotsPct}%;transition:width 0.4s;"></div>
+          </div>
+          <div style="display:flex;gap:12px;font-size:11px;color:#888;margin-top:5px;">
+            <span style="color:#e0a800;">● ${s.slots_open} open</span>
+            <span style="color:#2e86c1;">● ${s.slots_claimed} claimed</span>
+            <span style="color:#1a8754;">● ${s.slots_complete} done</span>
+          </div>
+        </div>` : '';
 
       cycleHTML = `
-        <div style="background:#fff;border:1.5px solid #ddd;border-radius:8px;padding:18px 20px;margin-bottom:24px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-            <div>
-              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;">Current Cycle</div>
-              <div style="font-size:17px;font-weight:700;color:#111;">${activeCycle.title}</div>
-              <div style="font-size:13px;color:#555;margin-top:4px;">
-                Delivery: ${fmtDateShort(activeCycle.delivery_date_start)} – ${fmtDateShort(activeCycle.delivery_date_end)}
+        <div style="background:${sb};border:1.5px solid ${sc}30;border-left:4px solid ${sc};border-radius:8px;padding:16px 20px;margin-bottom:20px;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+            <div style="flex:1;min-width:200px;">
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:3px;">Active Cycle</div>
+              <div style="font-size:16px;font-weight:700;color:#111;">${activeCycle.title}</div>
+              <div style="font-size:12px;color:#666;margin-top:3px;">
+                ${fmtDateShort(activeCycle.delivery_date_start)} – ${fmtDateShort(activeCycle.delivery_date_end)}
                 &nbsp;·&nbsp;
-                <span style="font-weight:700;color:${statusColor};text-transform:uppercase;font-size:12px;">${activeCycle.status}</span>
+                <span style="font-weight:700;color:${sc};text-transform:uppercase;">${activeCycle.status}</span>
+                &nbsp;·&nbsp; ${s.orders_this_cycle} orders
               </div>
+              ${slotsBar}
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">${actions.join('')}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${actions.join('')}</div>
           </div>
         </div>`;
     } else {
       cycleHTML = `
-        <div style="background:#f9f9f9;border:1.5px dashed #ddd;border-radius:8px;padding:16px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div style="background:#f9f9f9;border:1.5px dashed #ddd;border-radius:8px;padding:16px 20px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
           <span style="color:#888;font-size:14px;">No active delivery cycle</span>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <div style="display:flex;gap:8px;">
             <button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Cycles</button>
             <button class="btn" onclick="nav('cycles')">+ Create Cycle</button>
           </div>
         </div>`;
     }
 
-    document.getElementById('content').innerHTML = `
-      ${cycleHTML}
-      <div class="stats-grid">
-        <div class="stat-card" onclick="nav('families')">
+    // ── Needs Attention ──────────────────────────────────────────────────────
+    const alerts = [];
+    if (s.families_pending  > 0) alerts.push({ label: `${s.families_pending} famil${s.families_pending>1?'ies':'y'} pending approval`, nav: 'families', color: '#e0a800' });
+    if (s.volunteers_pending> 0) alerts.push({ label: `${s.volunteers_pending} volunteer${s.volunteers_pending>1?'s':''} pending approval`, nav: 'volunteers', color: '#e0a800' });
+    if (s.receipts_pending  > 0) alerts.push({ label: `${s.receipts_pending} receipt${s.receipts_pending>1?'s':''} awaiting review`, nav: 'receipts', color: '#e0a800' });
+    if (s.reimb_pending_count > 0) alerts.push({ label: `${s.reimb_pending_count} reimbursement${s.reimb_pending_count>1?'s':''} pending — ${fmtMoney(s.reimb_pending_amount)}`, nav: 'reimbursements', color: '#c0392b' });
+
+    const attentionHTML = alerts.length > 0 ? `
+      <div style="background:#fffbec;border:1.5px solid #f0c040;border-radius:8px;padding:14px 18px;margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#b8860b;margin-bottom:10px;">Needs Attention</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${alerts.map(a => `
+            <div onclick="nav('${a.nav}')" style="cursor:pointer;background:#fff;border:1px solid ${a.color}40;border-left:3px solid ${a.color};border-radius:6px;padding:7px 12px;font-size:13px;color:#333;display:flex;align-items:center;gap:6px;">
+              <span style="color:${a.color};font-size:15px;">●</span> ${a.label}
+            </div>`).join('')}
+        </div>
+      </div>` : `
+      <div style="background:#f0faf5;border:1.5px solid #1a875440;border-radius:8px;padding:12px 18px;margin-bottom:20px;font-size:13px;color:#1a8754;">
+        ✓ All clear — nothing needs attention
+      </div>`;
+
+    // ── Stats Grid ───────────────────────────────────────────────────────────
+    const statsHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
+        <div class="stat-card" onclick="nav('families')" style="cursor:pointer;">
           <div class="stat-label">Families</div>
           <div class="stat-value">${s.families_total}</div>
-          <div class="stat-sub">${s.families_active} active · ${s.families_pending} pending approval</div>
+          <div class="stat-sub">${s.families_active} active · ${s.families_pending} pending</div>
         </div>
-        <div class="stat-card" onclick="nav('volunteers')">
+        <div class="stat-card" onclick="nav('volunteers')" style="cursor:pointer;">
           <div class="stat-label">Volunteers</div>
           <div class="stat-value">${s.volunteers_total}</div>
           <div class="stat-sub">${s.volunteers_active} active · ${s.volunteers_pending} pending</div>
         </div>
-        <div class="stat-card" onclick="nav('orders')">
-          <div class="stat-label">Food Orders</div>
-          <div class="stat-value">${s.orders_this_cycle ?? '—'}</div>
-          <div class="stat-sub">Submitted this cycle</div>
+        <div class="stat-card" onclick="nav('reimbursements')" style="cursor:pointer;">
+          <div class="stat-label">Reimb. Pending</div>
+          <div class="stat-value" style="color:${s.reimb_pending_count > 0 ? '#c0392b' : 'inherit'}">${fmtMoney(s.reimb_pending_amount)}</div>
+          <div class="stat-sub">${s.reimb_pending_count} request${s.reimb_pending_count !== 1 ? 's' : ''}</div>
         </div>
-        <div class="stat-card" onclick="nav('receipts')">
-          <div class="stat-label">Receipts Pending</div>
-          <div class="stat-value">${s.receipts_pending}</div>
-          <div class="stat-sub">Awaiting approval</div>
+        <div class="stat-card">
+          <div class="stat-label">Paid This Month</div>
+          <div class="stat-value">${fmtMoney(s.reimb_paid_month)}</div>
+          <div class="stat-sub">${fmtMoney(s.reimb_paid_total)} all time</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Donations</div>
+          <div class="stat-value" style="color:#1a8754">${fmtMoney(s.donations_month)}</div>
+          <div class="stat-sub">This month · ${fmtMoney(s.donations_total)} total</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Spend This Month</div>
@@ -847,6 +892,9 @@ async function renderDashboard() {
           <div class="stat-sub">${fmtMoney(s.spend_total)} all time</div>
         </div>
       </div>`;
+
+    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML;
+
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
