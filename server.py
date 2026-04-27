@@ -311,14 +311,19 @@ def bootstrap_db():
     ''')
 
     # Seed default admin if not present
+    # Password is read from ADMIN_PASSWORD env var — set this in Railway dashboard.
+    # Falls back to 'admin123' only if the env var is not set (dev/local only).
+    admin_pw = os.environ.get('ADMIN_PASSWORD', 'admin123')
     if not conn.execute("SELECT id FROM users WHERE username='admin'").fetchone():
         conn.execute(
             "INSERT INTO users (id, username, password_hash, name, role, created_at) VALUES (?,?,?,?,?,?)",
-            (str(uuid.uuid4()), 'admin', generate_password_hash('admin123'),
+            (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
              'Administrator', 'admin', now())
         )
-        log.info('Default admin created — username: admin  password: admin123')
-        log.info('IMPORTANT: Change the default password after first login.')
+        if admin_pw == 'admin123':
+            log.warning('Default admin created with INSECURE password. Set ADMIN_PASSWORD env var in Railway!')
+        else:
+            log.info('Default admin created from ADMIN_PASSWORD env var.')
 
     # Seed bundle size rules if not present
     if not conn.execute("SELECT id FROM bundle_size_rules LIMIT 1").fetchone():
