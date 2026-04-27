@@ -672,7 +672,8 @@ class TestGenerateSlots:
         assert res.status_code == 200
         data = res.get_json()
         assert data['ok'] is True
-        assert data['slots_created'] == 2  # 1 shopping + 1 delivery
+        # slots_total == 2 regardless of whether created now or auto-created on food-order submit
+        assert data['slots_total'] == 2  # 1 shopping + 1 delivery
 
     def test_generate_slots_is_idempotent(self, client, auth):
         phone = f'585501{uuid.uuid4().hex[:4]}'
@@ -693,7 +694,9 @@ class TestGenerateSlots:
         r1 = client.post(f'/api/delivery-cycles/{cid}/generate-slots', headers=auth).get_json()
         r2 = client.post(f'/api/delivery-cycles/{cid}/generate-slots', headers=auth).get_json()
 
-        assert r1['slots_created'] == 2
+        # auto-creation on food-order submit means slots already exist; totals must be 2
+        assert r1['slots_total'] == 2
+        assert r2['slots_total'] == 2  # same slots, still 2 total
         assert r2['slots_created'] == 0  # No new slots — already exist
 
     def test_slot_board_admin_view(self, client, auth):

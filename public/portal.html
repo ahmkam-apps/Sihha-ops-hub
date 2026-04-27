@@ -160,6 +160,45 @@
 
   .spinner { display: inline-block; font-size: 13px; color: var(--gray-4); padding: 20px 0; }
 
+  /* Receipt modal overlay */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 200;
+    align-items: flex-end; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-sheet {
+    background: var(--white); width: 100%; max-width: 540px; padding: 28px 24px 40px;
+    border-radius: 8px 8px 0 0; animation: slideUp 0.22s ease;
+  }
+  @keyframes slideUp { from { transform: translateY(60px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 18px; }
+  .field-group { margin-bottom: 14px; }
+  .field-group label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+                       letter-spacing: 0.06em; margin-bottom: 6px; color: var(--gray-5); }
+  .field-group input, .field-group select {
+    width: 100%; border: 1px solid var(--gray-2); padding: 11px 13px;
+    font-family: var(--font); font-size: 15px; background: var(--white);
+    outline: none; -webkit-appearance: none;
+  }
+  .field-group input:focus, .field-group select:focus { border-color: var(--black); }
+  .file-upload-area {
+    border: 2px dashed var(--gray-2); padding: 24px 16px; text-align: center;
+    cursor: pointer; font-size: 13px; color: var(--gray-4); transition: border-color 0.15s;
+  }
+  .file-upload-area:hover { border-color: var(--black); color: var(--black); }
+  .file-preview { max-width: 100%; max-height: 160px; margin-top: 10px; border: 1px solid var(--gray-2); }
+  .btn-row { display: flex; gap: 10px; margin-top: 18px; }
+  .btn-row .btn { flex: 1; margin-top: 0; }
+  .btn-cancel { background: var(--gray-1); color: var(--black); border: 1px solid var(--gray-2); }
+  .btn-cancel:hover { background: var(--gray-2); }
+  .reimb-status {
+    display: inline-block; padding: 3px 9px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em; border-radius: 2px; margin-left: 6px;
+  }
+  .reimb-pending  { background: #fff3cd; color: #856404; }
+  .reimb-paid     { background: #d1e7dd; color: #0a3622; }
+  .reimb-rejected { background: #f8d7da; color: #842029; }
+
   @media (max-width: 480px) {
     .login-wrap { margin: 24px auto; padding: 24px; }
     .container { padding: 16px 12px; }
@@ -225,6 +264,38 @@
 
 <div class="footer">
   <a href="https://sihha.org">sihha.org</a> · Questions? Contact your coordinator.
+</div>
+
+<!-- RECEIPT SUBMISSION MODAL -->
+<div class="modal-overlay" id="receipt-modal">
+  <div class="modal-sheet">
+    <div class="modal-title">Submit Shopping Receipt</div>
+    <div class="field-group">
+      <label>Store Name</label>
+      <input type="text" id="r-store" placeholder="e.g. Wegmans, Costco">
+    </div>
+    <div class="field-group">
+      <label>Purchase Date</label>
+      <input type="date" id="r-date">
+    </div>
+    <div class="field-group">
+      <label>Total Amount ($)</label>
+      <input type="number" id="r-amount" step="0.01" min="0" placeholder="0.00">
+    </div>
+    <div class="field-group">
+      <label>Receipt Photo</label>
+      <div class="file-upload-area" onclick="document.getElementById('r-file').click()">
+        <div id="r-upload-label">📷 Tap to upload receipt photo (JPG, PNG, PDF)</div>
+        <img id="r-file-preview" class="file-preview" style="display:none">
+      </div>
+      <input type="file" id="r-file" accept="image/*,.pdf,.heic" style="display:none" onchange="handleFileSelect(this)">
+    </div>
+    <div id="r-error" style="color:var(--red);font-size:13px;display:none;margin-top:8px"></div>
+    <div class="btn-row">
+      <button class="btn btn-cancel" onclick="closeReceiptModal()">Cancel</button>
+      <button class="btn btn-green" id="r-submit-btn" onclick="submitReceipt()">Submit Receipt</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -386,22 +457,63 @@ async function claimSlot(slotId) {
 }
 
 // ── My Tasks ──────────────────────────────────────────────────────────────────
+let _receipts = [];  // cached receipt list for cross-referencing
+
 async function loadMyTasks() {
   document.getElementById('tasks-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
-    const tasks = await GET('/portal/my-tasks');
+    const [tasks, receipts] = await Promise.all([
+      GET('/portal/my-tasks'),
+      GET('/portal/receipts').catch(() => [])
+    ]);
+    _receipts = receipts;
+
     if (!tasks.length) {
       document.getElementById('tasks-content').innerHTML =
         '<div class="empty">You have no tasks yet. Go to Open Slots to sign up.</div>';
       return;
     }
+
     document.getElementById('tasks-content').innerHTML = tasks.map(t => {
       const isDelivery = t.task_type === 'delivery';
       const isDone     = t.status === 'complete';
+      const isShopping = !isDelivery;
+
+      // Check if receipt already submitted for this slot
+      const receipt = receipts.find(r => r.slot_id === t.id);
+
       const addressBox = isDelivery && t.address
         ? `<div class="address-box" style="margin-top:10px">📍 ${t.address}, ${t.city}</div>` : '';
+
       const markBtn = !isDone
         ? `<button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')">Mark Complete</button>` : '';
+
+      // Receipt button: only for shopping tasks
+      let receiptSection = '';
+      if (isShopping) {
+        if (receipt) {
+          const rs = receipt.reimbursement_status || receipt.receipt_status;
+          const rsClass = rs === 'paid' ? 'reimb-paid' : rs === 'rejected' ? 'reimb-rejected' : 'reimb-pending';
+          const rsLabel = rs === 'paid'
+            ? `✅ Reimbursed${receipt.payment_method ? ' via ' + receipt.payment_method : ''}`
+            : rs === 'rejected' ? '❌ Rejected'
+            : '⏳ Pending Review';
+          receiptSection = `
+            <div style="margin-top:10px;padding:10px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:13px">
+              <strong>Receipt:</strong> $${Number(receipt.amount||0).toFixed(2)} · ${receipt.store||''}
+              <span class="reimb-status ${rsClass}">${rsLabel}</span>
+              ${receipt.file_url ? `<br><a href="${receipt.file_url}" target="_blank" style="font-size:12px;color:var(--green)">View photo →</a>` : ''}
+            </div>`;
+        } else if (isDone) {
+          receiptSection = `
+            <div style="margin-top:10px">
+              <button class="btn btn-green btn-sm" onclick="openReceiptModal('${t.id}')">📷 Submit Receipt</button>
+            </div>`;
+        } else {
+          receiptSection = `<div style="margin-top:8px;font-size:12px;color:var(--gray-4)">Mark complete to submit your receipt.</div>`;
+        }
+      }
+
       return `
         <div class="card">
           <div class="card-row">
@@ -416,6 +528,7 @@ async function loadMyTasks() {
             <div>${markBtn}</div>
           </div>
           ${addressBox}
+          ${receiptSection}
         </div>`;
     }).join('');
   } catch(e) {
@@ -430,6 +543,95 @@ async function completeTask(slotId) {
     await POST('/portal/complete/' + slotId, {});
     loadMyTasks();
   } catch(e) { alert(e.message); }
+}
+
+// ── Receipt Modal ─────────────────────────────────────────────────────────────
+let _activeSlotId = null;
+let _uploadedFileUrl = null;
+
+function openReceiptModal(slotId) {
+  _activeSlotId    = slotId;
+  _uploadedFileUrl = null;
+  document.getElementById('r-store').value   = '';
+  document.getElementById('r-date').value    = new Date().toISOString().slice(0,10);
+  document.getElementById('r-amount').value  = '';
+  document.getElementById('r-file').value    = '';
+  document.getElementById('r-file-preview').style.display = 'none';
+  document.getElementById('r-upload-label').textContent = '📷 Tap to upload receipt photo (JPG, PNG, PDF)';
+  document.getElementById('r-error').style.display = 'none';
+  document.getElementById('r-submit-btn').disabled = false;
+  document.getElementById('receipt-modal').classList.add('open');
+}
+
+function closeReceiptModal() {
+  document.getElementById('receipt-modal').classList.remove('open');
+  _activeSlotId = null;
+}
+
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('r-upload-label').textContent = `✓ ${file.name}`;
+  if (file.type.startsWith('image/')) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = document.getElementById('r-file-preview');
+      img.src = e.target.result;
+      img.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+async function submitReceipt() {
+  const btn    = document.getElementById('r-submit-btn');
+  const errEl  = document.getElementById('r-error');
+  const store  = document.getElementById('r-store').value.trim();
+  const date   = document.getElementById('r-date').value;
+  const amount = parseFloat(document.getElementById('r-amount').value);
+  const file   = document.getElementById('r-file').files[0];
+
+  errEl.style.display = 'none';
+  if (!store)          { errEl.textContent = 'Please enter the store name.'; errEl.style.display = 'block'; return; }
+  if (!date)           { errEl.textContent = 'Please enter the purchase date.'; errEl.style.display = 'block'; return; }
+  if (isNaN(amount) || amount <= 0) { errEl.textContent = 'Please enter a valid amount.'; errEl.style.display = 'block'; return; }
+
+  btn.disabled = true; btn.textContent = 'Uploading…';
+
+  try {
+    // Step 1: upload photo if provided
+    let fileUrl = null;
+    if (file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      const uploadRes = await fetch('/api/portal/receipts/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        body: fd
+      });
+      const uploadData = await uploadRes.json();
+      if (!uploadRes.ok) throw new Error(uploadData.error || 'Upload failed');
+      fileUrl = uploadData.file_url;
+    }
+
+    // Step 2: submit receipt record
+    btn.textContent = 'Submitting…';
+    await POST('/portal/receipts', {
+      slot_id:       _activeSlotId,
+      store:         store,
+      purchase_date: date,
+      amount:        amount,
+      file_url:      fileUrl
+    });
+
+    closeReceiptModal();
+    loadMyTasks();
+    alert('✅ Receipt submitted! The treasurer will review and process your reimbursement.');
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Submit Receipt';
+  }
 }
 
 // ── History ───────────────────────────────────────────────────────────────────

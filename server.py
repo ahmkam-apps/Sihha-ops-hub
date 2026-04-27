@@ -19,6 +19,8 @@ UPLOAD_FOLDER   = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
 SESSION_HOURS   = int(os.environ.get('SESSION_EXPIRY_HOURS', 24))
 PORT            = int(os.environ.get('PORT', 5000))
 ALLOWED_EXT     = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'heic'}
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY', '')
+NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
 
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -103,14 +105,17 @@ def bootstrap_db():
 
     c.executescript('''
         CREATE TABLE IF NOT EXISTS users (
-            id          TEXT PRIMARY KEY,
-            username    TEXT UNIQUE NOT NULL,
+            id            TEXT PRIMARY KEY,
+            username      TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            name        TEXT,
-            role        TEXT NOT NULL DEFAULT 'viewer'
-                        CHECK(role IN ('admin','volunteer','finance','viewer')),
-            active      INTEGER NOT NULL DEFAULT 1,
-            created_at  TEXT NOT NULL
+            name          TEXT,
+            role          TEXT NOT NULL DEFAULT 'viewer'
+                          CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
+            email         TEXT,
+            wa_phone      TEXT,
+            wa_apikey     TEXT,
+            active        INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -204,7 +209,8 @@ def bootstrap_db():
             amount          REAL,
             status          TEXT NOT NULL DEFAULT 'pending'
                             CHECK(status IN ('pending','approved','paid','rejected')),
-            payment_method  TEXT CHECK(payment_method IN ('cash','bank_transfer','cheque','other')),
+            payment_method  TEXT CHECK(payment_method IN ('venmo','zelle','check','cash','bank_transfer','cheque','other')),
+            payment_ref     TEXT,
             paid_date       TEXT,
             approved_by     TEXT,
             notes           TEXT,
@@ -357,6 +363,34 @@ def bootstrap_db():
             run_by                  TEXT,
             created_at              TEXT NOT NULL
         );
+
+        -- ── Phase 4D: Stripe / Wix / Bank reconciliation ─────────────────────
+
+        CREATE TABLE IF NOT EXISTS stripe_transactions (
+            id               TEXT PRIMARY KEY,
+            stripe_charge_id TEXT UNIQUE,
+            stripe_payout_id TEXT,
+            donor_name       TEXT,
+            donor_email      TEXT,
+            amount           REAL,
+            fee              REAL,
+            net              REAL,
+            charge_date      TEXT,
+            payout_date      TEXT,
+            description      TEXT,
+            synced_at        TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS wix_donations (
+            id              TEXT PRIMARY KEY,
+            wix_order_id    TEXT UNIQUE,
+            donor_name      TEXT,
+            donor_email     TEXT,
+            amount          REAL,
+            donation_date   TEXT,
+            description     TEXT,
+            synced_at       TEXT NOT NULL
+        );
     ''')
 
     # Seed default admin — INSERT OR IGNORE is atomic, safe under concurrent gunicorn workers.
@@ -472,6 +506,89 @@ def bootstrap_db():
     except sqlite3.OperationalError:
         pass  # Already exists
 
+    # ── Phase 4A migrations ───────────────────────────────────────────────────
+
+    # Add slot_id to receipts (links a portal-submitted receipt to a volunteer slot)
+    try:
+        conn.execute('ALTER TABLE receipts ADD COLUMN slot_id TEXT')
+        log.info('Migration: added slot_id to receipts')
+    except sqlite3.OperationalError:
+        pass
+
+    # Add email/wa_phone/wa_apikey to users (treasurer notification channels)
+    for _col, _def in [('email', 'TEXT'), ('wa_phone', 'TEXT'), ('wa_apikey', 'TEXT')]:
+        try:
+            conn.execute(f'ALTER TABLE users ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added {_col} to users')
+        except sqlite3.OperationalError:
+            pass
+
+    # Migrate users table: add treasurer role + new notification columns
+    # (SQLite CHECK constraints require table recreation to modify)
+    users_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchone()
+    if users_sql and 'treasurer' not in users_sql[0]:
+        log.info('Migration: upgrading users table for treasurer role')
+        conn.execute('PRAGMA foreign_keys=OFF')
+        conn.executescript('''
+            CREATE TABLE IF NOT EXISTS users_new (
+                id            TEXT PRIMARY KEY,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                name          TEXT,
+                role          TEXT NOT NULL DEFAULT 'viewer'
+                              CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
+                email         TEXT,
+                wa_phone      TEXT,
+                wa_apikey     TEXT,
+                active        INTEGER NOT NULL DEFAULT 1,
+                created_at    TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO users_new
+                (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
+            SELECT id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at
+            FROM users;
+            DROP TABLE users;
+            ALTER TABLE users_new RENAME TO users;
+        ''')
+        conn.execute('PRAGMA foreign_keys=ON')
+        log.info('Migration: users table upgraded — treasurer role now supported')
+
+    # Migrate reimbursements table: add venmo/zelle payment methods + payment_ref column
+    reimb_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reimbursements'"
+    ).fetchone()
+    if reimb_sql and 'venmo' not in reimb_sql[0]:
+        log.info('Migration: upgrading reimbursements table for new payment methods')
+        conn.executescript('''
+            CREATE TABLE IF NOT EXISTS reimbursements_new (
+                id              TEXT PRIMARY KEY,
+                receipt_id      TEXT NOT NULL,
+                volunteer_id    TEXT,
+                amount          REAL,
+                status          TEXT NOT NULL DEFAULT 'pending'
+                                CHECK(status IN ('pending','approved','paid','rejected')),
+                payment_method  TEXT CHECK(payment_method IN ('venmo','zelle','check','cash','bank_transfer','cheque','other')),
+                payment_ref     TEXT,
+                paid_date       TEXT,
+                approved_by     TEXT,
+                notes           TEXT,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT,
+                FOREIGN KEY (receipt_id) REFERENCES receipts(id)
+            );
+            INSERT OR IGNORE INTO reimbursements_new
+                (id, receipt_id, volunteer_id, amount, status, payment_method,
+                 payment_ref, paid_date, approved_by, notes, created_at, updated_at)
+            SELECT id, receipt_id, volunteer_id, amount, status, payment_method,
+                   NULL, paid_date, approved_by, notes, created_at, updated_at
+            FROM reimbursements;
+            DROP TABLE reimbursements;
+            ALTER TABLE reimbursements_new RENAME TO reimbursements;
+        ''')
+        log.info('Migration: reimbursements table upgraded — venmo/zelle/payment_ref added')
+
     # Back-fill family_code for existing families that don't have one
     existing = conn.execute(
         "SELECT id, phone, family_size FROM families WHERE family_code IS NULL OR family_code=''"
@@ -485,18 +602,19 @@ def bootstrap_db():
     # ── Phase 3C tables ───────────────────────────────────────────────────────
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS volunteer_slots (
-            id          TEXT PRIMARY KEY,
-            cycle_id    TEXT NOT NULL,
-            family_id   TEXT NOT NULL,
-            task_type   TEXT NOT NULL CHECK(task_type IN ('shopping','delivery')),
-            task_date   TEXT,
-            claimed_by  TEXT,
-            claimed_at  TEXT,
-            status      TEXT NOT NULL DEFAULT 'open'
-                        CHECK(status IN ('open','claimed','complete','cancelled')),
-            notes       TEXT,
-            created_at  TEXT NOT NULL,
-            updated_at  TEXT,
+            id           TEXT PRIMARY KEY,
+            cycle_id     TEXT NOT NULL,
+            family_id    TEXT NOT NULL,
+            task_type    TEXT NOT NULL CHECK(task_type IN ('shopping','delivery')),
+            task_date    TEXT,
+            claimed_by   TEXT,
+            claimed_at   TEXT,
+            completed_at TEXT,
+            status       TEXT NOT NULL DEFAULT 'open'
+                         CHECK(status IN ('open','claimed','complete','cancelled')),
+            notes        TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT,
             UNIQUE(cycle_id, family_id, task_type),
             FOREIGN KEY (cycle_id)   REFERENCES delivery_cycles(id),
             FOREIGN KEY (family_id)  REFERENCES families(id),
@@ -606,6 +724,51 @@ def _wa_send(phone, apikey, message):
         log.warning(f'WhatsApp send failed to {phone}: {e}')
         return False
 
+def _email_send(to_email, subject, text_body):
+    """Send an email via SendGrid Web API v3 (no SDK — pure urllib).
+    Requires SENDGRID_API_KEY env var. Falls back silently if not configured.
+    Returns True on success, False on failure (never raises)."""
+    import urllib.request, urllib.parse, json as _json
+    if not SENDGRID_API_KEY:
+        log.warning('Email not sent — SENDGRID_API_KEY not configured')
+        return False
+    payload = _json.dumps({
+        'personalizations': [{'to': [{'email': to_email}]}],
+        'from': {'email': NOTIFY_FROM_EMAIL, 'name': 'SIHAA Ops Hub'},
+        'subject': subject,
+        'content': [{'type': 'text/plain', 'value': text_body}]
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        'https://api.sendgrid.com/v3/mail/send',
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {SENDGRID_API_KEY}',
+            'Content-Type': 'application/json'
+        },
+        method='POST'
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        log.info(f'Email sent to {to_email}: {subject}')
+        return True
+    except Exception as e:
+        log.warning(f'Email send failed to {to_email}: {e}')
+        return False
+
+def _notify_treasurers(db, subject, message):
+    """Notify all active treasurer users via WhatsApp + email.
+    Used for new reimbursement requests, receipt submissions, etc."""
+    treasurers = db.execute(
+        "SELECT name, email, wa_phone, wa_apikey FROM users WHERE role='treasurer' AND active=1"
+    ).fetchall()
+    for t in treasurers:
+        if t['wa_phone'] and t['wa_apikey']:
+            _wa_send(t['wa_phone'], t['wa_apikey'], message)
+        if t['email']:
+            _email_send(t['email'], subject, message)
+    if not treasurers:
+        log.info('No active treasurers found to notify.')
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.route('/api/health')
@@ -673,7 +836,7 @@ def me():
 @require_auth(roles=['admin'])
 def list_users():
     rows = get_db().execute(
-        "SELECT id, username, name, role, active, created_at FROM users ORDER BY created_at"
+        "SELECT id, username, name, role, email, wa_phone, wa_apikey, active, created_at FROM users ORDER BY created_at"
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -686,9 +849,11 @@ def create_user():
     uid = str(uuid.uuid4())
     try:
         get_db().execute(
-            "INSERT INTO users (id, username, password_hash, name, role, created_at) VALUES (?,?,?,?,?,?)",
+            '''INSERT INTO users (id, username, password_hash, name, role, email, wa_phone, wa_apikey, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)''',
             (uid, data['username'], generate_password_hash(data['password']),
-             data.get('name'), data.get('role', 'viewer'), now())
+             data.get('name'), data.get('role', 'viewer'),
+             data.get('email'), data.get('wa_phone'), data.get('wa_apikey'), now())
         )
         get_db().commit()
     except sqlite3.IntegrityError:
@@ -705,9 +870,11 @@ def update_user(uid):
         return jsonify({'error': 'Not found'}), 404
     new_hash = generate_password_hash(data['password']) if data.get('password') else row['password_hash']
     db.execute(
-        "UPDATE users SET name=?, role=?, active=?, password_hash=? WHERE id=?",
+        "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
         (data.get('name', row['name']), data.get('role', row['role']),
-         data.get('active', row['active']), new_hash, uid)
+         data.get('active', row['active']), new_hash,
+         data.get('email', row['email']), data.get('wa_phone', row['wa_phone']),
+         data.get('wa_apikey', row['wa_apikey']), uid)
     )
     db.commit()
     return jsonify({'ok': True})
@@ -764,7 +931,7 @@ def list_families():
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
 @app.route('/api/families', methods=['POST'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def create_family():
     data = request.json or {}
     if not data.get('name'):
@@ -793,7 +960,7 @@ def get_family(fid):
     return (jsonify(dict(row)) if row else (jsonify({'error': 'Not found'}), 404))
 
 @app.route('/api/families/<fid>', methods=['PUT'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_family(fid):
     db = get_db()
     row = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
@@ -962,19 +1129,36 @@ def list_receipts():
 def create_receipt():
     data = request.json or {}
     rid = str(uuid.uuid4())
-    get_db().execute(
+    db = get_db()
+    db.execute(
         '''INSERT INTO receipts
-           (id,assignment_id,volunteer_id,family_id,store,purchase_date,amount,file_url,status,notes,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+           (id,assignment_id,volunteer_id,family_id,store,purchase_date,amount,file_url,slot_id,status,notes,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
         (rid, data.get('assignment_id'), data.get('volunteer_id'), data.get('family_id'),
          data.get('store'), data.get('purchase_date'), data.get('amount'),
-         data.get('file_url'), 'pending', data.get('notes'), now())
+         data.get('file_url'), data.get('slot_id'), 'pending', data.get('notes'), now())
     )
-    get_db().commit()
+    db.commit()
+    # Notify treasurers of new receipt submission
+    try:
+        vol = db.execute("SELECT name FROM volunteers WHERE id=?", (data.get('volunteer_id'),)).fetchone()
+        vol_name = vol['name'] if vol else 'A volunteer'
+        amount = data.get('amount') or 0
+        store  = data.get('store') or 'unknown store'
+        subject = f'New Reimbursement Request — ${amount:.2f} from {vol_name}'
+        msg = (f'New receipt submitted on SIHAA Ops Hub.\n'
+               f'Volunteer: {vol_name}\n'
+               f'Store: {store}\n'
+               f'Amount: ${amount:.2f}\n'
+               f'Date: {data.get("purchase_date","")}\n\n'
+               f'Log in to review and pay: https://sihha-ops-hub-production.up.railway.app')
+        _notify_treasurers(db, subject, msg)
+    except Exception as e:
+        log.warning(f'Treasurer notification failed: {e}')
     return jsonify({'id': rid}), 201
 
 @app.route('/api/receipts/<rid>', methods=['PUT'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_receipt(rid):
     db = get_db()
     row = db.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()
@@ -1013,11 +1197,12 @@ def upload_receipt():
 # ── Reimbursements ────────────────────────────────────────────────────────────
 
 @app.route('/api/reimbursements', methods=['GET'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def list_reimbursements():
     db = get_db()
     status = request.args.get('status')
-    q = '''SELECT rb.*, v.name as volunteer_name, r.store, r.purchase_date
+    q = '''SELECT rb.*, v.name as volunteer_name, v.wa_phone, v.wa_apikey,
+                  r.store, r.purchase_date, r.file_url as receipt_photo, r.amount as receipt_amount
            FROM reimbursements rb
            LEFT JOIN volunteers v ON rb.volunteer_id = v.id
            LEFT JOIN receipts r ON rb.receipt_id = r.id
@@ -1029,27 +1214,50 @@ def list_reimbursements():
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
 @app.route('/api/reimbursements/<rid>', methods=['PUT'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_reimbursement(rid):
     db = get_db()
     row = db.execute("SELECT * FROM reimbursements WHERE id=?", (rid,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+    new_status = d.get('status', row['status'])
+    paid_date  = d.get('paid_date', row['paid_date']) or (now()[:10] if new_status == 'paid' else row['paid_date'])
     db.execute(
-        '''UPDATE reimbursements SET status=?,payment_method=?,paid_date=?,
+        '''UPDATE reimbursements SET status=?,payment_method=?,payment_ref=?,paid_date=?,
            approved_by=?,notes=?,updated_at=? WHERE id=?''',
-        (d.get('status', row['status']), d.get('payment_method', row['payment_method']),
-         d.get('paid_date', row['paid_date']), d.get('approved_by', row['approved_by']),
+        (new_status,
+         d.get('payment_method', row['payment_method']),
+         d.get('payment_ref', row['payment_ref']),
+         paid_date,
+         d.get('approved_by', row['approved_by']) or g.user['user_id'],
          d.get('notes', row['notes']), now(), rid)
     )
     db.commit()
+    # Notify volunteer via WhatsApp when payment is sent
+    if new_status == 'paid' and row['status'] != 'paid':
+        try:
+            vol = db.execute(
+                "SELECT name, wa_phone, wa_apikey FROM volunteers WHERE id=?", (row['volunteer_id'],)
+            ).fetchone()
+            if vol and vol['wa_phone'] and vol['wa_apikey']:
+                method = d.get('payment_method', row['payment_method']) or 'bank transfer'
+                ref    = d.get('payment_ref', row['payment_ref'])
+                amount = row['amount'] or 0
+                ref_line = f'\nReference: {ref}' if ref else ''
+                msg = (f'✅ SIHAA Reimbursement Sent!\n'
+                       f'Amount: ${amount:.2f}\n'
+                       f'Method: {method.title()}{ref_line}\n'
+                       f'JazakAllah Khair for your service!')
+                _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
+        except Exception as e:
+            log.warning(f'Volunteer payment notification failed: {e}')
     return jsonify(dict(db.execute("SELECT * FROM reimbursements WHERE id=?", (rid,)).fetchone()))
 
 # ── Donations ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/donations', methods=['GET'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def list_donations():
     rows = get_db().execute(
         "SELECT * FROM donations ORDER BY date DESC, created_at DESC"
@@ -1057,7 +1265,7 @@ def list_donations():
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/donations', methods=['POST'])
-@require_auth(roles=['admin', 'finance'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def create_donation():
     data = request.json or {}
     did = str(uuid.uuid4())
@@ -1919,6 +2127,106 @@ def portal_complete_slot(slot_id):
     db.commit()
     return jsonify({'ok': True})
 
+# ── Portal: Receipt Submission ────────────────────────────────────────────────
+
+@app.route('/api/portal/receipts/upload', methods=['POST'])
+@require_portal_auth()
+def portal_upload_receipt_file():
+    """Upload a receipt photo from the volunteer portal."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    f = request.files['file']
+    if not f.filename or not allowed_file(f.filename):
+        return jsonify({'error': 'Invalid file type. Use JPG, PNG, PDF, or HEIC.'}), 400
+    filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1].lower()
+    f.save(os.path.join(UPLOAD_FOLDER, filename))
+    return jsonify({'file_url': f'/uploads/{filename}'}), 201
+
+@app.route('/api/portal/receipts', methods=['POST'])
+@require_portal_auth()
+def portal_submit_receipt():
+    """Volunteer submits a receipt for a shopping task via the portal.
+    Auto-creates a receipt record + pending reimbursement + notifies treasurer."""
+    data   = request.json or {}
+    vol_id = g.pv['volunteer_id']
+    slot_id = data.get('slot_id')
+    db = get_db()
+
+    # Validate the slot belongs to this volunteer and is a shopping task
+    if slot_id:
+        slot = db.execute(
+            "SELECT * FROM volunteer_slots WHERE id=? AND claimed_by=? AND task_type='shopping'",
+            (slot_id, vol_id)
+        ).fetchone()
+        if not slot:
+            return jsonify({'error': 'Shopping slot not found or not yours'}), 404
+
+    # Prevent duplicate receipt submission for the same slot
+    if slot_id:
+        existing = db.execute(
+            "SELECT id FROM receipts WHERE slot_id=? AND volunteer_id=?", (slot_id, vol_id)
+        ).fetchone()
+        if existing:
+            return jsonify({'error': 'You already submitted a receipt for this task'}), 409
+
+    rid    = str(uuid.uuid4())
+    amount = float(data.get('amount') or 0)
+    store  = (data.get('store') or '').strip()
+    pdate  = data.get('purchase_date') or now()[:10]
+    furl   = data.get('file_url')
+    fid    = slot['family_id'] if slot_id and slot else None
+
+    db.execute(
+        '''INSERT INTO receipts
+           (id, volunteer_id, family_id, store, purchase_date, amount, file_url, slot_id, status, notes, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+        (rid, vol_id, fid, store, pdate, amount, furl, slot_id, 'pending', data.get('notes'), now())
+    )
+
+    # Auto-create reimbursement request
+    reimb_id = str(uuid.uuid4())
+    db.execute(
+        '''INSERT INTO reimbursements
+           (id, receipt_id, volunteer_id, amount, status, created_at)
+           VALUES (?,?,?,?,?,?)''',
+        (reimb_id, rid, vol_id, amount, 'pending', now())
+    )
+    db.commit()
+
+    # Notify treasurers
+    try:
+        vol_name = g.pv['name']
+        subject  = f'New Reimbursement Request — ${amount:.2f} from {vol_name}'
+        msg = (f'New receipt submitted via Volunteer Portal.\n'
+               f'Volunteer: {vol_name}\n'
+               f'Store: {store or "not specified"}\n'
+               f'Amount: ${amount:.2f}\n'
+               f'Date: {pdate}\n\n'
+               f'Log in to review: https://sihha-ops-hub-production.up.railway.app')
+        _notify_treasurers(db, subject, msg)
+    except Exception as e:
+        log.warning(f'Treasurer notification failed: {e}')
+
+    return jsonify({'receipt_id': rid, 'reimbursement_id': reimb_id}), 201
+
+@app.route('/api/portal/receipts', methods=['GET'])
+@require_portal_auth()
+def portal_list_receipts():
+    """Volunteer sees their own receipt submissions + reimbursement status."""
+    vol_id = g.pv['volunteer_id']
+    rows = get_db().execute(
+        '''SELECT r.id, r.store, r.purchase_date, r.amount, r.file_url, r.slot_id,
+                  r.status as receipt_status, r.created_at,
+                  rb.id as reimbursement_id, rb.status as reimbursement_status,
+                  rb.payment_method, rb.payment_ref, rb.paid_date
+           FROM receipts r
+           LEFT JOIN reimbursements rb ON rb.receipt_id = r.id
+           WHERE r.volunteer_id=?
+           ORDER BY r.created_at DESC''',
+        (vol_id,)
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
 # ── History Endpoints ─────────────────────────────────────────────────────────
 
 @app.route('/api/families/<fid>/history')
@@ -2085,7 +2393,10 @@ def generate_cycle_slots(cid):
             except sqlite3.IntegrityError:
                 pass  # Slot already exists for this family+task
     db.commit()
-    return jsonify({'ok': True, 'slots_created': created, 'total_requests': len(requests)})
+    total_slots = db.execute(
+        "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=?", (cid,)
+    ).fetchone()[0]
+    return jsonify({'ok': True, 'slots_created': created, 'slots_total': total_slots, 'total_requests': len(requests)})
 
 @app.route('/api/volunteer-slots')
 @require_auth()

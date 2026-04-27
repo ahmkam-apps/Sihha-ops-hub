@@ -685,6 +685,16 @@ function showApp() {
     document.getElementById('nav-section-admin').style.display = '';
     document.getElementById('nav-users').style.display = '';
   }
+  // Treasurer: hide operations + food program nav, show only finance
+  if (STATE.user.role === 'treasurer') {
+    ['nav-families','nav-volunteers','nav-assignments',
+     'nav-cycles','nav-orders','nav-catalog'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    nav('reimbursements');
+    return;
+  }
   nav('dashboard');
 }
 
@@ -1574,7 +1584,7 @@ async function rejectReceipt(id) {
 
 // ── Reimbursements ────────────────────────────────────────────────────────────
 async function renderReimbursements(filter) {
-  filter = filter || STATE.filter || 'all';
+  filter = filter || STATE.filter || 'pending';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML = '';
 
@@ -1584,12 +1594,13 @@ async function renderReimbursements(filter) {
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const rows = await GET(url);
+    const pendingCount = rows.filter(r => r.status === 'pending').length;
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header">
-          <span class="table-title">Reimbursements</span>
+          <span class="table-title">Reimbursements${pendingCount && filter==='all' ? ` <span style="background:#c00;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px">${pendingCount}</span>` : ''}</span>
           <div class="filter-tabs">
-            ${['all','pending','approved','paid','rejected'].map(f =>
+            ${['all','pending','paid','rejected'].map(f =>
               `<div class="filter-tab ${filter===f?'active':''}"
                 onclick="renderReimbursements('${f}')">${f}</div>`
             ).join('')}
@@ -1597,23 +1608,31 @@ async function renderReimbursements(filter) {
         </div>
         <table>
           <thead><tr>
-            <th>Volunteer</th><th>Store</th><th>Amount</th>
-            <th>Method</th><th>Paid Date</th><th>Status</th><th></th>
+            <th>Volunteer</th><th>Store</th><th>Date</th><th>Amount</th>
+            <th>Receipt</th><th>Method</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr>
                 <td><strong>${r.volunteer_name||'—'}</strong></td>
                 <td>${r.store||'—'}</td>
-                <td>${fmtMoney(r.amount)}</td>
-                <td>${r.payment_method||'—'}</td>
-                <td>${fmtDate(r.paid_date)}</td>
+                <td style="font-size:11px;white-space:nowrap">${fmtDate(r.purchase_date)}</td>
+                <td><strong>${fmtMoney(r.amount)}</strong></td>
+                <td>${r.receipt_photo
+                  ? `<a href="${r.receipt_photo}" target="_blank" style="font-size:12px;color:var(--green);white-space:nowrap">📷 View</a>`
+                  : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
+                <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${r.payment_ref}</span>` : ''}</td>
                 <td>${badge(r.status)}</td>
-                <td>
-                  ${r.status==='pending'?`<button class="btn btn-sm" onclick="markReimbPaid('${r.id}')">Mark Paid</button>`:''}
+                <td style="white-space:nowrap">
+                  ${r.status==='pending' || r.status==='approved'
+                    ? `<button class="btn btn-sm" style="background:var(--green)" onclick="markReimbPaid('${r.id}',${r.amount||0})">Pay</button>`
+                    : ''}
+                  ${r.status==='pending'
+                    ? `<button class="btn btn-sm btn-outline" onclick="rejectReimb('${r.id}')" style="margin-left:4px">Reject</button>`
+                    : ''}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="7">No reimbursements found</td></tr>'}
+              '<tr class="empty-row"><td colspan="8">No reimbursements found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -1622,38 +1641,63 @@ async function renderReimbursements(filter) {
   }
 }
 
-async function markReimbPaid(id) {
-  openDrawer('Mark as Paid',
-    `<div class="form-group">
-       <label>Payment Method</label>
-       <select id="reimb-method">
-         ${['cash','bank_transfer','cheque','other'].map(v =>
-           `<option value="${v}">${v.replace('_',' ')}</option>`).join('')}
+function markReimbPaid(id, amount) {
+  openDrawer('Send Reimbursement',
+    `<div style="margin-bottom:16px;padding:12px 16px;background:#f8f9fa;border-left:3px solid var(--green);font-size:14px">
+       <strong>Amount to reimburse: ${fmtMoney(amount)}</strong>
+     </div>
+     <div class="form-group">
+       <label>Payment Method *</label>
+       <select id="reimb-method" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">
+         <option value="">— Select method —</option>
+         ${['venmo','zelle','check','cash'].map(v =>
+           `<option value="${v}">${v.charAt(0).toUpperCase()+v.slice(1)}</option>`).join('')}
        </select>
+     </div>
+     <div class="form-group">
+       <label>Reference / Confirmation # <span style="font-weight:400;color:var(--gray-4)">(optional)</span></label>
+       <input type="text" id="reimb-ref" placeholder="Venmo transaction ID, check #, etc.">
      </div>
      <div class="form-group">
        <label>Paid Date</label>
        <input type="date" id="reimb-date" value="${new Date().toISOString().slice(0,10)}">
      </div>
-     <div class="alert alert-error" id="reimb-err"></div>`,
-    `<button class="btn" onclick="confirmReimbPaid('${id}')">Confirm Payment</button>
+     <div class="form-group">
+       <label>Notes <span style="font-weight:400;color:var(--gray-4)">(optional)</span></label>
+       <input type="text" id="reimb-notes" placeholder="Any additional notes">
+     </div>
+     <div class="alert alert-error" id="reimb-err" style="display:none"></div>`,
+    `<button class="btn" style="background:var(--green)" onclick="confirmReimbPaid('${id}')">✓ Confirm Payment</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
   );
 }
 
 async function confirmReimbPaid(id) {
+  const method = document.getElementById('reimb-method').value;
+  const errEl  = document.getElementById('reimb-err');
+  errEl.style.display = 'none';
+  if (!method) { errEl.textContent = 'Please select a payment method.'; errEl.style.display = 'block'; return; }
   try {
     await PUT('/reimbursements/' + id, {
-      status: 'paid',
-      payment_method: document.getElementById('reimb-method').value,
-      paid_date: document.getElementById('reimb-date').value
+      status:         'paid',
+      payment_method: method,
+      payment_ref:    document.getElementById('reimb-ref').value.trim() || null,
+      paid_date:      document.getElementById('reimb-date').value,
+      notes:          document.getElementById('reimb-notes').value.trim() || null
     });
     closeDrawer();
     renderReimbursements(STATE.filter);
   } catch(e) {
-    const el = document.getElementById('reimb-err');
-    el.textContent = e.message; el.style.display = 'block';
+    errEl.textContent = e.message; errEl.style.display = 'block';
   }
+}
+
+async function rejectReimb(id) {
+  if (!confirm('Reject this reimbursement request?')) return;
+  try {
+    await PUT('/reimbursements/' + id, { status: 'rejected' });
+    renderReimbursements(STATE.filter);
+  } catch(e) { alert(e.message); }
 }
 
 // ── Users (admin only) ────────────────────────────────────────────────────────
@@ -1668,17 +1712,18 @@ async function renderUsers() {
         <div class="table-header"><span class="table-title">System Users</span></div>
         <table>
           <thead><tr>
-            <th>Name</th><th>Username</th><th>Role</th><th>Active</th><th>Added</th><th></th>
+            <th>Name</th><th>Username</th><th>Role</th><th>Email</th><th>WhatsApp</th><th>Active</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.map(r => `
               <tr>
                 <td><strong>${r.name||'—'}</strong></td>
                 <td>${r.username}</td>
-                <td>${r.role}</td>
+                <td><span style="text-transform:capitalize">${r.role}</span></td>
+                <td style="font-size:12px">${r.email||'—'}</td>
+                <td style="font-size:12px">${r.wa_phone ? '✓ Set' : '—'}</td>
                 <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
-                <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
-                <td><button class="btn btn-sm" onclick="openUserForm('${r.id}','${r.username}','${r.name||''}','${r.role}',${r.active})">Edit</button></td>
+                <td><button class="btn btn-sm" onclick="openUserForm(${JSON.stringify(r)})">Edit</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -1688,38 +1733,54 @@ async function renderUsers() {
   }
 }
 
-function openUserForm(id, username, name, role, active) {
-  STATE.editId = id || null;
-  openDrawer(id ? 'Edit User' : 'Add User',
-    `<div class="form-group">
+function openUserForm(userObj) {
+  // Accept either a user object (edit) or nothing (create)
+  const r = (typeof userObj === 'object' && userObj !== null) ? userObj : {};
+  STATE.editId = r.id || null;
+  openDrawer(r.id ? 'Edit User' : 'Add User',
+    `<div class="form-section">Account</div>
+     <div class="form-group">
        <label>Name</label>
-       <input type="text" id="u-name" value="${name||''}">
+       <input type="text" id="u-name" value="${r.name||''}">
      </div>
      <div class="form-group">
        <label>Username *</label>
-       <input type="text" id="u-username" value="${username||''}" ${id?'readonly':''}>
+       <input type="text" id="u-username" value="${r.username||''}" ${r.id?'readonly':''}>
      </div>
      <div class="form-group">
-       <label>${id?'New Password (leave blank to keep)':'Password *'}</label>
+       <label>${r.id?'New Password (leave blank to keep)':'Password *'}</label>
        <input type="password" id="u-password">
      </div>
      <div class="form-row">
        <div class="form-group">
          <label>Role</label>
          <select id="u-role">
-           ${['admin','finance','volunteer','viewer'].map(v =>
-             `<option value="${v}" ${role===v?'selected':''}>${v}</option>`).join('')}
+           ${['admin','treasurer','finance','volunteer','viewer'].map(v =>
+             `<option value="${v}" ${r.role===v?'selected':''}>${v.charAt(0).toUpperCase()+v.slice(1)}</option>`).join('')}
          </select>
        </div>
-       ${id ? `<div class="form-group">
+       ${r.id ? `<div class="form-group">
          <label>Active</label>
          <select id="u-active">
-           <option value="1" ${active?'selected':''}>Yes</option>
-           <option value="0" ${!active?'selected':''}>No</option>
+           <option value="1" ${r.active?'selected':''}>Yes</option>
+           <option value="0" ${!r.active?'selected':''}>No</option>
          </select>
        </div>` : ''}
      </div>
-     <div class="alert alert-error" id="user-err"></div>`,
+     <div class="form-section" style="margin-top:16px">Notifications (Treasurer only)</div>
+     <div class="form-group">
+       <label>Email</label>
+       <input type="email" id="u-email" value="${r.email||''}" placeholder="treasurer@example.com">
+     </div>
+     <div class="form-group">
+       <label>WhatsApp Phone <span style="font-weight:400;color:var(--gray-4)">(+1XXXXXXXXXX)</span></label>
+       <input type="text" id="u-wa-phone" value="${r.wa_phone||''}" placeholder="+15851234567">
+     </div>
+     <div class="form-group">
+       <label>CallMeBot API Key</label>
+       <input type="text" id="u-wa-apikey" value="${r.wa_apikey||''}" placeholder="From CallMeBot opt-in">
+     </div>
+     <div class="alert alert-error" id="user-err" style="display:none"></div>`,
     `<button class="btn" onclick="saveUser()">Save</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
   );
@@ -1735,9 +1796,12 @@ async function saveUser() {
   if (!username) return showErr('Username is required');
   if (!STATE.editId && !password) return showErr('Password is required');
   const payload = {
-    name: document.getElementById('u-name').value.trim(),
+    name:     document.getElementById('u-name').value.trim(),
     username,
-    role: document.getElementById('u-role').value,
+    role:     document.getElementById('u-role').value,
+    email:    document.getElementById('u-email').value.trim() || null,
+    wa_phone: document.getElementById('u-wa-phone').value.trim() || null,
+    wa_apikey:document.getElementById('u-wa-apikey').value.trim() || null,
   };
   if (password) payload.password = password;
   if (STATE.editId) payload.active = parseInt(document.getElementById('u-active').value);
