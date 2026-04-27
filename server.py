@@ -310,20 +310,17 @@ def bootstrap_db():
         );
     ''')
 
-    # Seed default admin if not present
-    # Password is read from ADMIN_PASSWORD env var — set this in Railway dashboard.
-    # Falls back to 'admin123' only if the env var is not set (dev/local only).
+    # Seed default admin — INSERT OR IGNORE is atomic, safe under concurrent gunicorn workers.
+    # Password is read from ADMIN_PASSWORD env var (set in Railway dashboard).
+    # Falls back to 'admin123' only if env var is not set (dev/local only).
     admin_pw = os.environ.get('ADMIN_PASSWORD', 'admin123')
-    if not conn.execute("SELECT id FROM users WHERE username='admin'").fetchone():
-        conn.execute(
-            "INSERT INTO users (id, username, password_hash, name, role, created_at) VALUES (?,?,?,?,?,?)",
-            (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
-             'Administrator', 'admin', now())
-        )
-        if admin_pw == 'admin123':
-            log.warning('Default admin created with INSECURE password. Set ADMIN_PASSWORD env var in Railway!')
-        else:
-            log.info('Default admin created from ADMIN_PASSWORD env var.')
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, username, password_hash, name, role, created_at) VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
+         'Administrator', 'admin', now())
+    )
+    if admin_pw == 'admin123':
+        log.warning('Admin password is default admin123 — set ADMIN_PASSWORD env var in Railway!')
 
     # Seed bundle size rules if not present
     if not conn.execute("SELECT id FROM bundle_size_rules LIMIT 1").fetchone():
