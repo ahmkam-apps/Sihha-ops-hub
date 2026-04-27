@@ -2629,21 +2629,58 @@ def portal_submit_receipt():
         if not slot:
             return jsonify({'error': 'Shopping slot not found or not yours'}), 404
 
-    # Prevent duplicate receipt submission for the same slot
-    if slot_id:
-        existing = db.execute(
-            "SELECT id FROM receipts WHERE slot_id=? AND volunteer_id=?", (slot_id, vol_id)
-        ).fetchone()
-        if existing:
-            return jsonify({'error': 'You already submitted a receipt for this task'}), 409
-
-    rid    = str(uuid.uuid4())
     amount = float(data.get('amount') or 0)
     store  = (data.get('store') or '').strip()
     pdate  = data.get('purchase_date') or now()[:10]
     furl   = data.get('file_url')
     fid    = slot['family_id'] if slot_id and slot else None
 
+    # Check for existing receipt for this slot — update instead of reject
+    existing = None
+    if slot_id:
+        existing = db.execute(
+            "SELECT id FROM receipts WHERE slot_id=? AND volunteer_id=?", (slot_id, vol_id)
+        ).fetchone()
+
+    if existing:
+        # Update the existing receipt — reset status to pending for re-review
+        rid = existing['id']
+        update_fields = [
+            ('amount', amount), ('store', store), ('purchase_date', pdate),
+            ('status', 'pending'), ('updated_at', now())
+        ]
+        if furl:  # only overwrite photo if a new one was uploaded
+            update_fields.append(('file_url', furl))
+        set_clause = ', '.join(f'{col}=?' for col, _ in update_fields)
+        vals = [v for _, v in update_fields] + [rid]
+        db.execute(f'UPDATE receipts SET {set_clause} WHERE id=?', vals)
+
+        # Also reset the linked reimbursement to pending
+        db.execute(
+            "UPDATE reimbursements SET amount=?, status='pending', updated_at=? WHERE receipt_id=?",
+            (amount, now(), rid)
+        )
+        reimb_row = db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone()
+        reimb_id  = reimb_row['id'] if reimb_row else None
+        db.commit()
+
+        try:
+            vol_name = g.pv['name']
+            subject  = f'Receipt Updated — ${amount:.2f} from {vol_name}'
+            msg = (f'Volunteer updated their receipt via the Portal.\n'
+                   f'Volunteer: {vol_name}\n'
+                   f'Store: {store or "not specified"}\n'
+                   f'Amount: ${amount:.2f}\n'
+                   f'Date: {pdate}\n\n'
+                   f'Log in to review: https://sihha-ops-hub-production.up.railway.app')
+            _notify_treasurers(db, subject, msg)
+        except Exception as e:
+            log.warning(f'Treasurer notification failed: {e}')
+
+        return jsonify({'receipt_id': rid, 'reimbursement_id': reimb_id, 'updated': True}), 200
+
+    # New receipt
+    rid    = str(uuid.uuid4())
     db.execute(
         '''INSERT INTO receipts
            (id, volunteer_id, family_id, store, purchase_date, amount, file_url, slot_id, status, notes, created_at)

@@ -488,29 +488,37 @@ async function loadMyTasks() {
       const markBtn = !isDone
         ? `<button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')">Mark Complete</button>` : '';
 
-      // Receipt button: only for shopping tasks
+      // Receipt section: always visible on shopping tasks once complete (or even before)
       let receiptSection = '';
       if (isShopping) {
-        if (receipt) {
+        if (!isDone) {
+          // Not yet complete — nudge to finish first, but still show the button
+          receiptSection = `<div style="margin-top:8px;font-size:12px;color:var(--gray-4)">Mark complete above, then add your receipt.</div>`;
+        } else if (receipt) {
+          // Receipt already submitted — show status + always allow update/replace
           const rs = receipt.reimbursement_status || receipt.receipt_status;
           const rsClass = rs === 'paid' ? 'reimb-paid' : rs === 'rejected' ? 'reimb-rejected' : 'reimb-pending';
           const rsLabel = rs === 'paid'
             ? `✅ Reimbursed${receipt.payment_method ? ' via ' + receipt.payment_method : ''}`
-            : rs === 'rejected' ? '❌ Rejected'
+            : rs === 'rejected' ? '❌ Rejected — resubmit below'
             : '⏳ Pending Review';
           receiptSection = `
-            <div style="margin-top:10px;padding:10px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:13px">
-              <strong>Receipt:</strong> $${Number(receipt.amount||0).toFixed(2)} · ${receipt.store||''}
-              <span class="reimb-status ${rsClass}">${rsLabel}</span>
-              ${receipt.file_url ? `<br><a href="${receipt.file_url}" target="_blank" style="font-size:12px;color:var(--green)">View photo →</a>` : ''}
+            <div style="margin-top:10px;padding:10px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:13px;border-radius:6px">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                <div>
+                  <strong>Receipt:</strong> $${Number(receipt.amount||0).toFixed(2)}${receipt.store ? ' · ' + receipt.store : ''}
+                  <span class="reimb-status ${rsClass}">${rsLabel}</span>
+                  ${receipt.file_url ? `<br><a href="${receipt.file_url}" target="_blank" style="font-size:12px;color:var(--green)">View photo →</a>` : ''}
+                </div>
+                <button class="btn btn-outline btn-sm" onclick="openReceiptModal('${t.id}')">✏️ Update Receipt</button>
+              </div>
             </div>`;
-        } else if (isDone) {
+        } else {
+          // Complete but no receipt yet — big green button
           receiptSection = `
             <div style="margin-top:10px">
               <button class="btn btn-green btn-sm" onclick="openReceiptModal('${t.id}')">📷 Submit Receipt</button>
             </div>`;
-        } else {
-          receiptSection = `<div style="margin-top:8px;font-size:12px;color:var(--gray-4)">Mark complete to submit your receipt.</div>`;
         }
       }
 
@@ -614,9 +622,9 @@ async function submitReceipt() {
       fileUrl = uploadData.file_url;
     }
 
-    // Step 2: submit receipt record
+    // Step 2: submit / update receipt record
     btn.textContent = 'Submitting…';
-    await POST('/portal/receipts', {
+    const res = await POST('/portal/receipts', {
       slot_id:       _activeSlotId,
       store:         store,
       purchase_date: date,
@@ -626,7 +634,10 @@ async function submitReceipt() {
 
     closeReceiptModal();
     loadMyTasks();
-    alert('✅ Receipt submitted! The treasurer will review and process your reimbursement.');
+    const msg = res.updated
+      ? '✅ Receipt updated! The treasurer has been notified and will re-review your reimbursement.'
+      : '✅ Receipt submitted! The treasurer will review and process your reimbursement.';
+    alert(msg);
   } catch(e) {
     errEl.textContent = e.message;
     errEl.style.display = 'block';
