@@ -1231,7 +1231,7 @@ def list_delivery_cycles():
     params = []
     if status:
         q += " AND status=?"; params.append(status)
-    q += " ORDER BY delivery_date_start DESC"
+    q += " ORDER BY delivery_date_start ASC"
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
 @app.route('/api/delivery-cycles', methods=['POST'])
@@ -1703,7 +1703,7 @@ def portal_login():
 def portal_list_cycles():
     """Return cycles that are open, closed, or shopping — relevant to volunteers."""
     rows = get_db().execute(
-        "SELECT * FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start DESC"
+        "SELECT * FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start ASC"
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 
