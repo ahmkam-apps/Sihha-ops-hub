@@ -1631,25 +1631,29 @@ async function renderReceipts(filter) {
         <table>
           <thead><tr>
             <th>Volunteer</th><th>Family</th><th>Store</th>
-            <th>Date</th><th>Amount</th><th>Status</th><th></th>
+            <th>Date</th><th>Amount</th><th>Photo</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
-              <tr>
+              <tr id="rrow-${r.id}">
                 <td><strong>${r.volunteer_name||'—'}</strong></td>
                 <td>${r.family_name||'—'}</td>
                 <td>${r.store||'—'}</td>
-                <td>${fmtDate(r.purchase_date)}</td>
-                <td>${fmtMoney(r.amount)}</td>
+                <td style="white-space:nowrap">${fmtDate(r.purchase_date)}</td>
+                <td><strong>${fmtMoney(r.amount)}</strong></td>
+                <td>${r.file_url
+                  ? `<a href="${r.file_url}?token=${TOKEN}" target="_blank" style="color:var(--green);font-size:13px">📷 View</a>`
+                  : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td>${badge(r.status)}</td>
-                <td>
+                <td style="white-space:nowrap" id="receipt-actions-${r.id}">
                   ${r.status==='pending' ? `
-                    <button class="btn btn-sm" onclick="approveReceipt('${r.id}')">Approve</button>
-                    <button class="btn btn-outline btn-sm" onclick="rejectReceipt('${r.id}')" style="margin-left:4px">Reject</button>
-                  ` : ''}
+                    <button class="btn btn-sm" onclick="approveReceipt('${r.id}')">✓ Approve</button>
+                    <button class="btn btn-outline btn-sm" onclick="rejectReceipt('${r.id}')" style="margin-left:4px;color:#c00;border-color:#c00">✗ Reject</button>
+                  ` : r.status==='approved' ? `<span style="color:#1a8754;font-size:12px">✓ Approved</span>`
+                    : r.status==='rejected' ? `<span style="color:#c00;font-size:12px">✗ Rejected</span>` : ''}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="7">No receipts found</td></tr>'}
+              '<tr class="empty-row"><td colspan="8">No receipts found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -1659,17 +1663,25 @@ async function renderReceipts(filter) {
 }
 
 async function approveReceipt(id) {
+  const el = document.getElementById('receipt-actions-' + id);
+  if (el) el.innerHTML = '<span style="color:var(--gray-4);font-size:12px">Saving…</span>';
   try {
     await PUT('/receipts/' + id, { status: 'approved' });
-    renderReceipts(STATE.filter);
-  } catch(e) { alert(e.message); }
+    if (el) el.innerHTML = '<span style="color:#1a8754;font-size:12px">✓ Approved</span>';
+    const row = document.getElementById('rrow-' + id);
+    if (row) { const badge = row.querySelector('.badge'); if (badge) badge.outerHTML = '<span class="badge badge-approved">approved</span>'; }
+  } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
 }
 
 async function rejectReceipt(id) {
+  const el = document.getElementById('receipt-actions-' + id);
+  if (el) el.innerHTML = '<span style="color:var(--gray-4);font-size:12px">Saving…</span>';
   try {
     await PUT('/receipts/' + id, { status: 'rejected' });
-    renderReceipts(STATE.filter);
-  } catch(e) { alert(e.message); }
+    if (el) el.innerHTML = '<span style="color:#c00;font-size:12px">✗ Rejected</span>';
+    const row = document.getElementById('rrow-' + id);
+    if (row) { const badge = row.querySelector('.badge'); if (badge) badge.outerHTML = '<span class="badge badge-rejected">rejected</span>'; }
+  } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
 }
 
 // ── Reimbursements ────────────────────────────────────────────────────────────
