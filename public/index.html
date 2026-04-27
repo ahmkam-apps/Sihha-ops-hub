@@ -691,23 +691,74 @@ async function renderDashboard() {
   document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const s = await GET('/dashboard/stats');
+    const [s, cycles] = await Promise.all([
+      GET('/dashboard/stats'),
+      GET('/delivery-cycles')
+    ]);
+
+    // Find the most relevant cycle: open first, then most recent
+    const activeCycle = cycles.find(c => c.status === 'open')
+                     || cycles.find(c => c.status === 'shopping')
+                     || cycles.find(c => c.status === 'closed')
+                     || cycles[0];
+
+    let cycleHTML = '';
+    if (activeCycle) {
+      const statusColors = {
+        draft:'#888', open:'#1a8754', closed:'#e0a800',
+        shopping:'#2e86c1', delivered:'#555'
+      };
+      const statusColor = statusColors[activeCycle.status] || '#888';
+      const actions = [];
+      if (activeCycle.status === 'open' || activeCycle.status === 'closed') {
+        actions.push(`<button class="btn" onclick="nav('orders')">View Orders</button>`);
+      }
+      if (activeCycle.status === 'closed' || activeCycle.status === 'shopping') {
+        actions.push(`<button class="btn" onclick="generateSlotsFromDash('${activeCycle.id}')">Generate Slots</button>`);
+        actions.push(`<button class="btn" onclick="triggerRemindersFromDash()">Send Reminders</button>`);
+      }
+      actions.push(`<button class="btn" onclick="nav('cycles')">Manage Cycles →</button>`);
+
+      cycleHTML = `
+        <div style="background:#fff;border:1.5px solid #ddd;border-radius:8px;padding:18px 20px;margin-bottom:24px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;">Current Cycle</div>
+              <div style="font-size:17px;font-weight:700;color:#111;">${activeCycle.title}</div>
+              <div style="font-size:13px;color:#555;margin-top:4px;">
+                Delivery: ${fmtDateShort(activeCycle.delivery_date_start)} – ${fmtDateShort(activeCycle.delivery_date_end)}
+                &nbsp;·&nbsp;
+                <span style="font-weight:700;color:${statusColor};text-transform:uppercase;font-size:12px;">${activeCycle.status}</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">${actions.join('')}</div>
+          </div>
+        </div>`;
+    } else {
+      cycleHTML = `
+        <div style="background:#f9f9f9;border:1.5px dashed #ddd;border-radius:8px;padding:16px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#888;font-size:14px;">No active delivery cycle</span>
+          <button class="btn" onclick="nav('cycles')">+ Create Cycle</button>
+        </div>`;
+    }
+
     document.getElementById('content').innerHTML = `
+      ${cycleHTML}
       <div class="stats-grid">
         <div class="stat-card" onclick="nav('families')">
-          <div class="stat-label">Families — Total</div>
+          <div class="stat-label">Families</div>
           <div class="stat-value">${s.families_total}</div>
-          <div class="stat-sub">${s.families_active} active · ${s.families_pending} pending</div>
+          <div class="stat-sub">${s.families_active} active · ${s.families_pending} pending approval</div>
         </div>
         <div class="stat-card" onclick="nav('volunteers')">
-          <div class="stat-label">Volunteers — Total</div>
+          <div class="stat-label">Volunteers</div>
           <div class="stat-value">${s.volunteers_total}</div>
           <div class="stat-sub">${s.volunteers_active} active · ${s.volunteers_pending} pending</div>
         </div>
-        <div class="stat-card" onclick="nav('assignments')">
-          <div class="stat-label">Open Assignments</div>
-          <div class="stat-value">${s.assignments_open}</div>
-          <div class="stat-sub">Not yet completed</div>
+        <div class="stat-card" onclick="nav('orders')">
+          <div class="stat-label">Food Orders</div>
+          <div class="stat-value">${s.orders_this_cycle ?? '—'}</div>
+          <div class="stat-sub">Submitted this cycle</div>
         </div>
         <div class="stat-card" onclick="nav('receipts')">
           <div class="stat-label">Receipts Pending</div>
@@ -719,13 +770,31 @@ async function renderDashboard() {
           <div class="stat-value">${fmtMoney(s.spend_this_month)}</div>
           <div class="stat-sub">${fmtMoney(s.spend_total)} all time</div>
         </div>
-      </div>
-      <div style="color:var(--gray-4);font-size:12px;margin-top:8px">
-        Click any card to navigate · Data updates on refresh
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+function fmtDateShort(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso.includes('T') ? iso : iso + 'T12:00:00');
+  return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+}
+
+async function generateSlotsFromDash(cycleId) {
+  try {
+    const res = await POST('/delivery-cycles/' + cycleId + '/generate-slots', {});
+    alert(`Slots generated: ${res.slots_created} new slots created.`);
+    renderDashboard();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function triggerRemindersFromDash() {
+  try {
+    const res = await POST('/reminders/trigger', {});
+    alert(`Reminders sent: ${res.reminders_sent}`);
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // ── Families ──────────────────────────────────────────────────────────────────
@@ -1493,51 +1562,64 @@ async function saveUser() {
 // ── Food Orders ───────────────────────────────────────────────────────────────
 
 async function renderOrders() {
-  const main = document.getElementById('main-content');
-  main.innerHTML = '<p style="padding:24px;color:#888">Loading orders…</p>';
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
 
-  const [cycles, families] = await Promise.all([
-    GET('/delivery-cycles'),
-    GET('/families')
-  ]);
+  try {
+    const cycles = await GET('/delivery-cycles');
+    const openCycle   = cycles.find(c => c.status === 'open');
+    const defaultCycle = openCycle || cycles.find(c => c.status === 'shopping')
+                      || cycles.find(c => c.status === 'closed') || cycles[0];
+    const defaultCycleId = defaultCycle ? defaultCycle.id : null;
 
-  const familyMap = {};
-  families.forEach(f => familyMap[f.id] = f);
+    const cycleOptions = cycles.length
+      ? cycles.map(c =>
+          `<option value="${c.id}" ${c.id === defaultCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
+        ).join('')
+      : '<option value="">No cycles yet</option>';
 
-  const openCycle = cycles.find(c => c.status === 'open');
-  const defaultCycleId = openCycle ? openCycle.id : (cycles[0] ? cycles[0].id : null);
+    document.getElementById('topbar-actions').innerHTML =
+      `<button class="btn" onclick="window.open('/order','_blank')">⇗ Family Order Form</button>`;
 
-  const cycleOptions = cycles.map(c =>
-    `<option value="${c.id}" ${c.id === defaultCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
-  ).join('');
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Food Orders</span>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="orders-cycle-select" class="search-input" style="min-width:240px;"
+                    onchange="loadOrdersForCycle(this.value)">
+              <option value="">— Select a cycle —</option>
+              ${cycleOptions}
+            </select>
+            <button class="btn" id="gen-slots-btn" onclick="generateSlotsForSelected()" style="display:none;">
+              Generate Slots
+            </button>
+          </div>
+        </div>
+        <div id="orders-table-wrap">
+          <p style="padding:24px;color:var(--gray-4);">Select a cycle above to view orders.</p>
+        </div>
+      </div>`;
 
-  main.innerHTML = `
-    <div style="padding:24px;">
-      <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
-        <select id="orders-cycle-select" class="search-input" style="width:280px;" onchange="loadOrdersForCycle(this.value)">
-          <option value="">— Select a cycle —</option>
-          ${cycleOptions}
-        </select>
-        <button class="btn" onclick="window.open('/order','_blank')">⇗ Open Family Order Form</button>
-      </div>
-      <div id="orders-table-wrap"></div>
-    </div>`;
-
-  if (defaultCycleId) loadOrdersForCycle(defaultCycleId);
+    if (defaultCycleId) loadOrdersForCycle(defaultCycleId);
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
 }
 
 async function loadOrdersForCycle(cycleId) {
-  if (!cycleId) {
-    document.getElementById('orders-table-wrap').innerHTML = '';
-    return;
-  }
-  document.getElementById('orders-table-wrap').innerHTML =
-    '<p style="color:#888;padding:8px 0;">Loading…</p>';
+  const wrap = document.getElementById('orders-table-wrap');
+  const genBtn = document.getElementById('gen-slots-btn');
+  if (!cycleId) { wrap.innerHTML = ''; if(genBtn) genBtn.style.display='none'; return; }
+
+  wrap.innerHTML = '<p style="padding:16px;color:var(--gray-4);">Loading…</p>';
 
   const [orders, slots] = await Promise.all([
     GET('/delivery-cycles/' + cycleId + '/orders'),
     GET('/volunteer-slots?cycle_id=' + cycleId)
   ]);
+
+  // Show Generate Slots button when slots haven't been made yet
+  if (genBtn) genBtn.style.display = slots.length === 0 && orders.length > 0 ? '' : 'none';
 
   const slotMap = {};
   slots.forEach(s => {
@@ -1546,50 +1628,64 @@ async function loadOrdersForCycle(cycleId) {
   });
 
   const statusBadge = s => {
-    const map = { submitted:'#2e86c1', assigned:'#1a8754', delivered:'#666', cancelled:'#c0392b' };
-    return `<span class="badge" style="background:${map[s]||'#888'};color:#fff;border:none">${s}</span>`;
+    const map = { submitted:'#2e86c1', assigned:'#1a8754', delivered:'#155724', cancelled:'#c0392b' };
+    return `<span class="badge" style="background:${map[s]||'#888'};color:#fff;border:none;">${s}</span>`;
   };
 
   const slotBadge = slot => {
-    if (!slot) return '<span style="color:#aaa;font-size:12px;">—</span>';
+    if (!slot) return `<span style="color:#bbb;font-size:12px;">no slot</span>`;
     const colors = { open:'#e0a800', claimed:'#1a8754', complete:'#155724', cancelled:'#c0392b' };
-    const label = slot.status === 'claimed' || slot.status === 'complete'
-      ? `${slot.claimed_by_name || '?'} (${slot.status})`
+    const label = (slot.status === 'claimed' || slot.status === 'complete')
+      ? `${slot.claimed_by_name || '?'}`
       : slot.status;
-    return `<span class="badge" style="background:${colors[slot.status]||'#888'};color:#fff;border:none;font-size:11px;">${label}</span>`;
+    return `<span class="badge" style="background:${colors[slot.status]||'#888'};color:#fff;border:none;font-size:11px;" title="${slot.status}">${label}</span>`;
   };
 
-  const rows = orders.length === 0
-    ? `<tr class="empty-row"><td colspan="6">No orders for this cycle yet.<br>
-        Share the <a href="/order" target="_blank" style="color:#1a3a2a;">family order form</a> to start collecting requests.</td></tr>`
-    : orders.map(o => {
-        const shop = slotMap[o.family_id]?.shopping;
-        const del  = slotMap[o.family_id]?.delivery;
-        return `<tr>
-          <td><strong>${o.family_name}</strong></td>
-          <td>${o.family_size || '—'}</td>
-          <td><span class="badge">${o.bundle_size}</span></td>
-          <td>${statusBadge(o.status)}</td>
-          <td>${slotBadge(shop)}</td>
-          <td>${slotBadge(del)}</td>
-        </tr>`;
-      }).join('');
+  if (orders.length === 0) {
+    wrap.innerHTML = `
+      <div style="padding:32px;text-align:center;color:var(--gray-4);">
+        No orders for this cycle yet.<br>
+        <a href="/order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order form →</a>
+      </div>`;
+    return;
+  }
 
-  document.getElementById('orders-table-wrap').innerHTML = `
-    <p style="font-size:13px;color:#666;margin-bottom:12px;">${orders.length} order${orders.length!==1?'s':''} submitted</p>
+  const rows = orders.map(o => {
+    const shop = slotMap[o.family_id]?.shopping;
+    const del  = slotMap[o.family_id]?.delivery;
+    return `<tr>
+      <td><strong>${o.family_name}</strong></td>
+      <td style="color:var(--gray-4);">${o.family_size || '—'}</td>
+      <td><span class="badge">${o.bundle_size}</span></td>
+      <td>${statusBadge(o.status)}</td>
+      <td>${slotBadge(shop)}</td>
+      <td>${slotBadge(del)}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
     <table>
       <thead>
         <tr>
-          <th>Family</th>
-          <th>Size</th>
-          <th>Bundle</th>
-          <th>Order Status</th>
-          <th>Shopper</th>
-          <th>Delivery</th>
+          <th>Family</th><th>Size</th><th>Bundle</th>
+          <th>Status</th><th>Shopper</th><th>Delivery</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>
+    <div style="padding:12px 16px;font-size:12px;color:var(--gray-4);border-top:1px solid var(--gray-2);">
+      ${orders.length} order${orders.length !== 1 ? 's' : ''} · ${slots.length} slots generated
+    </div>`;
+}
+
+async function generateSlotsForSelected() {
+  const cycleId = document.getElementById('orders-cycle-select').value;
+  if (!cycleId) return;
+  try {
+    const res = await POST('/delivery-cycles/' + cycleId + '/generate-slots', {});
+    alert(`${res.slots_created} slots created (${res.total_requests} orders).`);
+    loadOrdersForCycle(cycleId);
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // ── Delivery Cycles ───────────────────────────────────────────────────────────
