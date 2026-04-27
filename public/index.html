@@ -887,7 +887,7 @@ async function renderDashboard() {
           <div class="stat-value">${fmtMoney(s.reimb_paid_month)}</div>
           <div class="stat-sub">${fmtMoney(s.reimb_paid_total)} all time</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" onclick="nav('donations')" style="cursor:pointer;">
           <div class="stat-label">Donations</div>
           <div class="stat-value" style="color:#1a8754">${fmtMoney(s.donations_month)}</div>
           <div class="stat-sub">This month · ${fmtMoney(s.donations_total)} total</div>
@@ -899,7 +899,42 @@ async function renderDashboard() {
         </div>
       </div>`;
 
-    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML;
+    // ── Donations Trend ──────────────────────────────────────────────────────
+    let donationsTrendHTML = '';
+    const dm = s.donations_by_month || [];
+    if (dm.length > 0) {
+      const maxVal = Math.max(...dm.map(m => m.total), 1);
+      const mLabel = iso => new Date(+iso.slice(0,4), +iso.slice(5,7)-1, 1)
+                              .toLocaleDateString('en-US', {month:'short'});
+      donationsTrendHTML = `
+        <div style="background:#fff;border-radius:10px;padding:16px 20px;margin-top:4px;border:1.5px solid #e8e8e8;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;">Donations — Last 6 Months</div>
+            <div style="display:flex;gap:12px;font-size:11px;">
+              <span style="color:#1a8754;">● Monthly recurring</span>
+              <span style="color:#b2dfdb;">● One-time</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:8px;height:80px;">
+            ${dm.map(m => {
+              const totalPct  = Math.round(m.total   / maxVal * 100);
+              const recurPct  = Math.round(m.recurring / maxVal * 100);
+              const oneTimePct = totalPct - recurPct;
+              return `
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;">
+                <div style="font-size:10px;color:#888;white-space:nowrap;">${fmtMoney(m.total)}</div>
+                <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:50px;gap:1px;">
+                  <div style="width:100%;height:${recurPct}%;background:#1a8754;border-radius:3px 3px 0 0;min-height:${m.recurring>0?2:0}px;"></div>
+                  <div style="width:100%;height:${oneTimePct}%;background:#b2dfdb;min-height:${m.one_time>0?2:0}px;border-radius:${m.recurring>0?'0':'3px 3px'} 0 0;"></div>
+                </div>
+                <div style="font-size:10px;color:#aaa;">${mLabel(m.month)}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+    }
+
+    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsTrendHTML;
 
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
@@ -1755,10 +1790,51 @@ async function renderDonations(filter) {
   try {
     const rows = await GET('/donations');
     const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
-    document.getElementById('content').innerHTML = `
+
+    // ── Monthly summary ───────────────────────────────────────────────────────
+    const byMonth = {};
+    rows.forEach(r => {
+      const m = (r.date || '').slice(0, 7);
+      if (!m) return;
+      if (!byMonth[m]) byMonth[m] = { total: 0, count: 0, recurring: 0, oneTime: 0 };
+      byMonth[m].total    += r.amount || 0;
+      byMonth[m].count++;
+      if (r.frequency === 'monthly') byMonth[m].recurring += r.amount || 0;
+      else                           byMonth[m].oneTime   += r.amount || 0;
+    });
+    const months = Object.keys(byMonth).sort().reverse();
+    const monthLabel = iso => {
+      const [y, m] = iso.split('-');
+      return new Date(+y, +m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    };
+    const monthlyCardsHTML = months.length ? `
+      <div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin-bottom:18px;">
+        ${months.map(m => {
+          const d = byMonth[m];
+          const recurPct = d.total > 0 ? Math.round(d.recurring / d.total * 100) : 0;
+          return `
+          <div style="min-width:140px;background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:12px 14px;flex-shrink:0;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px;">${monthLabel(m)}</div>
+            <div style="font-size:20px;font-weight:800;color:#1a8754;">${fmtMoney(d.total)}</div>
+            <div style="font-size:11px;color:#aaa;margin-top:2px;">${d.count} donation${d.count !== 1 ? 's' : ''}</div>
+            ${d.recurring > 0 ? `
+            <div style="margin-top:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-bottom:3px;">
+                <span style="color:#1a8754;">↺ ${fmtMoney(d.recurring)}</span>
+                <span style="color:#e67e22;">◎ ${fmtMoney(d.oneTime)}</span>
+              </div>
+              <div style="height:4px;background:#f0f0f0;border-radius:2px;overflow:hidden;">
+                <div style="height:100%;width:${recurPct}%;background:#1a8754;border-radius:2px;"></div>
+              </div>
+            </div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>` : '';
+
+    document.getElementById('content').innerHTML = monthlyCardsHTML + `
       <div class="table-card">
         <div class="table-header">
-          <span class="table-title">Donations <span style="font-size:13px;font-weight:400;color:var(--gray-4)">${fmtMoney(total)} total</span></span>
+          <span class="table-title">All Donations <span style="font-size:13px;font-weight:400;color:var(--gray-4)">${fmtMoney(total)} total</span></span>
         </div>
         <table>
           <thead><tr>

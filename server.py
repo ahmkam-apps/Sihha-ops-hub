@@ -1079,6 +1079,20 @@ def dashboard_stats():
         'donations_count':   db.execute("SELECT COUNT(*) FROM donations").fetchone()[0],
     }
 
+    # Monthly donations — last 6 months for trend chart
+    monthly_rows = db.execute("""
+        SELECT substr(date,1,7) AS month,
+               COALESCE(SUM(amount),0) AS total,
+               COUNT(*) AS count,
+               COALESCE(SUM(CASE WHEN frequency='monthly' THEN amount ELSE 0 END),0) AS recurring,
+               COALESCE(SUM(CASE WHEN frequency<>'monthly' OR frequency IS NULL THEN amount ELSE 0 END),0) AS one_time
+        FROM donations
+        WHERE date >= date('now','-6 months')
+        GROUP BY month
+        ORDER BY month ASC
+    """).fetchall()
+    stats['donations_by_month'] = [dict(r) for r in monthly_rows]
+
     # Active cycle stats
     active_cycle = db.execute(
         "SELECT id, title, status FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start LIMIT 1"
