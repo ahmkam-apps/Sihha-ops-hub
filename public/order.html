@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIHAA — Food Request</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f0;
+      color: #1a1a1a;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: #1a3a2a;
+      color: #fff;
+      padding: 20px 24px;
+      text-align: center;
+    }
+    .header h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
+    .header p  { font-size: 14px; opacity: 0.75; margin-top: 4px; }
+
+    /* ── Card ── */
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      padding: 28px 24px;
+      max-width: 540px;
+      margin: 28px auto;
+    }
+
+    /* ── Phase headings ── */
+    .phase-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a3a2a;
+      margin-bottom: 6px;
+    }
+    .phase-sub {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 22px;
+      line-height: 1.5;
+    }
+
+    /* ── Input ── */
+    label { display: block; font-size: 13px; font-weight: 600; color: #444; margin-bottom: 6px; }
+    input[type="tel"] {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1.5px solid #d0d0d0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.2s;
+      -webkit-appearance: none;
+    }
+    input[type="tel"]:focus { outline: none; border-color: #1a3a2a; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 16px;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    .btn-primary   { background: #1a3a2a; color: #fff; }
+    .btn-primary:hover   { background: #254d38; }
+    .btn-secondary { background: #e8f0eb; color: #1a3a2a; }
+    .btn-secondary:hover { background: #d4e4d9; }
+    .btn:disabled  { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Alert banners ── */
+    .alert {
+      padding: 14px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 18px;
+      line-height: 1.5;
+    }
+    .alert-info    { background: #e8f4fd; color: #1a5276; border-left: 4px solid #2e86c1; }
+    .alert-success { background: #eafaf1; color: #1d6a39; border-left: 4px solid #27ae60; }
+    .alert-warn    { background: #fef9e7; color: #7d6608; border-left: 4px solid #f39c12; }
+    .alert-error   { background: #fdedec; color: #922b21; border-left: 4px solid #e74c3c; }
+
+    /* ── Greeting bar ── */
+    .greeting {
+      background: #e8f0eb;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 22px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .greeting-icon { font-size: 26px; }
+    .greeting-name { font-weight: 700; font-size: 16px; color: #1a3a2a; }
+    .greeting-meta { font-size: 13px; color: #555; margin-top: 2px; }
+
+    /* ── Cycle info ── */
+    .cycle-box {
+      border: 1.5px solid #d0d0d0;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 22px;
+      font-size: 14px;
+    }
+    .cycle-box strong { color: #1a3a2a; }
+    .cycle-row { display: flex; justify-content: space-between; margin-top: 6px; }
+    .cycle-row span { color: #444; }
+    .cycle-row b { color: #1a1a1a; }
+
+    /* ── Category & items ── */
+    .category-block { margin-bottom: 24px; }
+    .category-label {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #888;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .item-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid #f0f0f0;
+      cursor: pointer;
+    }
+    .item-row:last-child { border-bottom: none; }
+
+    .item-check {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      border: 2px solid #ccc;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.15s;
+    }
+    .item-row.selected .item-check {
+      background: #1a3a2a;
+      border-color: #1a3a2a;
+    }
+    .item-row.selected .item-check::after {
+      content: '✓';
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .item-info { flex: 1; }
+    .item-name { font-size: 15px; font-weight: 500; }
+    .item-qty  { font-size: 13px; color: #888; margin-top: 2px; }
+    .item-unit { font-size: 13px; color: #aaa; }
+
+    /* ── Select all ── */
+    .select-all-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+    .select-all-btn {
+      background: none;
+      border: none;
+      color: #1a3a2a;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    /* ── Summary bar ── */
+    .summary-bar {
+      background: #f5f5f0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 20px 0;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .summary-bar .count { font-weight: 700; color: #1a3a2a; font-size: 16px; }
+
+    /* ── Divider ── */
+    .divider { border: none; border-top: 1px solid #eee; margin: 20px 0; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Success screen ── */
+    .success-icon {
+      text-align: center;
+      font-size: 56px;
+      margin: 12px 0 16px;
+    }
+    .success-msg {
+      text-align: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: #1a3a2a;
+      margin-bottom: 8px;
+    }
+    .success-sub {
+      text-align: center;
+      font-size: 14px;
+      color: #666;
+      line-height: 1.6;
+    }
+    .success-detail {
+      margin-top: 20px;
+      background: #f5f5f0;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 14px;
+      color: #444;
+      line-height: 1.7;
+    }
+
+    /* ── Register link ── */
+    .register-link {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 14px;
+      color: #666;
+    }
+    .register-link a { color: #1a3a2a; font-weight: 600; text-decoration: none; }
+    .register-link a:hover { text-decoration: underline; }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 13px;
+      color: #aaa;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 560px) {
+      .card { margin: 16px 12px; padding: 22px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>SIHAA Food Program</h1>
+  <p>Submit your food request for the current delivery cycle</p>
+</div>
+
+<!-- ══ STEP 1: Phone check ═══════════════════════════════════════════════════ -->
+<div class="card" id="step-phone">
+  <div class="phase-title">Request Food Assistance</div>
+  <div class="phase-sub">Enter the phone number you registered with to get started.</div>
+
+  <label for="phone-input">Phone Number</label>
+  <input type="tel" id="phone-input" placeholder="e.g. 585-555-0100"
+         inputmode="tel" autocomplete="tel">
+
+  <div id="phone-error" class="alert alert-error" style="display:none;margin-top:14px;"></div>
+
+  <button class="btn btn-primary" id="check-btn" onclick="checkPhone()">Continue</button>
+
+  <div class="register-link" style="margin-top:20px;">
+    Not registered yet? <a href="/intake">Apply for assistance →</a>
+  </div>
+</div>
+
+<!-- ══ STEP 2: Item selection ════════════════════════════════════════════════ -->
+<div class="card" id="step-order" style="display:none;">
+
+  <div class="greeting" id="greeting-bar">
+    <div class="greeting-icon">👋</div>
+    <div>
+      <div class="greeting-name" id="greeting-name"></div>
+      <div class="greeting-meta" id="greeting-meta"></div>
+    </div>
+  </div>
+
+  <div class="cycle-box" id="cycle-info"></div>
+
+  <div class="phase-title">Select Your Items</div>
+  <div class="phase-sub" id="order-sub">Choose the items you need for this delivery. All items are optional — only select what your family needs.</div>
+
+  <div id="order-error" class="alert alert-error" style="display:none;margin-top:0;margin-bottom:16px;"></div>
+
+  <div class="select-all-row">
+    <button class="select-all-btn" id="select-all-btn" onclick="toggleSelectAll()">Select all</button>
+  </div>
+
+  <div id="items-container"></div>
+
+  <div class="summary-bar">
+    <span>Items selected</span>
+    <span class="count" id="selected-count">0</span>
+  </div>
+
+  <button class="btn btn-primary" id="submit-btn" onclick="submitOrder()">Submit Request</button>
+  <button class="btn btn-secondary" style="margin-top:10px;" onclick="goBack()">← Change phone number</button>
+</div>
+
+<!-- ══ STEP 3: Already submitted ─────────────────────────────────────────── -->
+<div class="card" id="step-already" style="display:none;">
+  <div class="success-icon">📋</div>
+  <div class="success-msg">Already Submitted</div>
+  <div class="success-sub">You've already placed a request for this delivery cycle.</div>
+  <div class="success-detail" id="already-detail"></div>
+  <button class="btn btn-secondary" style="margin-top:20px;" onclick="goBack()">← Go back</button>
+</div>
+
+<!-- ══ STEP 4: No open cycle ──────────────────────────────────────────────── -->
+<div class="card" id="step-closed" style="display:none;">
+  <div class="success-icon">⏳</div>
+  <div class="success-msg">No Open Cycle</div>
+  <div class="success-sub" id="closed-msg">There are no open delivery cycles at this time. Please check back soon.</div>
+  <button class="btn btn-secondary" style="margin-top:20px;" onclick="goBack()">← Go back</button>
+</div>
+
+<!-- ══ STEP 5: Confirmed ──────────────────────────────────────────────────── -->
+<div class="card" id="step-confirmed" style="display:none;">
+  <div class="success-icon">✅</div>
+  <div class="success-msg">Request Submitted!</div>
+  <div class="success-sub">JazakAllah Khair. Your food request has been received.</div>
+  <div class="success-detail" id="confirmed-detail"></div>
+</div>
+
+<div class="footer">SIHAA Food Charity · Rochester, NY</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let _state = {
+    familyId: null,
+    cycleId: null,
+    cycleTitle: '',
+    deliveryStart: '',
+    deliveryEnd: '',
+    closeAt: '',
+    bundleSize: '',
+    items: [],        // [{id, name, unit, category_name, quantity}]
+    selected: new Set()
+  };
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function show(id) {
+    ['step-phone','step-order','step-already','step-closed','step-confirmed']
+      .forEach(s => document.getElementById(s).style.display = s === id ? '' : 'none');
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.includes('T') ? iso : iso + 'T12:00:00');
+    return d.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
+  }
+
+  function setBtn(id, loading, text) {
+    const b = document.getElementById(id);
+    b.disabled = loading;
+    b.innerHTML = loading ? `<span class="spinner"></span> ${text}` : text;
+  }
+
+  // ── Step 1: Phone check ────────────────────────────────────────────────────
+  document.getElementById('phone-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') checkPhone();
+  });
+
+  async function checkPhone() {
+    const phone = document.getElementById('phone-input').value.trim();
+    if (!phone) {
+      showPhoneError('Please enter your phone number.');
+      return;
+    }
+    document.getElementById('phone-error').style.display = 'none';
+    setBtn('check-btn', true, 'Checking…');
+
+    try {
+      const res = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
+      const data = await res.json();
+
+      if (!data.registered) {
+        showPhoneError(data.message || 'Phone number not found. Please register first.');
+        setBtn('check-btn', false, 'Continue');
+        return;
+      }
+
+      if (!data.open_cycle) {
+        document.getElementById('closed-msg').textContent = data.message || 'No open cycles at this time.';
+        show('step-closed');
+        return;
+      }
+
+      if (data.already_submitted) {
+        document.getElementById('already-detail').innerHTML =
+          `<strong>Delivery window:</strong> ${fmtDate(data.delivery_start)} – ${fmtDate(data.delivery_end)}<br>
+           Your request is in progress. A volunteer will contact you about delivery.`;
+        show('step-already');
+        return;
+      }
+
+      // Ready to order
+      _state.familyId     = data.family_id;
+      _state.cycleId      = data.cycle_id;
+      _state.cycleTitle   = data.cycle_title;
+      _state.deliveryStart = data.delivery_start;
+      _state.deliveryEnd   = data.delivery_end;
+      _state.closeAt       = data.request_close_at;
+      _state.bundleSize    = data.bundle_size;
+      _state.items         = data.food_items || [];
+      _state.selected      = new Set(_state.items.map(i => i.id)); // all selected by default
+
+      buildOrderScreen(data);
+      show('step-order');
+
+    } catch(e) {
+      showPhoneError('Connection error. Please try again.');
+      setBtn('check-btn', false, 'Continue');
+    }
+  }
+
+  function showPhoneError(msg) {
+    const el = document.getElementById('phone-error');
+    el.textContent = msg;
+    el.style.display = '';
+  }
+
+  // ── Step 2: Build order screen ─────────────────────────────────────────────
+  function buildOrderScreen(data) {
+    // Greeting
+    document.getElementById('greeting-name').textContent = 'As-salamu alaykum, ' + data.family_name;
+    const bLabel = {S:'Small', M:'Medium', L:'Large'}[data.bundle_size] || data.bundle_size;
+    document.getElementById('greeting-meta').textContent = `Bundle size: ${bLabel}`;
+
+    // Cycle info
+    document.getElementById('cycle-info').innerHTML = `
+      <strong>${data.cycle_title}</strong>
+      <div class="cycle-row">
+        <span>Delivery window</span>
+        <b>${fmtDate(data.delivery_start)} – ${fmtDate(data.delivery_end)}</b>
+      </div>
+      <div class="cycle-row">
+        <span>Request deadline</span>
+        <b>${fmtDate(data.request_close_at)}</b>
+      </div>`;
+
+    // Group items by category
+    const cats = {};
+    for (const item of _state.items) {
+      if (!cats[item.category_name]) cats[item.category_name] = [];
+      cats[item.category_name].push(item);
+    }
+
+    const container = document.getElementById('items-container');
+    container.innerHTML = '';
+
+    for (const [catName, items] of Object.entries(cats)) {
+      const block = document.createElement('div');
+      block.className = 'category-block';
+      block.innerHTML = `<div class="category-label">${catName}</div>`;
+
+      for (const item of items) {
+        const row = document.createElement('div');
+        row.className = 'item-row selected';
+        row.dataset.id = item.id;
+        row.onclick = () => toggleItem(item.id, row);
+        row.innerHTML = `
+          <div class="item-check"></div>
+          <div class="item-info">
+            <div class="item-name">${item.name}</div>
+            <div class="item-unit">${item.unit}</div>
+          </div>`;
+        block.appendChild(row);
+      }
+      container.appendChild(block);
+    }
+
+    updateCount();
+  }
+
+  // ── Item toggle ────────────────────────────────────────────────────────────
+  function toggleItem(id, row) {
+    if (_state.selected.has(id)) {
+      _state.selected.delete(id);
+      row.classList.remove('selected');
+    } else {
+      _state.selected.add(id);
+      row.classList.add('selected');
+    }
+    updateCount();
+    updateSelectAllBtn();
+  }
+
+  function toggleSelectAll() {
+    const allSelected = _state.selected.size === _state.items.length;
+    document.querySelectorAll('.item-row').forEach(row => {
+      const id = row.dataset.id;
+      if (allSelected) {
+        _state.selected.delete(id);
+        row.classList.remove('selected');
+      } else {
+        _state.selected.add(id);
+        row.classList.add('selected');
+      }
+    });
+    updateCount();
+    updateSelectAllBtn();
+  }
+
+  function updateCount() {
+    document.getElementById('selected-count').textContent = _state.selected.size;
+  }
+
+  function updateSelectAllBtn() {
+    const allSelected = _state.selected.size === _state.items.length;
+    document.getElementById('select-all-btn').textContent = allSelected ? 'Deselect all' : 'Select all';
+  }
+
+  // ── Step 2 → Step 1 ────────────────────────────────────────────────────────
+  function goBack() {
+    document.getElementById('phone-error').style.display = 'none';
+    setBtn('check-btn', false, 'Continue');
+    show('step-phone');
+    document.getElementById('phone-input').focus();
+  }
+
+  // ── Step 3: Submit ─────────────────────────────────────────────────────────
+  async function submitOrder() {
+    document.getElementById('order-error').style.display = 'none';
+    setBtn('submit-btn', true, 'Submitting…');
+
+    try {
+      const res = await fetch('/api/food-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          family_id: _state.familyId,
+          cycle_id:  _state.cycleId,
+          selected_items: [..._state.selected]
+        })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        const err = document.getElementById('order-error');
+        err.textContent = data.error || 'Something went wrong. Please try again.';
+        err.style.display = '';
+        setBtn('submit-btn', false, 'Submit Request');
+        return;
+      }
+
+      // Success
+      const sel = _state.selected.size;
+      const total = _state.items.length;
+      document.getElementById('confirmed-detail').innerHTML =
+        `<strong>Delivery:</strong> ${fmtDate(_state.deliveryStart)} – ${fmtDate(_state.deliveryEnd)}<br>
+         <strong>Items requested:</strong> ${sel} of ${total}<br><br>
+         A volunteer will be in touch about drop-off. If you have questions, contact your coordinator.`;
+      show('step-confirmed');
+
+    } catch(e) {
+      const err = document.getElementById('order-error');
+      err.textContent = 'Connection error. Please try again.';
+      err.style.display = '';
+      setBtn('submit-btn', false, 'Submit Request');
+    }
+  }
+</script>
+</body>
+</html>
