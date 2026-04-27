@@ -716,6 +716,48 @@ def require_portal_auth():
         return wrapper
     return decorator
 
+# ── Schema migration helper ───────────────────────────────────────────────────
+
+VALID_ROLES = {'admin', 'volunteer', 'finance', 'treasurer', 'viewer'}
+
+def _ensure_treasurer_role(conn):
+    """Ensure the users table CHECK constraint includes 'treasurer'.
+    Safe to call multiple times; no-op if already migrated."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchone()
+    if not row or 'treasurer' in row[0]:
+        return  # already migrated or table doesn't exist
+    log.info('_ensure_treasurer_role: running users table migration')
+    try:
+        conn.execute('PRAGMA foreign_keys=OFF')
+        conn.executescript('''
+            CREATE TABLE IF NOT EXISTS users_new (
+                id            TEXT PRIMARY KEY,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                name          TEXT,
+                role          TEXT NOT NULL DEFAULT 'viewer'
+                              CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
+                email         TEXT,
+                wa_phone      TEXT,
+                wa_apikey     TEXT,
+                active        INTEGER NOT NULL DEFAULT 1,
+                created_at    TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO users_new
+                (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
+            SELECT id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at
+            FROM users;
+            DROP TABLE IF EXISTS users;
+            ALTER TABLE users_new RENAME TO users;
+        ''')
+        conn.execute('PRAGMA foreign_keys=ON')
+        log.info('_ensure_treasurer_role: migration complete')
+    except Exception as _e:
+        conn.execute('PRAGMA foreign_keys=ON')
+        log.warning(f'_ensure_treasurer_role: migration failed ({_e})')
+
 # ── WhatsApp (CallMeBot) ──────────────────────────────────────────────────────
 
 def _wa_send(phone, apikey, message):
@@ -855,18 +897,33 @@ def create_user():
     data = request.json or {}
     if not data.get('username') or not data.get('password'):
         return jsonify({'error': 'Username and password required'}), 422
+    new_role = data.get('role', 'viewer')
+    if new_role not in VALID_ROLES:
+        return jsonify({'error': f'Invalid role "{new_role}"'}), 400
     uid = str(uuid.uuid4())
+    db = get_db()
     try:
-        get_db().execute(
+        db.execute(
             '''INSERT INTO users (id, username, password_hash, name, role, email, wa_phone, wa_apikey, created_at)
                VALUES (?,?,?,?,?,?,?,?,?)''',
             (uid, data['username'], generate_password_hash(data['password']),
-             data.get('name'), data.get('role', 'viewer'),
+             data.get('name'), new_role,
              data.get('email'), data.get('wa_phone'), data.get('wa_apikey'), now())
         )
-        get_db().commit()
-    except sqlite3.IntegrityError:
-        return jsonify({'error': 'Username already exists'}), 409
+        db.commit()
+    except sqlite3.IntegrityError as e:
+        if 'CHECK constraint' in str(e):
+            _ensure_treasurer_role(db)
+            db.execute(
+                '''INSERT INTO users (id, username, password_hash, name, role, email, wa_phone, wa_apikey, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)''',
+                (uid, data['username'], generate_password_hash(data['password']),
+                 data.get('name'), new_role,
+                 data.get('email'), data.get('wa_phone'), data.get('wa_apikey'), now())
+            )
+            db.commit()
+        else:
+            return jsonify({'error': 'Username already exists'}), 409
     return jsonify({'id': uid, 'username': data['username']}), 201
 
 @app.route('/api/users/<uid>', methods=['PUT'])
@@ -877,15 +934,35 @@ def update_user(uid):
     row = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
+    new_role = data.get('role', row['role'])
+    if new_role not in VALID_ROLES:
+        return jsonify({'error': f'Invalid role "{new_role}". Must be one of: {", ".join(sorted(VALID_ROLES))}'}), 400
     new_hash = generate_password_hash(data['password']) if data.get('password') else row['password_hash']
-    db.execute(
-        "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
-        (data.get('name', row['name']), data.get('role', row['role']),
-         data.get('active', row['active']), new_hash,
-         data.get('email', row['email']), data.get('wa_phone', row['wa_phone']),
-         data.get('wa_apikey', row['wa_apikey']), uid)
+    params = (
+        data.get('name', row['name']), new_role,
+        data.get('active', row['active']), new_hash,
+        data.get('email', row['email']), data.get('wa_phone', row['wa_phone']),
+        data.get('wa_apikey', row['wa_apikey']), uid
     )
-    db.commit()
+    try:
+        db.execute(
+            "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
+            params
+        )
+        db.commit()
+    except sqlite3.IntegrityError as e:
+        if 'CHECK constraint' in str(e):
+            # Schema migration didn't complete on this instance — fix it now and retry
+            _ensure_treasurer_role(db)
+            db.execute(
+                "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
+                params
+            )
+            db.commit()
+        else:
+            return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     return jsonify({'ok': True})
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
