@@ -393,6 +393,51 @@ def bootstrap_db():
         )
         log.info('Food catalog seeded with default items and bundle quantities.')
 
+    # ── Idempotent column migrations (alter existing tables safely) ───────────
+    for _col, _def in [('wa_phone', 'TEXT'), ('wa_apikey', 'TEXT')]:
+        try:
+            conn.execute(f'ALTER TABLE volunteers ADD COLUMN {_col} {_def}')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # ── Phase 3C tables ───────────────────────────────────────────────────────
+    conn.executescript('''
+        CREATE TABLE IF NOT EXISTS volunteer_slots (
+            id          TEXT PRIMARY KEY,
+            cycle_id    TEXT NOT NULL,
+            family_id   TEXT NOT NULL,
+            task_type   TEXT NOT NULL CHECK(task_type IN ('shopping','delivery')),
+            task_date   TEXT,
+            claimed_by  TEXT,
+            claimed_at  TEXT,
+            status      TEXT NOT NULL DEFAULT 'open'
+                        CHECK(status IN ('open','claimed','complete','cancelled')),
+            notes       TEXT,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT,
+            UNIQUE(cycle_id, family_id, task_type),
+            FOREIGN KEY (cycle_id)   REFERENCES delivery_cycles(id),
+            FOREIGN KEY (family_id)  REFERENCES families(id),
+            FOREIGN KEY (claimed_by) REFERENCES volunteers(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS portal_sessions (
+            token        TEXT PRIMARY KEY,
+            volunteer_id TEXT NOT NULL,
+            expires_at   TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            FOREIGN KEY (volunteer_id) REFERENCES volunteers(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reminder_log (
+            id       TEXT PRIMARY KEY,
+            slot_id  TEXT NOT NULL,
+            sent_to  TEXT NOT NULL,
+            sent_at  TEXT NOT NULL,
+            UNIQUE(slot_id, sent_to)
+        );
+    ''')
+
     conn.commit()
     conn.close()
     log.info('Database bootstrapped.')
@@ -434,6 +479,49 @@ def require_auth(roles=None):
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXT
+
+# ── Portal Auth (volunteer self-service, phone-based) ─────────────────────────
+
+def get_portal_session(token):
+    return get_db().execute(
+        '''SELECT ps.token, ps.volunteer_id, v.name, v.phone, v.role,
+                  v.wa_phone, v.wa_apikey
+           FROM portal_sessions ps JOIN volunteers v ON ps.volunteer_id = v.id
+           WHERE ps.token=? AND ps.expires_at > ?''',
+        (token, now())
+    ).fetchone()
+
+def require_portal_auth():
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            auth = request.headers.get('Authorization', '')
+            if not auth.startswith('Bearer '):
+                return jsonify({'error': 'Unauthorized'}), 401
+            session = get_portal_session(auth[7:])
+            if not session:
+                return jsonify({'error': 'Session expired — please log in again'}), 401
+            g.pv = dict(session)  # portal volunteer
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# ── WhatsApp (CallMeBot) ──────────────────────────────────────────────────────
+
+def _wa_send(phone, apikey, message):
+    """Send a WhatsApp message via CallMeBot. Free, no Twilio needed.
+    Volunteer opt-in: ask them to WhatsApp +1 (206) 337-5002 → they receive their apikey.
+    Returns True on success, False on failure (never raises)."""
+    import urllib.request, urllib.parse
+    try:
+        url = ('https://api.callmebot.com/whatsapp.php?'
+               + urllib.parse.urlencode({'phone': phone, 'text': message, 'apikey': apikey}))
+        urllib.request.urlopen(url, timeout=10)
+        log.info(f'WhatsApp sent to {phone}')
+        return True
+    except Exception as e:
+        log.warning(f'WhatsApp send failed to {phone}: {e}')
+        return False
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -657,10 +745,12 @@ def create_volunteer():
     vid = str(uuid.uuid4())
     get_db().execute(
         '''INSERT INTO volunteers
-           (id,name,phone,email,role,availability,service_area,status,notes,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+           (id,name,phone,email,role,availability,service_area,
+            wa_phone,wa_apikey,status,notes,source,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (vid, data['name'], data.get('phone'), data.get('email'),
          data.get('role', 'shopper'), data.get('availability'), data.get('service_area'),
+         data.get('wa_phone'), data.get('wa_apikey'),
          data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'), now())
     )
     get_db().commit()
@@ -682,10 +772,11 @@ def update_volunteer(vid):
     d = request.json or {}
     db.execute(
         '''UPDATE volunteers SET name=?,phone=?,email=?,role=?,availability=?,
-           service_area=?,status=?,notes=?,updated_at=? WHERE id=?''',
+           service_area=?,wa_phone=?,wa_apikey=?,status=?,notes=?,updated_at=? WHERE id=?''',
         (d.get('name', row['name']), d.get('phone', row['phone']),
          d.get('email', row['email']), d.get('role', row['role']),
          d.get('availability', row['availability']), d.get('service_area', row['service_area']),
+         d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          d.get('status', row['status']), d.get('notes', row['notes']), now(), vid)
     )
     db.commit()
@@ -1511,9 +1602,296 @@ def submit_food_order():
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
+# ── Public Volunteer Portal ───────────────────────────────────────────────────
+
+@app.route('/portal')
+def portal_page():
+    return send_from_directory('public', 'portal.html')
+
+@app.route('/api/portal/login', methods=['POST'])
+def portal_login():
+    data = request.json or {}
+    phone = (data.get('phone') or '').strip()
+    if not phone:
+        return jsonify({'error': 'Phone number required'}), 400
+    db = get_db()
+    vol = db.execute(
+        "SELECT * FROM volunteers WHERE phone=? AND status='active'", (phone,)
+    ).fetchone()
+    if not vol:
+        return jsonify({'error': 'No active volunteer found with this phone number. Contact a coordinator if you need help.'}), 404
+    token = str(uuid.uuid4())
+    expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
+    db.execute(
+        "INSERT INTO portal_sessions (token, volunteer_id, expires_at, created_at) VALUES (?,?,?,?)",
+        (token, vol['id'], expires_at, now())
+    )
+    db.commit()
+    return jsonify({
+        'token': token,
+        'volunteer': {'id': vol['id'], 'name': vol['name'],
+                      'phone': vol['phone'], 'role': vol['role']}
+    })
+
+@app.route('/api/portal/cycles')
+@require_portal_auth()
+def portal_list_cycles():
+    """Return cycles that are open, closed, or shopping — relevant to volunteers."""
+    rows = get_db().execute(
+        "SELECT * FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start DESC"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/portal/slots/<cycle_id>')
+@require_portal_auth()
+def portal_get_slots(cycle_id):
+    db = get_db()
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
+    if not cycle:
+        return jsonify({'error': 'Cycle not found'}), 404
+    vol_id = g.pv['volunteer_id']
+    slots = db.execute(
+        '''SELECT vs.*, f.name as family_name, f.family_size,
+                  1 as hide_address,
+                  CASE WHEN vs.claimed_by=? THEN 1 ELSE 0 END as is_mine,
+                  v.name as claimed_by_name
+           FROM volunteer_slots vs
+           JOIN families f ON vs.family_id = f.id
+           LEFT JOIN volunteers v ON vs.claimed_by = v.id
+           WHERE vs.cycle_id=? AND vs.status != 'cancelled'
+           ORDER BY vs.task_type, f.name''',
+        (vol_id, cycle_id)
+    ).fetchall()
+    result = []
+    for s in slots:
+        row = dict(s)
+        # Delivery volunteers see address only for their own claimed slots
+        if row['task_type'] == 'delivery' and row['claimed_by'] == vol_id:
+            family = db.execute("SELECT address, city FROM families WHERE id=?", (s['family_id'],)).fetchone()
+            row['family_address'] = f"{family['address']}, {family['city']}" if family else ''
+        result.append(row)
+    return jsonify({'cycle': dict(cycle), 'slots': result, 'volunteer_id': vol_id})
+
+@app.route('/api/portal/claim', methods=['POST'])
+@require_portal_auth()
+def portal_claim_slot():
+    slot_id = (request.json or {}).get('slot_id')
+    if not slot_id:
+        return jsonify({'error': 'slot_id required'}), 422
+    db = get_db()
+    slot = db.execute("SELECT * FROM volunteer_slots WHERE id=?", (slot_id,)).fetchone()
+    if not slot:
+        return jsonify({'error': 'Slot not found'}), 404
+    if slot['status'] != 'open':
+        return jsonify({'error': 'This slot has already been claimed'}), 409
+    vol_id = g.pv['volunteer_id']
+    db.execute(
+        "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='claimed', updated_at=? WHERE id=?",
+        (vol_id, now(), now(), slot_id)
+    )
+    db.commit()
+
+    # WhatsApp confirmation
+    vol = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
+    family = db.execute("SELECT * FROM families WHERE id=?", (slot['family_id'],)).fetchone()
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (slot['cycle_id'],)).fetchone()
+    if vol['wa_phone'] and vol['wa_apikey']:
+        if slot['task_type'] == 'delivery':
+            msg = (f"SIHAA Delivery Confirmed!\n"
+                   f"Family: {family['name']}\n"
+                   f"Address: {family['address']}, {family['city']}\n"
+                   f"Deliver by: {cycle['delivery_date_end']} (by 5pm)\n"
+                   f"JazakAllah Khair!")
+        else:
+            size_row = db.execute(
+                "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
+                (family['family_size'] or 1, family['family_size'] or 1)
+            ).fetchone()
+            bsize = size_row['bundle_size'] if size_row else 'M'
+            items = db.execute(
+                '''SELECT fi.name, bq.quantity FROM bundle_quantities bq
+                   JOIN food_items fi ON bq.food_item_id=fi.id
+                   WHERE bq.bundle_size=? AND fi.is_active=1 ORDER BY fi.display_order''', (bsize,)
+            ).fetchall()
+            item_list = '\n'.join([f"- {i['name']}: {i['quantity']}" for i in items])
+            msg = (f"SIHAA Shopping Confirmed!\n"
+                   f"Family: {family['name']} (Bundle {bsize})\n"
+                   f"Shopping list:\n{item_list}\n"
+                   f"Drop off at Abu Baqr by Sunday 2pm.\n"
+                   f"Send receipt to treasurer. JazakAllah Khair!")
+        _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
+    return jsonify({'ok': True})
+
+@app.route('/api/portal/my-tasks')
+@require_portal_auth()
+def portal_my_tasks():
+    vol_id = g.pv['volunteer_id']
+    rows = get_db().execute(
+        '''SELECT vs.*, f.name as family_name, f.address, f.city, f.family_size,
+                  dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
+           FROM volunteer_slots vs
+           JOIN families f ON vs.family_id = f.id
+           JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+           WHERE vs.claimed_by=? AND vs.status IN ('claimed','complete')
+           ORDER BY dc.delivery_date_start DESC, vs.task_type''',
+        (vol_id,)
+    ).fetchall()
+    result = []
+    for r in rows:
+        row = dict(r)
+        # Shopping volunteers do NOT see family address
+        if row['task_type'] == 'shopping':
+            row['address'] = None
+            row['city'] = None
+        result.append(row)
+    return jsonify(result)
+
+@app.route('/api/portal/complete/<slot_id>', methods=['POST'])
+@require_portal_auth()
+def portal_complete_slot(slot_id):
+    db = get_db()
+    vol_id = g.pv['volunteer_id']
+    slot = db.execute(
+        "SELECT * FROM volunteer_slots WHERE id=? AND claimed_by=?", (slot_id, vol_id)
+    ).fetchone()
+    if not slot:
+        return jsonify({'error': 'Slot not found or not yours'}), 404
+    db.execute("UPDATE volunteer_slots SET status='complete', updated_at=? WHERE id=?", (now(), slot_id))
+    db.commit()
+    return jsonify({'ok': True})
+
+# ── Admin: Generate Slots for a Cycle ─────────────────────────────────────────
+
+@app.route('/api/delivery-cycles/<cid>/generate-slots', methods=['POST'])
+@require_auth(roles=['admin'])
+def generate_cycle_slots(cid):
+    db = get_db()
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()
+    if not cycle:
+        return jsonify({'error': 'Cycle not found'}), 404
+    requests = db.execute(
+        "SELECT * FROM food_requests WHERE cycle_id=?", (cid,)
+    ).fetchall()
+    created = 0
+    for req in requests:
+        for task_type in ['shopping', 'delivery']:
+            task_date = cycle['delivery_date_start'] if task_type == 'delivery' else None
+            try:
+                db.execute(
+                    "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), cid, req['family_id'], task_type, task_date, 'open', now())
+                )
+                created += 1
+            except sqlite3.IntegrityError:
+                pass  # Slot already exists for this family+task
+    db.commit()
+    return jsonify({'ok': True, 'slots_created': created, 'total_requests': len(requests)})
+
+@app.route('/api/volunteer-slots')
+@require_auth()
+def list_volunteer_slots():
+    db = get_db()
+    cycle_id = request.args.get('cycle_id')
+    q = '''SELECT vs.*, f.name as family_name, f.family_size,
+                  v.name as claimed_by_name
+           FROM volunteer_slots vs
+           JOIN families f ON vs.family_id = f.id
+           LEFT JOIN volunteers v ON vs.claimed_by = v.id
+           WHERE 1=1'''
+    params = []
+    if cycle_id:
+        q += " AND vs.cycle_id=?"; params.append(cycle_id)
+    q += " ORDER BY vs.task_type, f.name"
+    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+
+@app.route('/api/volunteer-slots/<sid>', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_volunteer_slot(sid):
+    db = get_db()
+    slot = db.execute("SELECT * FROM volunteer_slots WHERE id=?", (sid,)).fetchone()
+    if not slot:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    db.execute(
+        "UPDATE volunteer_slots SET status=?, notes=?, task_date=?, updated_at=? WHERE id=?",
+        (d.get('status', slot['status']), d.get('notes', slot['notes']),
+         d.get('task_date', slot['task_date']), now(), sid)
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM volunteer_slots WHERE id=?", (sid,)).fetchone()))
+
+# ── WhatsApp Reminders ────────────────────────────────────────────────────────
+
+def _send_reminders_job():
+    """Core reminder logic. Called by scheduler and by the admin trigger endpoint.
+    Uses a direct DB connection (no Flask request context needed).
+    DB-idempotent: reminder_log UNIQUE(slot_id, sent_to) prevents double-sends
+    even when both gunicorn workers run the job simultaneously."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        target_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
+        slots = conn.execute(
+            '''SELECT vs.*, v.name as vol_name, v.wa_phone, v.wa_apikey,
+                      f.name as family_name, f.address, f.city
+               FROM volunteer_slots vs
+               JOIN volunteers v ON vs.claimed_by = v.id
+               JOIN families f ON vs.family_id = f.id
+               WHERE vs.status='claimed' AND vs.task_date=?
+               AND v.wa_phone IS NOT NULL AND v.wa_apikey IS NOT NULL''',
+            (target_date,)
+        ).fetchall()
+        sent = 0
+        for s in slots:
+            try:
+                conn.execute(
+                    "INSERT INTO reminder_log (id,slot_id,sent_to,sent_at) VALUES (?,?,?,?)",
+                    (str(uuid.uuid4()), s['id'], s['wa_phone'], datetime.utcnow().isoformat())
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                continue  # Already sent to this volunteer for this slot
+            if s['task_type'] == 'delivery':
+                msg = (f"SIHAA Reminder: Delivery in 2 days!\n"
+                       f"Family: {s['family_name']}\n"
+                       f"Address: {s['address']}, {s['city']}\n"
+                       f"Deliver by 5pm. JazakAllah Khair!")
+            else:
+                msg = (f"SIHAA Reminder: Shopping in 2 days!\n"
+                       f"Family: {s['family_name']}\n"
+                       f"Drop off at Abu Baqr by Sunday 2pm.\n"
+                       f"Send receipt to treasurer. JazakAllah Khair!")
+            if _wa_send(s['wa_phone'], s['wa_apikey'], msg):
+                sent += 1
+        log.info(f'Reminders: {sent} sent for target date {target_date}')
+        return sent, target_date
+    finally:
+        conn.close()
+
+@app.route('/api/reminders/trigger', methods=['POST'])
+@require_auth(roles=['admin'])
+def trigger_reminders():
+    """Admin manual trigger — also used if Railway Cron is configured."""
+    sent, target_date = _send_reminders_job()
+    return jsonify({'ok': True, 'reminders_sent': sent, 'target_date': target_date})
+
 # ── Bootstrap on startup (runs under both gunicorn and direct execution) ──────
 
 bootstrap_db()
+
+# ── APScheduler: daily 8am UTC reminder job ───────────────────────────────────
+# Runs in each gunicorn worker, but reminder_log idempotency prevents double-sends.
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    _scheduler = BackgroundScheduler(timezone='UTC')
+    _scheduler.add_job(_send_reminders_job, 'cron', hour=8, minute=0,
+                       id='daily_reminders', replace_existing=True)
+    _scheduler.start()
+    log.info('APScheduler started — daily WhatsApp reminders at 08:00 UTC')
+except ImportError:
+    log.warning('APScheduler not installed. Run: pip install apscheduler')
+except Exception as _e:
+    log.warning(f'APScheduler failed to start: {_e}')
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 

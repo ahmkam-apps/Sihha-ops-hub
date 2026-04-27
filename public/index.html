@@ -1021,6 +1021,23 @@ function volunteerFormHTML(r) {
       <label>Notes</label>
       <textarea id="v-notes">${r.notes||''}</textarea>
     </div>
+
+    <div class="form-section">WhatsApp Notifications</div>
+    <div style="font-size:12px;color:var(--gray-4);margin-bottom:12px;line-height:1.6">
+      To receive WhatsApp confirmations and reminders, the volunteer must:<br>
+      1. Send any message to <strong>+1 (206) 337-5002</strong> on WhatsApp<br>
+      2. They will receive an API key — enter it below
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>WhatsApp Phone <span style="font-weight:400;color:var(--gray-4)">(with country code)</span></label>
+        <input type="tel" id="v-wa-phone" value="${r.wa_phone||''}" placeholder="+15855551234">
+      </div>
+      <div class="form-group">
+        <label>CallMeBot API Key</label>
+        <input type="text" id="v-wa-apikey" value="${r.wa_apikey||''}" placeholder="1234567">
+      </div>
+    </div>
     <div class="alert alert-error" id="vol-form-err"></div>`;
 }
 
@@ -1052,7 +1069,9 @@ async function saveVolunteer() {
     status: document.getElementById('v-status').value,
     availability: document.getElementById('v-avail').value.trim(),
     service_area: document.getElementById('v-area').value.trim(),
-    notes: document.getElementById('v-notes').value.trim()
+    notes: document.getElementById('v-notes').value.trim(),
+    wa_phone: document.getElementById('v-wa-phone').value.trim(),
+    wa_apikey: document.getElementById('v-wa-apikey').value.trim()
   };
   try {
     if (STATE.editId) await PUT('/volunteers/' + STATE.editId, payload);
@@ -1594,7 +1613,9 @@ async function viewCycleDetail(cycleId) {
   document.getElementById('page-title').textContent = cycle ? cycle.title : 'Cycle Detail';
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="renderCycles()">← Back to Cycles</button>
-     <button class="btn" onclick="viewShoppingList('${cycleId}')">Shopping List</button>`;
+     <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
+     <button class="btn btn-outline" onclick="viewSlotBoard('${cycleId}')">Slot Board</button>
+     <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading orders…</p>';
   try {
     const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
@@ -1677,6 +1698,65 @@ async function viewShoppingList(cycleId) {
               </tbody>
             </table>
           </div>`).join('')}`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function generateSlots(cycleId) {
+  if (!confirm('Generate shopping + delivery slots for all families that submitted orders in this cycle? Existing slots are preserved.')) return;
+  try {
+    const res = await POST('/delivery-cycles/' + cycleId + '/generate-slots', {});
+    alert(`Done — ${res.slots_created} new slot(s) created from ${res.total_requests} order(s).`);
+    viewSlotBoard(cycleId);
+  } catch(e) { alert(e.message); }
+}
+
+async function viewSlotBoard(cycleId) {
+  const cycle = _cyclesCache.find(c => c.id === cycleId);
+  document.getElementById('page-title').textContent = (cycle ? cycle.title : 'Cycle') + ' — Slot Board';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="renderCycles()">← Back to Cycles</button>
+     <button class="btn btn-outline" onclick="viewCycleDetail('${cycleId}')">Orders</button>
+     <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
+     <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading slots…</p>';
+  try {
+    const slots = await GET('/volunteer-slots?cycle_id=' + cycleId);
+    const shopping = slots.filter(s => s.task_type === 'shopping');
+    const delivery = slots.filter(s => s.task_type === 'delivery');
+    const slotTable = (rows, type) => {
+      if (!rows.length) return `<p style="color:var(--gray-4);padding:12px">No ${type} slots generated yet — click "Generate Slots" above.</p>`;
+      return `<table>
+        <thead><tr><th>Family</th><th>Size</th><th>Status</th><th>Assigned To</th><th>Task Date</th></tr></thead>
+        <tbody>
+          ${rows.map(s => `<tr>
+            <td><strong>${s.family_name}</strong></td>
+            <td style="font-size:12px;color:var(--gray-4)">${s.family_size || '?'} people</td>
+            <td><span class="badge ${s.status==='open'?'badge-pending':s.status==='claimed'?'badge-active':'badge-inactive'}">${s.status}</span></td>
+            <td>${s.claimed_by_name || '<span style="color:var(--gray-4)">—</span>'}</td>
+            <td style="font-size:12px">${s.task_date ? fmtDate(s.task_date) : '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    };
+    document.getElementById('content').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="table-card">
+          <div class="table-header">
+            <span class="table-title">Shopping Slots</span>
+            <span style="font-size:12px;color:var(--gray-4)">${shopping.filter(s=>s.status==='open').length} open · ${shopping.filter(s=>s.status==='claimed').length} claimed</span>
+          </div>
+          ${slotTable(shopping, 'shopping')}
+        </div>
+        <div class="table-card">
+          <div class="table-header">
+            <span class="table-title">Delivery Slots</span>
+            <span style="font-size:12px;color:var(--gray-4)">${delivery.filter(s=>s.status==='open').length} open · ${delivery.filter(s=>s.status==='claimed').length} claimed</span>
+          </div>
+          ${slotTable(delivery, 'delivery')}
+        </div>
+      </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
