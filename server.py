@@ -1824,57 +1824,105 @@ def get_cycle_shopping_list(cid):
         'shopping_list': shopping_list
     })
 
-# ── PDF Reports ───────────────────────────────────────────────────────────────
+# ── Print Reports (HTML → browser PDF) ────────────────────────────────────────
 
-def _pdf_header(canvas_obj, doc, title, subtitle=''):
-    """Draw SIHAA branded header on every page."""
-    from reportlab.lib import colors
-    w, h = doc.pagesize
-    # Dark green header bar
-    canvas_obj.setFillColor(colors.HexColor('#1a3a2a'))
-    canvas_obj.rect(0, h - 60, w, 60, fill=1, stroke=0)
-    canvas_obj.setFillColor(colors.white)
-    canvas_obj.setFont('Helvetica-Bold', 16)
-    canvas_obj.drawString(40, h - 38, 'SIHAA Food Charity')
-    canvas_obj.setFont('Helvetica', 10)
-    canvas_obj.drawRightString(w - 40, h - 25, title)
-    if subtitle:
-        canvas_obj.drawRightString(w - 40, h - 38, subtitle)
-    # Footer
-    canvas_obj.setFillColor(colors.HexColor('#888888'))
-    canvas_obj.setFont('Helvetica', 8)
-    canvas_obj.drawString(40, 20, f'Generated {datetime.utcnow().strftime("%B %d, %Y")}')
-    canvas_obj.drawRightString(w - 40, 20, f'Page {canvas_obj.getPageNumber()}')
-    canvas_obj.setFillColor(colors.HexColor('#dddddd'))
-    canvas_obj.rect(40, 30, w - 80, 0.5, fill=1, stroke=0)
+PRINT_CSS = """
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         font-size: 12px; color: #111; background: #fff; padding: 24px; }
+  .header { background: #1a3a2a; color: #fff; padding: 14px 20px;
+            border-radius: 6px; margin-bottom: 20px;
+            display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 18px; font-weight: 700; }
+  .header .sub { font-size: 12px; opacity: 0.8; margin-top: 3px; }
+  .header .right { text-align: right; font-size: 11px; opacity: 0.8; }
+  .meta { display: flex; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+  .meta-box { background: #f5f5f0; border-radius: 6px; padding: 10px 16px;
+              border-left: 3px solid #1a3a2a; }
+  .meta-box .label { font-size: 10px; text-transform: uppercase;
+                     letter-spacing: 0.5px; color: #888; margin-bottom: 3px; }
+  .meta-box .value { font-size: 20px; font-weight: 700; color: #1a3a2a; }
+  .meta-box .hint  { font-size: 11px; color: #666; }
+  h2 { font-size: 13px; font-weight: 700; color: #1a3a2a; text-transform: uppercase;
+       letter-spacing: 0.5px; margin: 20px 0 8px; border-bottom: 2px solid #1a3a2a;
+       padding-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th { background: #1a3a2a; color: #fff; font-weight: 700; font-size: 11px;
+       padding: 7px 10px; text-align: left; }
+  td { padding: 6px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafaf8; }
+  .total { font-weight: 700; color: #1a3a2a; }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 10px;
+           font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .badge-pending  { background: #fff3cd; color: #856404; }
+  .badge-delivered{ background: #d1f5e0; color: #0a5c2e; }
+  .badge-complete { background: #d1f5e0; color: #0a5c2e; }
+  .badge-claimed  { background: #cce5ff; color: #004085; }
+  .badge-open     { background: #f8d7da; color: #721c24; }
+  .footer { margin-top: 24px; font-size: 10px; color: #aaa;
+            border-top: 1px solid #eee; padding-top: 10px;
+            display: flex; justify-content: space-between; }
+  @media print {
+    body { padding: 0; }
+    .no-print { display: none !important; }
+    @page { margin: 15mm 12mm; }
+  }
+</style>
+"""
+
+def _print_page(title, subtitle, body_html, cycle_title=''):
+    generated = datetime.utcnow().strftime('%B %d, %Y at %H:%M UTC')
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>{title} — {cycle_title}</title>
+{PRINT_CSS}
+</head><body>
+<div class="no-print" style="margin-bottom:16px;">
+  <button onclick="window.print()" style="background:#1a3a2a;color:#fff;border:none;
+    padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">
+    Print / Save as PDF
+  </button>
+  <button onclick="window.close()" style="background:#eee;border:none;
+    padding:8px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px;">
+    Close
+  </button>
+</div>
+<div class="header">
+  <div><div class="sub">SIHAA Food Charity — Operations Hub</div>
+    <h1>{cycle_title}</h1>
+    <div class="sub">{subtitle}</div></div>
+  <div class="right"><strong>{title}</strong><br>Generated {generated}</div>
+</div>
+{body_html}
+<div class="footer">
+  <span>SIHAA Food Charity — Operations Hub</span>
+  <span>Generated {generated}</span>
+</div>
+<script>
+  // Auto-trigger print dialog after a short delay so page is fully rendered
+  // Remove this line if you prefer to click the button manually
+  // setTimeout(() => window.print(), 600);
+</script>
+</body></html>"""
 
 
 @app.route('/api/reports/shopping-list/<cid>', methods=['GET'])
 @require_auth()
 def report_shopping_list(cid):
-    """Generate a printable shopping list PDF for a delivery cycle."""
-    from io import BytesIO
+    """Printable shopping list — returns HTML page, browser prints to PDF."""
     from collections import defaultdict
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-    from reportlab.platypus.flowables import KeepTogether
-
     db = get_db()
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()
     if not cycle:
         return jsonify({'error': 'Cycle not found'}), 404
 
-    # Bundle size counts
     bundle_counts = {r['bundle_size']: r['cnt'] for r in db.execute(
         "SELECT bundle_size, COUNT(*) as cnt FROM food_requests WHERE cycle_id=? AND status!='cancelled' GROUP BY bundle_size",
         (cid,)
     ).fetchall()}
     total_orders = sum(bundle_counts.values())
 
-    # Shopping list data
     rows = db.execute(
         '''SELECT fi.name as item_name, fi.unit,
                   fc.name as category, fc.display_order as cat_order, fi.display_order as item_order,
@@ -1890,134 +1938,79 @@ def report_shopping_list(cid):
         (cid,)
     ).fetchall()
 
-    # Aggregate by item
-    items = defaultdict(lambda: {'category': '', 'unit': '', 'cat_order': 0, 'item_order': 0, 'sizes': {}})
+    items = defaultdict(lambda: {'category':'','unit':'','cat_order':0,'item_order':0,'sizes':{}})
     for r in rows:
         k = r['item_name']
-        items[k]['category']  = r['category']
-        items[k]['unit']      = r['unit']
-        items[k]['cat_order'] = r['cat_order']
-        items[k]['item_order']= r['item_order']
-        qty   = r['quantity'] or 0
-        count = r['order_count'] or 0
+        items[k].update({'category': r['category'], 'unit': r['unit'],
+                         'cat_order': r['cat_order'], 'item_order': r['item_order']})
+        qty, count = r['quantity'] or 0, r['order_count'] or 0
         items[k]['sizes'][r['bundle_size']] = {'qty': qty, 'count': count, 'total': qty * count}
 
-    # Group by category
     by_cat = defaultdict(list)
     for name, info in sorted(items.items(), key=lambda x: (x[1]['cat_order'], x[1]['item_order'])):
-        row_total = sum(v['total'] for v in info['sizes'].values())
-        by_cat[info['category']].append((name, info['unit'], info['sizes'], row_total))
+        by_cat[info['category']].append((name, info['unit'], info['sizes'],
+                                         sum(v['total'] for v in info['sizes'].values())))
 
-    # Build PDF
-    buf  = BytesIO()
-    doc  = SimpleDocTemplate(buf, pagesize=letter,
-                              topMargin=80, bottomMargin=50,
-                              leftMargin=40, rightMargin=40)
-    styles = getSampleStyleSheet()
-    DG     = colors.HexColor('#1a3a2a')
-    LGRAY  = colors.HexColor('#f5f5f0')
-    GRAY   = colors.HexColor('#888888')
+    # Bundle summary
+    body = f"""
+    <div class="meta">
+      <div class="meta-box"><div class="label">Small (S) · 1–2 people</div>
+        <div class="value">{bundle_counts.get('S',0)}</div><div class="hint">families</div></div>
+      <div class="meta-box"><div class="label">Medium (M) · 3–5 people</div>
+        <div class="value">{bundle_counts.get('M',0)}</div><div class="hint">families</div></div>
+      <div class="meta-box"><div class="label">Large (L) · 6+ people</div>
+        <div class="value">{bundle_counts.get('L',0)}</div><div class="hint">families</div></div>
+      <div class="meta-box"><div class="label">Total Orders</div>
+        <div class="value">{total_orders}</div><div class="hint">families</div></div>
+    </div>"""
 
-    title_style = ParagraphStyle('T', parent=styles['Normal'],
-                                 fontSize=18, fontName='Helvetica-Bold', textColor=DG, spaceAfter=4)
-    sub_style   = ParagraphStyle('S', parent=styles['Normal'],
-                                 fontSize=11, fontName='Helvetica', textColor=GRAY, spaceAfter=16)
-    cat_style   = ParagraphStyle('C', parent=styles['Normal'],
-                                 fontSize=12, fontName='Helvetica-Bold', textColor=DG,
-                                 spaceBefore=14, spaceAfter=6)
+    if not rows:
+        body += '<p style="color:#888;padding:20px 0;">No orders submitted for this cycle yet.</p>'
+    else:
+        def fmt(sizes, sz):
+            if sz not in sizes: return '—'
+            d = sizes[sz]
+            return f"{d['qty']} × {d['count']}" if d['count'] else '—'
+        def fmt_total(sizes, sz):
+            if sz not in sizes: return '—'
+            d = sizes[sz]
+            return str(d['total']) if d['total'] else '—'
 
-    story = []
+        for cat_name, cat_items in by_cat.items():
+            rows_html = ''
+            for item_name, unit, sizes, row_total in cat_items:
+                s_qty = fmt_total(sizes, 'S')
+                m_qty = fmt_total(sizes, 'M')
+                l_qty = fmt_total(sizes, 'L')
+                rows_html += f"""<tr>
+                  <td>{item_name}</td><td>{unit}</td>
+                  <td style="text-align:center">{fmt(sizes,'S')}</td>
+                  <td style="text-align:center">{fmt(sizes,'M')}</td>
+                  <td style="text-align:center">{fmt(sizes,'L')}</td>
+                  <td class="total" style="text-align:center">{row_total if row_total else '—'}</td>
+                </tr>"""
+            body += f"""
+            <h2>{cat_name}</h2>
+            <table>
+              <thead><tr>
+                <th>Item</th><th>Unit</th>
+                <th style="text-align:center">S (qty×families)</th>
+                <th style="text-align:center">M (qty×families)</th>
+                <th style="text-align:center">L (qty×families)</th>
+                <th style="text-align:center">TOTAL</th>
+              </tr></thead>
+              <tbody>{rows_html}</tbody>
+            </table>"""
 
-    # Title block
-    story.append(Paragraph(cycle['title'], title_style))
-    delivery = f"{cycle['delivery_date_start']} – {cycle['delivery_date_end']}"
-    story.append(Paragraph(f"Delivery: {delivery}  ·  {total_orders} orders  ·  "
-                            f"S:{bundle_counts.get('S',0)}  M:{bundle_counts.get('M',0)}  L:{bundle_counts.get('L',0)}",
-                            sub_style))
-    story.append(HRFlowable(width='100%', thickness=1.5, color=DG, spaceAfter=14))
-
-    # Bundle summary box
-    summary_data = [
-        ['Bundle', 'Families', ''],
-        ['Small (S)',  str(bundle_counts.get('S', 0)), '1–2 people'],
-        ['Medium (M)', str(bundle_counts.get('M', 0)), '3–5 people'],
-        ['Large (L)',  str(bundle_counts.get('L', 0)), '6+ people'],
-        ['TOTAL',      str(total_orders), ''],
-    ]
-    summary_table = Table(summary_data, colWidths=[1.5*inch, 1*inch, 1.5*inch])
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND',  (0,0), (-1,0), DG),
-        ('TEXTCOLOR',   (0,0), (-1,0), colors.white),
-        ('FONTNAME',    (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE',    (0,0), (-1,-1), 10),
-        ('BACKGROUND',  (0,-1), (-1,-1), LGRAY),
-        ('FONTNAME',    (0,-1), (-1,-1), 'Helvetica-Bold'),
-        ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.white, colors.HexColor('#fafaf8')]),
-        ('GRID',        (0,0), (-1,-1), 0.5, colors.HexColor('#dddddd')),
-        ('ALIGN',       (1,0), (1,-1), 'CENTER'),
-        ('VALIGN',      (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING',  (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING',(0,0), (-1,-1), 5),
-        ('LEFTPADDING', (0,0), (-1,-1), 8),
-    ]))
-    story.append(summary_table)
-    story.append(Spacer(1, 20))
-
-    # Shopping list by category
-    for cat_name, cat_items in by_cat.items():
-        story.append(Paragraph(cat_name.upper(), cat_style))
-        tdata = [['Item', 'Unit', 'S qty×families', 'M qty×families', 'L qty×families', 'TOTAL']]
-        for item_name, unit, sizes, row_total in cat_items:
-            def fmt(sz):
-                if sz not in sizes: return '—'
-                d = sizes[sz]
-                return f"{d['qty']} × {d['count']}" if d['count'] else '—'
-            tdata.append([item_name, unit, fmt('S'), fmt('M'), fmt('L'),
-                          str(row_total) if row_total else '—'])
-
-        t = Table(tdata, colWidths=[1.8*inch, 0.7*inch, 1.1*inch, 1.1*inch, 1.1*inch, 0.8*inch])
-        t.setStyle(TableStyle([
-            ('BACKGROUND',    (0,0), (-1,0), DG),
-            ('TEXTCOLOR',     (0,0), (-1,0), colors.white),
-            ('FONTNAME',      (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE',      (0,0), (-1,-1), 9),
-            ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, colors.HexColor('#fafaf8')]),
-            ('GRID',          (0,0), (-1,-1), 0.5, colors.HexColor('#dddddd')),
-            ('ALIGN',         (2,0), (-1,-1), 'CENTER'),
-            ('FONTNAME',      (-1,1), (-1,-1), 'Helvetica-Bold'),
-            ('TEXTCOLOR',     (-1,1), (-1,-1), DG),
-            ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-            ('TOPPADDING',    (0,0), (-1,-1), 5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING',   (0,0), (-1,-1), 8),
-        ]))
-        story.append(KeepTogether([t]))
-        story.append(Spacer(1, 8))
-
-    cycle_title = cycle['title']
-    doc.build(story,
-              onFirstPage=lambda c,d: _pdf_header(c, d, 'Shopping List', cycle_title),
-              onLaterPages=lambda c,d: _pdf_header(c, d, 'Shopping List', cycle_title))
-
-    buf.seek(0)
-    safe_name = cycle_title.replace(' ', '_').replace('/', '-')
-    return buf.read(), 200, {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': f'attachment; filename="shopping_list_{safe_name}.pdf"'
-    }
+    subtitle = f"Delivery: {cycle['delivery_date_start']} – {cycle['delivery_date_end']}  ·  {total_orders} orders"
+    html = _print_page('Shopping List', subtitle, body, cycle['title'])
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
 @app.route('/api/reports/cycle-summary/<cid>', methods=['GET'])
 @require_auth()
 def report_cycle_summary(cid):
-    """Generate a cycle summary PDF — orders, volunteers, delivery status."""
-    from io import BytesIO
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-
+    """Printable cycle summary — returns HTML page, browser prints to PDF."""
     db = get_db()
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()
     if not cycle:
@@ -2025,9 +2018,7 @@ def report_cycle_summary(cid):
 
     orders = db.execute(
         '''SELECT fr.bundle_size, fr.status, fr.delivered_at,
-                  f.name as family_name, f.phone as family_phone,
-                  f.address as family_address, f.city as family_city,
-                  f.family_size
+                  f.name as family_name, f.family_size
            FROM food_requests fr
            JOIN families f ON fr.family_id = f.id
            WHERE fr.cycle_id=? AND fr.status != 'cancelled'
@@ -2045,97 +2036,68 @@ def report_cycle_summary(cid):
            ORDER BY vs.task_type, vs.task_date, f.name''', (cid,)
     ).fetchall()
 
-    buf  = BytesIO()
-    doc  = SimpleDocTemplate(buf, pagesize=letter,
-                              topMargin=80, bottomMargin=50,
-                              leftMargin=40, rightMargin=40)
-    styles = getSampleStyleSheet()
-    DG    = colors.HexColor('#1a3a2a')
-    LGRAY = colors.HexColor('#f5f5f0')
-    GRAY  = colors.HexColor('#888888')
+    bundle_counts = {}
+    for o in orders:
+        bundle_counts[o['bundle_size']] = bundle_counts.get(o['bundle_size'], 0) + 1
 
-    title_style = ParagraphStyle('T', parent=styles['Normal'],
-                                 fontSize=18, fontName='Helvetica-Bold', textColor=DG, spaceAfter=4)
-    sub_style   = ParagraphStyle('S', parent=styles['Normal'],
-                                 fontSize=11, textColor=GRAY, spaceAfter=16)
-    h2_style    = ParagraphStyle('H2', parent=styles['Normal'],
-                                 fontSize=13, fontName='Helvetica-Bold', textColor=DG,
-                                 spaceBefore=16, spaceAfter=8)
-
-    story = []
-    story.append(Paragraph(cycle['title'], title_style))
-    story.append(Paragraph(
-        f"Delivery: {cycle['delivery_date_start']} – {cycle['delivery_date_end']}  ·  "
-        f"Status: {cycle['status'].upper()}  ·  {len(orders)} families",
-        sub_style))
-    story.append(HRFlowable(width='100%', thickness=1.5, color=DG, spaceAfter=14))
+    body = f"""
+    <div class="meta">
+      <div class="meta-box"><div class="label">Total Families</div>
+        <div class="value">{len(orders)}</div></div>
+      <div class="meta-box"><div class="label">Small Bundles</div>
+        <div class="value">{bundle_counts.get('S',0)}</div></div>
+      <div class="meta-box"><div class="label">Medium Bundles</div>
+        <div class="value">{bundle_counts.get('M',0)}</div></div>
+      <div class="meta-box"><div class="label">Large Bundles</div>
+        <div class="value">{bundle_counts.get('L',0)}</div></div>
+      <div class="meta-box"><div class="label">Volunteer Slots</div>
+        <div class="value">{len(slots)}</div></div>
+    </div>"""
 
     # Orders table
-    story.append(Paragraph('Family Orders', h2_style))
-    odata = [['Family', 'Size', 'Bundle', 'Status', 'Delivered']]
+    order_rows = ''
     for o in orders:
-        delivered = o['delivered_at'][:10] if o['delivered_at'] else ('Yes' if o['status'] == 'delivered' else '—')
-        odata.append([
-            o['family_name'],
-            str(o['family_size'] or '—'),
-            o['bundle_size'] or '—',
-            o['status'].capitalize(),
-            delivered,
-        ])
-    ot = Table(odata, colWidths=[2.2*inch, 0.6*inch, 0.7*inch, 1*inch, 1*inch])
-    ot.setStyle(TableStyle([
-        ('BACKGROUND',    (0,0), (-1,0), DG),
-        ('TEXTCOLOR',     (0,0), (-1,0), colors.white),
-        ('FONTNAME',      (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE',      (0,0), (-1,-1), 9),
-        ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, colors.HexColor('#fafaf8')]),
-        ('GRID',          (0,0), (-1,-1), 0.5, colors.HexColor('#dddddd')),
-        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING',    (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-        ('LEFTPADDING',   (0,0), (-1,-1), 8),
-    ]))
-    story.append(ot)
+        delivered = o['delivered_at'][:10] if o['delivered_at'] else ('Yes' if o['status']=='delivered' else '—')
+        status_class = o['status'].lower()
+        order_rows += f"""<tr>
+          <td>{o['family_name']}</td>
+          <td style="text-align:center">{o['family_size'] or '—'}</td>
+          <td style="text-align:center">{o['bundle_size'] or '—'}</td>
+          <td><span class="badge badge-{status_class}">{o['status']}</span></td>
+          <td>{delivered}</td>
+        </tr>"""
+    body += f"""
+    <h2>Family Orders ({len(orders)})</h2>
+    <table>
+      <thead><tr><th>Family</th><th style="text-align:center">HH Size</th>
+        <th style="text-align:center">Bundle</th><th>Status</th><th>Delivered</th></tr></thead>
+      <tbody>{order_rows if order_rows else '<tr><td colspan="5" style="color:#888">No orders</td></tr>'}</tbody>
+    </table>"""
 
-    # Volunteer slots table
+    # Slots table
     if slots:
-        story.append(Paragraph('Volunteer Assignments', h2_style))
-        sdata = [['Task', 'Date', 'Family', 'Volunteer', 'Phone', 'Status']]
+        slot_rows = ''
         for s in slots:
-            sdata.append([
-                s['task_type'].capitalize(),
-                s['task_date'] or '—',
-                s['family_name'] or '—',
-                s['volunteer_name'] or 'Unclaimed',
-                s['volunteer_phone'] or '—',
-                s['status'].capitalize(),
-            ])
-        st = Table(sdata, colWidths=[0.8*inch, 0.8*inch, 1.5*inch, 1.4*inch, 1.1*inch, 0.8*inch])
-        st.setStyle(TableStyle([
-            ('BACKGROUND',    (0,0), (-1,0), DG),
-            ('TEXTCOLOR',     (0,0), (-1,0), colors.white),
-            ('FONTNAME',      (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE',      (0,0), (-1,-1), 8),
-            ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, colors.HexColor('#fafaf8')]),
-            ('GRID',          (0,0), (-1,-1), 0.5, colors.HexColor('#dddddd')),
-            ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-            ('TOPPADDING',    (0,0), (-1,-1), 5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING',   (0,0), (-1,-1), 8),
-        ]))
-        story.append(st)
+            status_class = s['status'].lower()
+            slot_rows += f"""<tr>
+              <td>{s['task_type'].capitalize()}</td>
+              <td>{s['task_date'] or '—'}</td>
+              <td>{s['family_name'] or '—'}</td>
+              <td>{s['volunteer_name'] or '<em style="color:#aaa">Unclaimed</em>'}</td>
+              <td>{s['volunteer_phone'] or '—'}</td>
+              <td><span class="badge badge-{status_class}">{s['status']}</span></td>
+            </tr>"""
+        body += f"""
+        <h2>Volunteer Assignments ({len(slots)})</h2>
+        <table>
+          <thead><tr><th>Task</th><th>Date</th><th>Family</th>
+            <th>Volunteer</th><th>Phone</th><th>Status</th></tr></thead>
+          <tbody>{slot_rows}</tbody>
+        </table>"""
 
-    cycle_title = cycle['title']
-    doc.build(story,
-              onFirstPage=lambda c,d: _pdf_header(c, d, 'Cycle Summary', cycle_title),
-              onLaterPages=lambda c,d: _pdf_header(c, d, 'Cycle Summary', cycle_title))
-
-    buf.seek(0)
-    safe_name = cycle_title.replace(' ', '_').replace('/', '-')
-    return buf.read(), 200, {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': f'attachment; filename="cycle_summary_{safe_name}.pdf"'
-    }
+    subtitle = f"Delivery: {cycle['delivery_date_start']} – {cycle['delivery_date_end']}  ·  Status: {cycle['status'].upper()}"
+    html = _print_page('Cycle Summary', subtitle, body, cycle['title'])
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 # ── Cycle Assignments ─────────────────────────────────────────────────────────
 
