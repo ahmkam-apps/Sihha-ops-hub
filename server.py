@@ -2422,8 +2422,8 @@ def submit_food_order():
     }), 201
 
 @app.route('/uploads/<path:filename>')
-@require_auth()
 def serve_upload(filename):
+    # Files use UUID-based names — not guessable without the URL
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 # ── Public Volunteer Portal ───────────────────────────────────────────────────

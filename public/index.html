@@ -1642,7 +1642,7 @@ async function renderReceipts(filter) {
                 <td style="white-space:nowrap">${fmtDate(r.purchase_date)}</td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>${r.file_url
-                  ? `<a href="${r.file_url}?token=${STATE.token}" target="_blank" style="color:var(--green);font-size:13px">📷 View</a>`
+                  ? `<a href="${r.file_url}" target="_blank" style="color:var(--green);font-size:13px">📷 View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td>${badge(r.status)}</td>
                 <td style="white-space:nowrap" id="receipt-actions-${r.id}">
