@@ -1510,7 +1510,7 @@ def sync_wix_donations():
 
         db = get_db()
         # ensure columns exist
-        for col_name, col_type in [('donor_email','TEXT'), ('type','TEXT'), ('reference_id','TEXT')]:
+        for col_name, col_type in [('donor_email','TEXT'), ('type','TEXT'), ('reference_id','TEXT'), ('frequency','TEXT')]:
             try:
                 db.execute(f'ALTER TABLE donations ADD COLUMN {col_name} {col_type}')
                 db.commit()
@@ -1564,12 +1564,12 @@ def sync_wix_donations():
                     skipped += 1
                     continue
 
-                li       = line_items[0]
-                opts     = li.get('catalogReference', {}).get('options', {})
-                amount   = float(opts.get('amount') or li.get('price', {}).get('amount') or 0)
-                freq     = opts.get('frequency', 'ONE_TIME')
-                don_type = 'monthly' if freq == 'MONTH' else 'one-time'
-                product  = li.get('productName', {}).get('original', 'Food Donation')
+                li        = line_items[0]
+                opts      = li.get('catalogReference', {}).get('options', {})
+                amount    = float(opts.get('amount') or li.get('price', {}).get('amount') or 0)
+                freq_raw  = opts.get('frequency', 'ONE_TIME')
+                frequency = 'monthly' if freq_raw == 'MONTH' else 'one-time'
+                product   = li.get('productName', {}).get('original', 'Food Donation')
 
                 buyer    = order.get('buyerInfo', {})
                 billing  = order.get('billingInfo', {}).get('contactDetails', {})
@@ -1582,9 +1582,9 @@ def sync_wix_donations():
                 did = str(uuid.uuid4())
                 db.execute(
                     '''INSERT INTO donations
-                       (id,donor_name,donor_email,amount,type,date,source,reference_id,notes,created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)''',
-                    (did, donor, email, amount, don_type, date_str,
+                       (id,donor_name,donor_email,amount,type,frequency,date,source,reference_id,notes,created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                    (did, donor, email, amount, 'online', frequency, date_str,
                      'wix', wix_order_id, product, now())
                 )
                 imported += 1

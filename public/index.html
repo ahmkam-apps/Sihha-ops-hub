@@ -1773,8 +1773,8 @@ async function renderDonations(filter) {
                 </td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>
-                  <span style="font-size:12px;padding:2px 8px;border-radius:10px;background:${r.type==='monthly'?'#e8f5e9':'#fff3e0'};color:${r.type==='monthly'?'#1a8754':'#e67e22'}">
-                    ${r.type||'one-time'}
+                  <span style="font-size:12px;padding:2px 8px;border-radius:10px;background:${r.frequency==='monthly'?'#e8f5e9':'#fff3e0'};color:${r.frequency==='monthly'?'#1a8754':'#e67e22'}">
+                    ${r.frequency||'one-time'}
                   </span>
                 </td>
                 <td style="white-space:nowrap">${fmtDate(r.date)}</td>
