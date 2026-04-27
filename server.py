@@ -2547,27 +2547,6 @@ def portal_claim_slot():
         _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
     return jsonify({'ok': True})
 
-@app.route('/api/portal/debug')
-@require_portal_auth()
-def portal_debug():
-    """Temp debug: show what vol_id the session resolves to + all slots for that ID."""
-    vol_id = g.pv['volunteer_id']
-    db = get_db()
-    vol = db.execute("SELECT id, name, phone, status FROM volunteers WHERE id=?", (vol_id,)).fetchone()
-    slots = db.execute(
-        "SELECT id, task_type, status, claimed_by FROM volunteer_slots WHERE claimed_by=?", (vol_id,)
-    ).fetchall()
-    all_claimed = db.execute(
-        "SELECT vs.id, vs.task_type, vs.status, vs.claimed_by, v.name, v.phone "
-        "FROM volunteer_slots vs LEFT JOIN volunteers v ON v.id=vs.claimed_by "
-        "WHERE vs.claimed_by IS NOT NULL"
-    ).fetchall()
-    return jsonify({
-        'session_vol_id': vol_id,
-        'volunteer_record': dict(vol) if vol else None,
-        'my_slots': [dict(r) for r in slots],
-        'all_claimed_slots': [dict(r) for r in all_claimed]
-    })
 
 @app.route('/api/portal/my-tasks')
 @require_portal_auth()
