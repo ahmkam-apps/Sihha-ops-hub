@@ -1177,7 +1177,7 @@ def get_cycle_orders(cid):
 
 @app.route('/api/delivery-cycles/<cid>/shopping-list', methods=['GET'])
 @require_auth()
-def get_cycle_shopping_list(db_arg=None, cid=None):
+def get_cycle_shopping_list(cid):
     db = get_db()
     # Get all selected items across all orders for this cycle, with bundle quantities
     rows = db.execute(
