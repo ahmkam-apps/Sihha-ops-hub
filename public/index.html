@@ -538,36 +538,33 @@
       <div class="nav-item active" onclick="nav('dashboard')" id="nav-dashboard">
         <span class="icon">◈</span> Dashboard
       </div>
-      <div class="nav-item" onclick="nav('families')" id="nav-families">
-        <span class="icon">⌂</span> Families
+      <div class="nav-item" onclick="nav('cycles')" id="nav-cycles">
+        <span class="icon">↻</span> Cycles
       </div>
       <div class="nav-item" onclick="nav('volunteers')" id="nav-volunteers">
         <span class="icon">◎</span> Volunteers
       </div>
-      <div class="nav-item" onclick="nav('assignments')" id="nav-assignments">
-        <span class="icon">◷</span> Assignments
-      </div>
 
-      <div class="nav-section">Food Program</div>
-      <div class="nav-item" onclick="nav('cycles')" id="nav-cycles">
-        <span class="icon">↻</span> Cycles
+      <div class="nav-section">Families</div>
+      <div class="nav-item" onclick="nav('families')" id="nav-families">
+        <span class="icon">⌂</span> Families
       </div>
       <div class="nav-item" onclick="nav('orders')" id="nav-orders">
         <span class="icon">▤</span> Food Orders
       </div>
-      <div class="nav-item" onclick="nav('catalog')" id="nav-catalog">
-        <span class="icon">☰</span> Food Catalog
-      </div>
 
       <div class="nav-section">Finance</div>
-      <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
-        <span class="icon">▦</span> Receipts
+      <div class="nav-item" onclick="nav('payments')" id="nav-payments">
+        <span class="icon">◫</span> Payments
       </div>
-      <div class="nav-item" onclick="nav('reimbursements')" id="nav-reimbursements">
-        <span class="icon">◫</span> Reimbursements
+      <div class="nav-item" onclick="nav('donations')" id="nav-donations">
+        <span class="icon">♦</span> Donations
       </div>
 
-      <div class="nav-section" id="nav-section-admin" style="display:none">Admin</div>
+      <div class="nav-section" id="nav-section-admin" style="display:none">Settings</div>
+      <div class="nav-item" onclick="nav('catalog')" id="nav-catalog" style="display:none">
+        <span class="icon">☰</span> Food Catalog
+      </div>
       <div class="nav-item" onclick="nav('users')" id="nav-users" style="display:none">
         <span class="icon">◉</span> Users
       </div>
@@ -683,16 +680,17 @@ function showApp() {
   document.getElementById('sidebar-role').textContent = STATE.user.role;
   if (STATE.user.role === 'admin') {
     document.getElementById('nav-section-admin').style.display = '';
+    document.getElementById('nav-catalog').style.display = '';
     document.getElementById('nav-users').style.display = '';
   }
-  // Treasurer: hide operations + food program nav, show only finance
+  // Treasurer: show only Finance section
   if (STATE.user.role === 'treasurer') {
-    ['nav-families','nav-volunteers','nav-assignments',
-     'nav-cycles','nav-orders','nav-catalog'].forEach(id => {
+    ['nav-dashboard','nav-cycles','nav-volunteers',
+     'nav-families','nav-orders'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
-    nav('reimbursements');
+    nav('payments');
     return;
   }
   nav('dashboard');
@@ -714,8 +712,7 @@ function nav(page) {
   if (navEl) navEl.classList.add('active');
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
-    assignments: 'Assignments', receipts: 'Receipts',
-    reimbursements: 'Reimbursements', users: 'Users',
+    payments: 'Payments', donations: 'Donations', users: 'Users',
     cycles: 'Delivery Cycles', catalog: 'Food Catalog',
     cycle_detail: 'Cycle Detail', orders: 'Food Orders'
   };
@@ -723,8 +720,8 @@ function nav(page) {
   closeDrawer();
   const renders = {
     dashboard: renderDashboard, families: renderFamilies,
-    volunteers: renderVolunteers, assignments: renderAssignments,
-    receipts: renderReceipts, reimbursements: renderReimbursements,
+    volunteers: renderVolunteers,
+    payments: renderPayments, donations: renderDonations,
     users: renderUsers, cycles: renderCycles, catalog: renderCatalog,
     orders: renderOrders
   };
@@ -851,8 +848,7 @@ async function renderDashboard() {
     const alerts = [];
     if (s.families_pending  > 0) alerts.push({ label: `${s.families_pending} famil${s.families_pending>1?'ies':'y'} pending approval`, nav: 'families', color: '#e0a800' });
     if (s.volunteers_pending> 0) alerts.push({ label: `${s.volunteers_pending} volunteer${s.volunteers_pending>1?'s':''} pending approval`, nav: 'volunteers', color: '#e0a800' });
-    if (s.receipts_pending  > 0) alerts.push({ label: `${s.receipts_pending} receipt${s.receipts_pending>1?'s':''} awaiting review`, nav: 'receipts', color: '#e0a800' });
-    if (s.reimb_pending_count > 0) alerts.push({ label: `${s.reimb_pending_count} reimbursement${s.reimb_pending_count>1?'s':''} pending — ${fmtMoney(s.reimb_pending_amount)}`, nav: 'reimbursements', color: '#c0392b' });
+    if (s.reimb_pending_count > 0) alerts.push({ label: `${s.reimb_pending_count} payment${s.reimb_pending_count>1?'s':''} pending — ${fmtMoney(s.reimb_pending_amount)}`, nav: 'payments', color: '#c0392b' });
 
     const attentionHTML = alerts.length > 0 ? `
       <div style="background:#fffbec;border:1.5px solid #f0c040;border-radius:8px;padding:14px 18px;margin-bottom:20px;">
@@ -1684,8 +1680,8 @@ async function rejectReceipt(id) {
   } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
 }
 
-// ── Reimbursements ────────────────────────────────────────────────────────────
-async function renderReimbursements(filter) {
+// ── Payments (unified receipts + reimbursements) ───────────────────────────────
+async function renderPayments(filter) {
   filter = filter || STATE.filter || 'pending';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML = '';
@@ -1700,11 +1696,11 @@ async function renderReimbursements(filter) {
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header">
-          <span class="table-title">Reimbursements${pendingCount && filter==='all' ? ` <span style="background:#c00;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px">${pendingCount}</span>` : ''}</span>
+          <span class="table-title">Payments${pendingCount ? ` <span style="background:#c00;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px">${pendingCount} pending</span>` : ''}</span>
           <div class="filter-tabs">
-            ${['all','pending','paid','rejected'].map(f =>
+            ${['pending','paid','all','rejected'].map(f =>
               `<div class="filter-tab ${filter===f?'active':''}"
-                onclick="renderReimbursements('${f}')">${f}</div>`
+                onclick="renderPayments('${f}')">${f}</div>`
             ).join('')}
           </div>
         </div>
@@ -1739,13 +1735,92 @@ async function renderReimbursements(filter) {
                   }
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="8">No reimbursements found</td></tr>'}
+              '<tr class="empty-row"><td colspan="8">No payments found</td></tr>'}
           </tbody>
         </table>
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+// ── Donations ─────────────────────────────────────────────────────────────────
+async function renderDonations(filter) {
+  filter = filter || STATE.filter || 'all';
+  STATE.filter = filter;
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn" onclick="openDonationForm()">+ Log Donation</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const rows = await GET('/donations');
+    const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Donations <span style="font-size:13px;font-weight:400;color:var(--gray-4)">${fmtMoney(total)} total</span></span>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Donor</th><th>Amount</th><th>Type</th><th>Date</th><th>Source</th><th>Notes</th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+              <tr>
+                <td><strong>${r.donor_name||'Anonymous'}</strong>${r.donor_email ? `<br><span style="font-size:11px;color:var(--gray-4)">${r.donor_email}</span>` : ''}</td>
+                <td><strong>${fmtMoney(r.amount)}</strong></td>
+                <td>${r.type||'—'}</td>
+                <td style="white-space:nowrap">${fmtDate(r.date)}</td>
+                <td style="font-size:12px">${r.source||'—'}</td>
+                <td style="font-size:12px;color:var(--gray-4)">${r.notes||''}</td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="6">No donations recorded yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+function openDonationForm() {
+  openDrawer('Log Donation',
+    `<div class="form-group"><label>Donor Name</label><input type="text" id="don-name" placeholder="Anonymous"></div>
+     <div class="form-group"><label>Donor Email</label><input type="email" id="don-email" placeholder="optional"></div>
+     <div class="form-group"><label>Amount *</label><input type="number" id="don-amount" step="0.01" min="0" placeholder="0.00"></div>
+     <div class="form-group"><label>Type</label>
+       <select id="don-type" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">
+         <option value="cash">Cash</option><option value="check">Check</option>
+         <option value="online">Online</option><option value="zelle">Zelle</option>
+         <option value="other">Other</option>
+       </select></div>
+     <div class="form-group"><label>Date *</label><input type="date" id="don-date" value="${new Date().toISOString().slice(0,10)}"></div>
+     <div class="form-group"><label>Source</label><input type="text" id="don-source" placeholder="Website, event, direct, etc."></div>
+     <div class="form-group"><label>Notes</label><input type="text" id="don-notes" placeholder="Optional"></div>
+     <div class="alert alert-error" id="don-err" style="display:none"></div>`,
+    `<button class="btn" onclick="saveDonation()">Save Donation</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+}
+
+async function saveDonation() {
+  const amount = parseFloat(document.getElementById('don-amount').value);
+  const date   = document.getElementById('don-date').value;
+  const err    = document.getElementById('don-err');
+  err.style.display = 'none';
+  if (isNaN(amount) || amount <= 0) { err.textContent = 'Enter a valid amount.'; err.style.display = 'block'; return; }
+  if (!date) { err.textContent = 'Date is required.'; err.style.display = 'block'; return; }
+  try {
+    await POST('/donations', {
+      donor_name:  document.getElementById('don-name').value.trim() || 'Anonymous',
+      donor_email: document.getElementById('don-email').value.trim(),
+      amount, date,
+      type:   document.getElementById('don-type').value,
+      source: document.getElementById('don-source').value.trim(),
+      notes:  document.getElementById('don-notes').value.trim()
+    });
+    closeDrawer();
+    renderDonations();
+  } catch(e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 
 async function quickPayReimb(id, method, amount) {
@@ -1757,7 +1832,7 @@ async function quickPayReimb(id, method, amount) {
       payment_method: method,
       paid_date: new Date().toISOString().slice(0,10)
     });
-    renderReimbursements(STATE.filter);
+    renderPayments(STATE.filter);
   } catch(e) {
     if (cell) cell.innerHTML = `<span style="color:#c00;font-size:11px">${e.message}</span>`;
   }
@@ -1808,7 +1883,7 @@ async function confirmReimbPaid(id) {
       notes:          document.getElementById('reimb-notes').value.trim() || null
     });
     closeDrawer();
-    renderReimbursements(STATE.filter);
+    renderPayments(STATE.filter);
   } catch(e) {
     errEl.textContent = e.message; errEl.style.display = 'block';
   }
@@ -1817,7 +1892,7 @@ async function confirmReimbPaid(id) {
 async function rejectReimb(id) {
   try {
     await PUT('/reimbursements/' + id, { status: 'rejected' });
-    renderReimbursements(STATE.filter);
+    renderPayments(STATE.filter);
   } catch(e) { alert(e.message); }
 }
 

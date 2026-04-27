@@ -485,16 +485,14 @@ async function loadMyTasks() {
       const addressBox = isDelivery && t.address
         ? `<div class="address-box" style="margin-top:10px">📍 ${t.address}, ${t.city}</div>` : '';
 
-      const markBtn = !isDone
+      // Delivery tasks still need manual Mark Complete; shopping tasks auto-complete on receipt submit
+      const markBtn = (isDelivery && !isDone)
         ? `<button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')">Mark Complete</button>` : '';
 
-      // Receipt section: always visible on shopping tasks once complete (or even before)
+      // Receipt section: always visible on shopping tasks (claimed or complete)
       let receiptSection = '';
       if (isShopping) {
-        if (!isDone) {
-          // Not yet complete — nudge to finish first, but still show the button
-          receiptSection = `<div style="margin-top:8px;font-size:12px;color:var(--gray-4)">Mark complete above, then add your receipt.</div>`;
-        } else if (receipt) {
+        if (receipt) {
           // Receipt already submitted — show status + always allow update/replace
           const rs = receipt.reimbursement_status || receipt.receipt_status;
           const rsClass = rs === 'paid' ? 'reimb-paid' : rs === 'rejected' ? 'reimb-rejected' : 'reimb-pending';
@@ -514,7 +512,7 @@ async function loadMyTasks() {
               </div>
             </div>`;
         } else {
-          // Complete but no receipt yet — big green button
+          // No receipt yet — show submit button (works on claimed OR complete tasks)
           receiptSection = `
             <div style="margin-top:10px">
               <button class="btn btn-green btn-sm" onclick="openReceiptModal('${t.id}')">📷 Submit Receipt</button>

@@ -2176,7 +2176,7 @@ def public_intake():
         (fid, data['name'], data['phone'], data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
-         'pending', 'intake_form', family_code, now())
+         'active', 'intake_form', family_code, now())
     )
     db.commit()
     log.info(f'New intake: {data["name"]} ({data["phone"]})')
@@ -2701,6 +2701,14 @@ def portal_submit_receipt():
            VALUES (?,?,?,?,?,?)''',
         (reimb_id, rid, vol_id, amount, 'pending', now())
     )
+
+    # Auto-complete the slot — submitting receipt IS the completion signal
+    if slot_id:
+        db.execute(
+            "UPDATE volunteer_slots SET status='complete', completed_at=?, updated_at=? WHERE id=? AND status='claimed'",
+            (now(), now(), slot_id)
+        )
+
     db.commit()
 
     # Notify treasurers
@@ -2712,7 +2720,7 @@ def portal_submit_receipt():
                f'Store: {store or "not specified"}\n'
                f'Amount: ${amount:.2f}\n'
                f'Date: {pdate}\n\n'
-               f'Log in to review: https://sihha-ops-hub-production.up.railway.app')
+               f'Log in to review: https://ops.sihha.org')
         _notify_treasurers(db, subject, msg)
     except Exception as e:
         log.warning(f'Treasurer notification failed: {e}')
