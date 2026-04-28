@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -3176,9 +3177,11 @@ def pwa_icons(filename):
 
 @app.errorhandler(Exception)
 def handle_unhandled_exception(e):
-    """Return JSON instead of HTML for any unhandled server error."""
+    """Return JSON for unhandled Python exceptions; pass HTTP exceptions through normally."""
+    if isinstance(e, HTTPException):
+        return e  # 404, 405, etc. keep their proper status codes
     log.exception(f'Unhandled exception: {e}')
-    return jsonify({'error': 'Internal server error', 'detail': str(e)}), 500
+    return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
