@@ -1534,6 +1534,44 @@ async function saveFamily() {
   } catch(e) { showErr(e.message); }
 }
 
+async function saveFamilyAll(famId) {
+  const v = id => document.getElementById('fam-f-' + id)?.value ?? null;
+  const payload = {
+    name:           v('name'),
+    phone:          v('phone'),
+    city:           v('city'),
+    family_size:    parseInt(v('family_size'))  || null,
+    children_count: parseInt(v('children_count')) || null,
+    status:         v('status'),
+    bundle_size:    v('bundle_size'),
+    frequency:      v('frequency'),
+    income_range:   v('income_range'),
+    wa_phone:       v('wa_phone'),
+    wa_apikey:      v('wa_apikey'),
+    address:        v('address'),
+    dietary_notes:  v('dietary_notes'),
+    notes:          v('notes'),
+  };
+  // remove nulls for fields that weren't rendered
+  Object.keys(payload).forEach(k => { if (payload[k] === null && !document.getElementById('fam-f-' + k)) delete payload[k]; });
+  const btn = document.getElementById('fam-save-btn');
+  const saved = document.getElementById('fam-saved-' + famId);
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    await PUT('/families/' + famId, payload);
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; btn.style.display = 'inline-flex'; }
+    if (saved) {
+      saved.innerHTML = '✓ Saved';
+      saved.style.cssText = 'font-size:13px;font-weight:600;color:#1a8754;transition:opacity .3s;';
+      clearTimeout(saved._t);
+      saved._t = setTimeout(() => { saved.style.opacity='0'; setTimeout(()=>{saved.innerHTML='';saved.style.opacity='1';},300); }, 2500);
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+    alert('Failed to save: ' + e.message);
+  }
+}
+
 async function famSaveField(famId, field, value) {
   try {
     await PUT('/families/' + famId, { [field]: value });
@@ -1598,7 +1636,8 @@ async function removeSlot(slotId, familyId) {
 async function viewFamily(id) {
   document.getElementById('page-title').textContent = 'Loading…';
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>`;
+    `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>
+     <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
 
   try {
@@ -1616,16 +1655,19 @@ async function viewFamily(id) {
     document.getElementById('page-title').textContent = r.name;
 
     // ── Field helpers ─────────────────────────────────────────────────────────
+    const markDirty = `document.getElementById('fam-save-btn').style.display='inline-flex';`;
+
     const inp = (field, val, type='text') =>
-      `<input type="${type}" value="${(val!=null?String(val):'').replace(/"/g,'&quot;')}"
+      `<input id="fam-f-${field}" type="${type}" value="${(val!=null?String(val):'').replace(/"/g,'&quot;')}"
          style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;"
          onfocus="this.style.borderBottomColor='var(--black)'"
-         onblur="this.style.borderBottomColor='var(--gray-2)';famSaveField('${fid}','${field}',this.value)"
+         onblur="this.style.borderBottomColor='var(--gray-2)'"
+         oninput="${markDirty}"
          onkeydown="if(event.key==='Enter')this.blur()">`;
 
     const sel = (field, val, options) =>
-      `<select style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;"
-         onchange="famSaveField('${fid}','${field}',this.value)">
+      `<select id="fam-f-${field}" style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;"
+         onchange="${markDirty}">
          ${options.map(o=>{const v=o.value!=null?o.value:o,l=o.label||o;return`<option value="${v}" ${String(val)===String(v)?'selected':''}>${l}</option>`;}).join('')}
        </select>`;
 
@@ -1710,9 +1752,10 @@ async function viewFamily(id) {
           ${row('Address',       inp('address',       r.address),       true)}
           ${row('Dietary Notes', inp('dietary_notes', r.dietary_notes), true)}
           ${row('Notes',
-            `<textarea style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;resize:vertical;min-height:60px;"
+            `<textarea id="fam-f-notes" style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;resize:vertical;min-height:60px;"
                onfocus="this.style.borderBottomColor='var(--black)'"
-               onblur="this.style.borderBottomColor='var(--gray-2)';famSaveField('${fid}','notes',this.value)"
+               onblur="this.style.borderBottomColor='var(--gray-2)'"
+               oninput="${markDirty}"
              >${r.notes||''}</textarea>`, true)}
         </div>
       </div>`;
@@ -1793,6 +1836,9 @@ async function viewFamily(id) {
       </div>`;
 
     document.getElementById('content').innerHTML = summaryStrip + cycleStrip + editGrid + historySection;
+    // Show Save button now that fields are rendered
+    const saveBtn = document.getElementById('fam-save-btn');
+    if (saveBtn) saveBtn.style.display = 'inline-flex';
 
   } catch(e) {
     console.error(e);
