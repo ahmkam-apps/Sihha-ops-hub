@@ -1622,10 +1622,8 @@ async function viewFamily(id) {
         <span style="font-size:11px;color:var(--gray-4);" id="fam-saved-${fid}"></span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;margin-bottom:24px;">
-        ${row('Status',        sel(fid+'-s','status',       r.status,      ['active','pending','paused','inactive'])
-                                .replace(fid+'-s','status'), false)}
-        ${row('Bundle Size',   sel(fid+'-b','bundle_size',  r.bundle_size, ['S','M','L'])
-                                .replace(fid+'-b','bundle_size'), false)}
+        ${row('Status',      sel('status',      r.status,      ['active','pending','paused','inactive']), false)}
+        ${row('Bundle Size', sel('bundle_size', r.bundle_size, ['S','M','L']), false)}
         ${row('Name',          inp('name',          r.name),          false)}
         ${row('Phone',         inp('phone',         r.phone, 'tel'),  false)}
         ${row('Address',       inp('address',       r.address),       true)}
