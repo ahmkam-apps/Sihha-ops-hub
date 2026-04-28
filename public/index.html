@@ -1086,34 +1086,50 @@ async function renderDashboard() {
       }
 
       // ── Line chart (tab 2) ────────────────────────────────────────────────
-      // Each month adds avg new donors × avg gift on top of the growing base
+      // Only use months that have actual donation data (skip empty months)
+      const activeDm      = dm.filter(m => (m.total || 0) > 0);
+      const lineHistLabels = activeDm.map(m => mLabel(m.month));
+      const lineHistTotals = activeDm.map(m => m.total || 0);
+      const lineLastTotal  = lineHistTotals.length ? lineHistTotals[lineHistTotals.length - 1] : 0;
+
+      // Build 6-month projection from last real data point
       const projLabels = [];
       const projVals   = [];
-      if (dm.length) {
-        const lastDate = new Date(dm[dm.length-1].month + '-01');
+      if (activeDm.length) {
+        const lastDate = new Date(activeDm[activeDm.length-1].month + '-01');
         for (let i = 1; i <= 6; i++) {
           const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
           projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
-          projVals.push(Math.round(currentRecurBase + monthlyRecurGrowth * i));
+          projVals.push(Math.round(lineLastTotal + monthlyRecurGrowth * i));
         }
       }
-      const lineLabels  = [...histLabels, ...projLabels];
-      const actualLine  = [...histTotals, ...Array(projLabels.length).fill(null)];
-      const projLine    = [...Array(histLabels.length).fill(null), ...projVals];
-      if (histLabels.length) projLine[histLabels.length - 1] = lastTotal;
 
-      // Average of actual (non-zero) months only
-      const nonZero   = histTotals.filter(v => v > 0);
-      const avgVal    = nonZero.length ? Math.round(nonZero.reduce((a,b) => a+b, 0) / nonZero.length) : 0;
+      // Build parallel arrays: actual has nulls where proj is, and vice versa
+      // Bridge: both share the last actual point so lines connect
+      const allLineLabels = [...lineHistLabels, ...projLabels];
+      const actualData    = [
+        ...lineHistTotals,
+        ...Array(projLabels.length).fill(null)
+      ];
+      const projData = [
+        ...Array(lineHistLabels.length - 1).fill(null),
+        lineLastTotal,          // bridge — same as last actual point
+        ...projVals
+      ];
+
+      // Average line across actual months only
+      const avgVal = lineHistTotals.length
+        ? Math.round(lineHistTotals.reduce((a,b) => a+b, 0) / lineHistTotals.length)
+        : 0;
 
       const avgLinePlugin = {
         id: 'avgLine',
         afterDraw(chart) {
           if (!avgVal) return;
-          const {ctx, chartArea:{left,right}, scales:{y}} = chart;
+          const {ctx, chartArea:{left, right}, scales:{y}} = chart;
           const yPos = y.getPixelForValue(avgVal);
           ctx.save();
-          ctx.beginPath(); ctx.setLineDash([3,3]);
+          ctx.beginPath(); ctx.setLineDash([3, 3]);
           ctx.strokeStyle = '#9b59b6'; ctx.lineWidth = 1.5;
           ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
           ctx.setLineDash([]);
@@ -1134,29 +1150,48 @@ async function renderDashboard() {
         window._dashLineChart = new Chart(lineCanvas.getContext('2d'), {
           type: 'line',
           data: {
-            labels: lineLabels,
+            labels: allLineLabels,
             datasets: [
               {
-                label: 'Actual', data: actualLine,
+                label: 'Actual',
+                data: actualData,
                 borderColor: '#1a8754', borderWidth: 2.5,
-                backgroundColor: 'rgba(26,135,84,0.08)', fill: true,
-                pointBackgroundColor: '#1a8754', pointRadius: 4,
-                tension: 0.35,
+                backgroundColor: 'rgba(26,135,84,0.07)',
+                fill: true,
+                pointBackgroundColor: '#1a8754',
+                pointRadius: 5, pointHoverRadius: 7,
+                tension: 0.3,
+                spanGaps: false,
               },
               {
-                label: 'Projected', data: projLine,
-                borderColor: '#2e86c1', borderDash: [5,4], borderWidth: 2,
+                label: 'Projected',
+                data: projData,
+                borderColor: '#2e86c1', borderDash: [6, 4], borderWidth: 2,
+                backgroundColor: 'rgba(46,134,193,0.05)',
+                fill: true,
                 pointBackgroundColor: '#2e86c1',
-                pointRadius: ctx => ctx.dataIndex >= histLabels.length ? 4 : 0,
-                tension: 0.35, fill: false,
+                pointRadius: ctx => projData[ctx.dataIndex] !== null && ctx.dataIndex >= lineHistLabels.length ? 4 : 0,
+                pointHoverRadius: 6,
+                tension: 0.3,
+                spanGaps: false,
               }
             ]
           },
           options: {
             responsive: true, maintainAspectRatio: false,
-            interaction: { mode:'index', intersect:false },
-            plugins: { legend:{display:false}, tooltip:{ callbacks:{ label: ctx => ctx.raw===null?null: ctx.dataset.label+': '+fmtMoney(ctx.raw) } } },
-            scales: { x:{ grid:{display:false}, ticks:{color:tickCol,font:{size:11}} }, y:{ ...yScaleOpts } }
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: ctx => ctx.raw === null ? null : ctx.dataset.label + ': ' + fmtMoney(ctx.raw)
+                }
+              }
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { color: tickCol, font: { size: 11 } } },
+              y: { ...yScaleOpts }
+            }
           },
           plugins: [goalLinePlugin, avgLinePlugin]
         });
