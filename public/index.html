@@ -461,6 +461,17 @@
     background: var(--gray-1); border: 1px solid var(--gray-2);
     padding: 2px 8px; font-size: 11px; border-radius: 2px;
   }
+  .items-badge { position: relative; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600; color: var(--gray-5);
+    padding: 2px 8px; background: var(--gray-1); border-radius: 20px;
+    cursor: default; user-select: none; }
+  .items-badge .items-tooltip {
+    display: none; position: absolute; left: 0; top: calc(100% + 6px); z-index: 100;
+    background: #1a1a1a; color: #fff; border-radius: 8px; padding: 10px 14px;
+    min-width: 160px; max-width: 260px; font-size: 12px; font-weight: 400;
+    line-height: 1.8; white-space: nowrap; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+    pointer-events: none; }
+  .items-badge:hover .items-tooltip { display: block; }
   .hist-stat-grid {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px;
   }
@@ -1781,20 +1792,17 @@ async function viewFamily(id) {
         const assigned = (o.slots||[]).filter(s => s.task_type === tt.slug && s.volunteer_name);
         const selId = `hslot-${tt.slug}-${o.id}`;
         const volOpts = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
-        return `<td style="padding:10px;min-width:120px;vertical-align:top;">
+        return `<td style="padding:10px;min-width:140px;vertical-align:top;">
           ${assigned.map(s =>
-            `<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+            `<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px;">
                <span style="font-size:12px;font-weight:600;">${s.volunteer_name}</span>
                <button onclick="removeSlot('${s.id}','${fid}')"
-                 style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;">×</button>
+                 style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;" title="Remove">×</button>
              </div>`).join('')}
-          <div style="display:flex;gap:4px;margin-top:${assigned.length?'4px':'0'};">
-            <select id="${selId}" style="flex:1;font-size:11px;border:1px solid var(--gray-3);padding:2px 4px;background:#fff;">
-              <option value="">+ Add…</option>${volOpts}
-            </select>
-            <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;"
-              onclick="addSlot('${o.cycle_id}','${fid}','${tt.slug}','${selId}')">Add</button>
-          </div>
+          <select id="${selId}" style="width:100%;font-size:11px;border:1px solid var(--gray-3);padding:3px 5px;background:#fff;border-radius:4px;margin-top:${assigned.length?'4px':'0'};"
+            onchange="if(this.value)addSlot('${o.cycle_id}','${fid}','${tt.slug}','${selId}')">
+            <option value="">+ Assign volunteer…</option>${volOpts}
+          </select>
         </td>`;
       }).join('');
 
@@ -1805,7 +1813,14 @@ async function viewFamily(id) {
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
         </td>
         <td style="padding:10px;color:var(--gray-5);">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
-        <td style="padding:10px;color:var(--gray-5);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${itemList}">${itemList}</td>
+        <td style="padding:10px;">
+          ${o.selected_items?.length
+            ? `<span class="items-badge">
+                 ${o.selected_items.length} item${o.selected_items.length===1?'':'s'}
+                 <span class="items-tooltip">${o.selected_items.map(i=>i.name).join('<br>')}</span>
+               </span>`
+            : `<span style="color:var(--gray-3);font-size:13px;">—</span>`}
+        </td>
         ${slotCells}
       </tr>`;
     }).join('');
