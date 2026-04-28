@@ -1346,19 +1346,20 @@ def list_families():
     q = """
         SELECT f.*,
                (SELECT v.name
-                FROM food_requests fr
-                JOIN volunteer_slots vs ON vs.cycle_id = fr.cycle_id
-                                       AND vs.family_id = fr.family_id
-                                       AND vs.task_type = 'delivery'
+                FROM volunteer_slots vs
                 JOIN volunteers v ON vs.claimed_by = v.id
-                WHERE fr.family_id = f.id
-                ORDER BY fr.submitted_at DESC
+                WHERE vs.family_id = f.id
+                  AND vs.task_type = 'delivery'
+                  AND vs.claimed_by IS NOT NULL
+                ORDER BY vs.created_at DESC
                 LIMIT 1) AS last_delivery_volunteer,
                (SELECT dc.delivery_date_start
-                FROM food_requests fr
-                JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-                WHERE fr.family_id = f.id
-                ORDER BY fr.submitted_at DESC
+                FROM volunteer_slots vs
+                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+                WHERE vs.family_id = f.id
+                  AND vs.task_type = 'delivery'
+                  AND vs.claimed_by IS NOT NULL
+                ORDER BY vs.created_at DESC
                 LIMIT 1) AS last_delivery_date
         FROM families f
         WHERE 1=1"""
