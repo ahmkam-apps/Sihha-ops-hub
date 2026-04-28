@@ -214,11 +214,11 @@
   <div class="stats">
     <div class="stat-row">
       <div class="stat-badge" id="badge-fam">—</div>
-      <div class="stat-label">Families Receiving Food</div>
+      <div class="stat-label">Lives Impacted</div>
     </div>
     <div class="stat-row">
-      <div class="stat-badge" id="badge-month">—</div>
-      <div class="stat-label">Raised This Month</div>
+      <div class="stat-badge" id="badge-vol">—</div>
+      <div class="stat-label">Volunteers Mobilized</div>
     </div>
   </div>
 
@@ -303,12 +303,18 @@
       pct >= 100 ? 'Monthly goal reached!' : `${pct}% of monthly goal`;
 
     // Stat badges
-    document.getElementById('badge-fam').textContent   = d.families_active || 0;
-    document.getElementById('badge-month').textContent = fmtShort(monthRaised);
+    document.getElementById('badge-fam').textContent = d.lives_impacted    || 0;
+    document.getElementById('badge-vol').textContent = d.volunteers_active || 0;
 
     // Globals for calculator
     _avgGift      = d.proj_avg_gift      || 0;
     _monthlyTrend = d.proj_monthly_trend || 0;
+
+    // Seed slider to actual active family count
+    const famCount = d.families_active || 20;
+    const famSlider = document.getElementById('sl-fam');
+    famSlider.value = Math.min(famCount, parseInt(famSlider.max));
+    document.getElementById('sv-fam').textContent = famCount;
 
     // Calc intro
     const donors = d.proj_avg_donors_per_month || 0;

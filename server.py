@@ -1182,16 +1182,24 @@ def public_donate_stats():
     families_active = db.execute(
         "SELECT COUNT(*) FROM families WHERE status='active'"
     ).fetchone()[0]
+    lives_impacted = db.execute(
+        "SELECT COALESCE(SUM(family_size), COUNT(*)) FROM families WHERE status='active'"
+    ).fetchone()[0]
+    volunteers_active = db.execute(
+        "SELECT COUNT(*) FROM volunteers WHERE status='active'"
+    ).fetchone()[0]
 
     return jsonify({
-        'donations_by_month':       monthly,
+        'donations_by_month':        monthly,
         'proj_avg_donors_per_month': avg_donors,
-        'proj_avg_gift':            avg_gift,
-        'proj_avg_monthly':         round(avg_monthly, 2),
-        'proj_monthly_trend':       monthly_trend,
-        'total_raised':             total_raised,
-        'month_raised':             month_raised,
-        'families_active':          families_active,
+        'proj_avg_gift':             avg_gift,
+        'proj_avg_monthly':          round(avg_monthly, 2),
+        'proj_monthly_trend':        monthly_trend,
+        'total_raised':              total_raised,
+        'month_raised':              month_raised,
+        'families_active':           families_active,
+        'lives_impacted':            lives_impacted,
+        'volunteers_active':         volunteers_active,
     })
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
