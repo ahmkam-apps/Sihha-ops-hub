@@ -2707,6 +2707,10 @@ def public_volunteer_signup():
 def admin_index():
     return send_from_directory('public', 'index.html')
 
+@app.route('/donate-stats')
+def donate_stats_page():
+    return send_from_directory('public', 'donate-stats.html')
+
 @app.route('/intake')
 def intake_page():
     return send_from_directory('public', 'intake.html')
