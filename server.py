@@ -1060,13 +1060,13 @@ def dashboard_stats():
         'reimb_paid_total': db.execute(
             "SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='paid'"
         ).fetchone()[0],
-        # Spend (receipts approved)
+        # Spend (paid reimbursements = actual money out to volunteers)
         'spend_this_month':  db.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM receipts WHERE status='approved' AND purchase_date LIKE ?",
+            "SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='paid' AND paid_date LIKE ?",
             (f'{this_month}%',)
         ).fetchone()[0],
         'spend_total':       db.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM receipts WHERE status='approved'"
+            "SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='paid'"
         ).fetchone()[0],
         # Donations
         'donations_month':   db.execute(
@@ -1077,6 +1077,10 @@ def dashboard_stats():
             "SELECT COALESCE(SUM(amount),0) FROM donations"
         ).fetchone()[0],
         'donations_count':   db.execute("SELECT COUNT(*) FROM donations").fetchone()[0],
+        'donations_recurring_month': db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ? AND frequency='monthly'",
+            (f'{this_month}%',)
+        ).fetchone()[0],
     }
 
     # Monthly donations — last 6 months for trend chart
@@ -1444,6 +1448,12 @@ def update_reimbursement(rid):
          d.get('approved_by', row['approved_by']) or g.user['user_id'],
          d.get('notes', row['notes']), now(), rid)
     )
+    # When reimbursement is paid, mark the linked receipt as approved too
+    if new_status == 'paid' and row['status'] != 'paid' and row['receipt_id']:
+        db.execute(
+            "UPDATE receipts SET status='approved', updated_at=? WHERE id=? AND status='pending'",
+            (now(), row['receipt_id'])
+        )
     db.commit()
     # Notify volunteer via WhatsApp when payment is sent
     if new_status == 'paid' and row['status'] != 'paid':

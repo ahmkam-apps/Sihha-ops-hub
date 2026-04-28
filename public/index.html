@@ -892,11 +892,6 @@ async function renderDashboard() {
           <div class="stat-value">${fmtMoney(s.reimb_paid_month)}</div>
           <div class="stat-sub">${fmtMoney(s.reimb_paid_total)} all time</div>
         </div>
-        <div class="stat-card" onclick="nav('donations')" style="cursor:pointer;">
-          <div class="stat-label">Donations — All Time</div>
-          <div class="stat-value" style="color:#1a8754">${fmtMoney(s.donations_total)}</div>
-          <div class="stat-sub">${fmtMoney(s.donations_month)} this month · ${s.donations_count} total</div>
-        </div>
         <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Spend This Month</div>
           <div class="stat-value">${fmtMoney(s.spend_this_month)}</div>
@@ -904,42 +899,60 @@ async function renderDashboard() {
         </div>
       </div>`;
 
-    // ── Donations Trend ──────────────────────────────────────────────────────
-    let donationsTrendHTML = '';
+    // ── Donations Card ───────────────────────────────────────────────────────
     const dm = s.donations_by_month || [];
-    if (dm.length > 0) {
-      const maxVal = Math.max(...dm.map(m => m.total), 1);
-      const mLabel = iso => new Date(+iso.slice(0,4), +iso.slice(5,7)-1, 1)
-                              .toLocaleDateString('en-US', {month:'short'});
-      donationsTrendHTML = `
-        <div style="background:#fff;border-radius:10px;padding:16px 20px;margin-top:4px;border:1.5px solid #e8e8e8;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;">Donations — Last 6 Months</div>
-            <div style="display:flex;gap:12px;font-size:11px;">
-              <span style="color:#1a8754;">● Monthly recurring</span>
-              <span style="color:#b2dfdb;">● One-time</span>
+    const maxVal = Math.max(...dm.map(m => m.total), 1);
+    const mLabel = iso => new Date(+iso.slice(0,4), +iso.slice(5,7)-1, 1)
+                            .toLocaleDateString('en-US', {month:'short'});
+    const barChart = dm.length ? `
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-size:10px;font-weight:500;color:#888;text-transform:uppercase;letter-spacing:.6px;">Last 6 months</div>
+          <div style="display:flex;gap:10px;font-size:10px;">
+            <span style="color:#1a8754;">● Recurring</span>
+            <span style="color:#b2dfdb;">● One-time</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:6px;height:64px;">
+          ${dm.map(m => {
+            const totalPct   = Math.round(m.total     / maxVal * 80);
+            const recurPct   = Math.round(m.recurring / maxVal * 80);
+            const oneTimePct = Math.max(0, totalPct - recurPct);
+            return `
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:46px;gap:1px;">
+                <div style="width:100%;height:${recurPct}px;background:#1a8754;border-radius:3px 3px 0 0;min-height:${m.recurring>0?2:0}px;"></div>
+                <div style="width:100%;height:${oneTimePct}px;background:#b2dfdb;min-height:${m.one_time>0?2:0}px;border-radius:${recurPct===0?'3px 3px':0} 0 0;"></div>
+              </div>
+              <div style="font-size:9px;color:#aaa;">${mLabel(m.month)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
+    const donationsHTML = `
+      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:16px 20px;margin-top:4px;cursor:pointer;" onclick="nav('donations')">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:14px;">Donations</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="display:flex;gap:10px;flex:1;min-width:200px;">
+            <div style="flex:1;background:#f7f7f7;border-radius:8px;padding:10px 12px;">
+              <div style="font-size:10px;color:#888;margin-bottom:3px;">This month</div>
+              <div style="font-size:20px;font-weight:700;color:#1a8754;">${fmtMoney(s.donations_month)}</div>
+            </div>
+            <div style="flex:1;background:#f7f7f7;border-radius:8px;padding:10px 12px;">
+              <div style="font-size:10px;color:#888;margin-bottom:3px;">Recurring / mo</div>
+              <div style="font-size:20px;font-weight:700;color:#333;">${fmtMoney(s.donations_recurring_month)}</div>
+            </div>
+            <div style="flex:1;background:#f7f7f7;border-radius:8px;padding:10px 12px;">
+              <div style="font-size:10px;color:#888;margin-bottom:3px;">All time</div>
+              <div style="font-size:20px;font-weight:700;color:#333;">${fmtMoney(s.donations_total)}</div>
             </div>
           </div>
-          <div style="display:flex;align-items:flex-end;gap:8px;height:80px;">
-            ${dm.map(m => {
-              const totalPct  = Math.round(m.total   / maxVal * 100);
-              const recurPct  = Math.round(m.recurring / maxVal * 100);
-              const oneTimePct = totalPct - recurPct;
-              return `
-              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;">
-                <div style="font-size:10px;color:#888;white-space:nowrap;">${fmtMoney(m.total)}</div>
-                <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:50px;gap:1px;">
-                  <div style="width:100%;height:${recurPct}%;background:#1a8754;border-radius:3px 3px 0 0;min-height:${m.recurring>0?2:0}px;"></div>
-                  <div style="width:100%;height:${oneTimePct}%;background:#b2dfdb;min-height:${m.one_time>0?2:0}px;border-radius:${m.recurring>0?'0':'3px 3px'} 0 0;"></div>
-                </div>
-                <div style="font-size:10px;color:#aaa;">${mLabel(m.month)}</div>
-              </div>`;
-            }).join('')}
-          </div>
-        </div>`;
-    }
+          ${dm.length ? `<div style="flex:2;min-width:200px;">${barChart}</div>` : ''}
+        </div>
+      </div>`;
 
-    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsTrendHTML;
+    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsHTML;
 
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
