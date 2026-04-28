@@ -781,7 +781,8 @@ function downloadPDF(path) {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function renderDashboard() {
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>`;
+    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>
+     <button class="btn btn-outline" onclick="dbDebug()" style="margin-left:8px;font-size:11px;">DB Debug</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const [s, cycles] = await Promise.all([
