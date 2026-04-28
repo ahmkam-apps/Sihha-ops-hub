@@ -3789,16 +3789,18 @@ def portal_signup():
 
     # WhatsApp confirmation
     if created:
-        vol = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
-        if vol and vol.get('wa_phone') and vol.get('wa_apikey'):
-            fcode      = family['family_code'] if family else ''
+        vol_row = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
+        vol = dict(vol_row) if vol_row else {}
+        fam = dict(family) if family else {}
+        if vol.get('wa_phone') and vol.get('wa_apikey'):
+            fcode      = fam.get('family_code', '')
             task_label = ', '.join(t.capitalize() for t in created)
             msg = (f"SIHAA Confirmed: {task_label}\n"
-                   f"Family: {fcode} · Size: {family['family_size'] if family else '?'}\n"
+                   f"Family: {fcode} · Size: {fam.get('family_size', '?')}\n"
                    f"Delivery: {cycle['delivery_date_start']}\n"
                    f"JazakAllah Khair!")
-            if 'delivery' in created and family and family.get('address'):
-                msg += f"\nAddress: {family['address']}, {family['city']}"
+            if 'delivery' in created and fam.get('address'):
+                msg += f"\nAddress: {fam['address']}, {fam.get('city', '')}"
             _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
 
     return jsonify({'ok': True, 'created': created}), 201
