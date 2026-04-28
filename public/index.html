@@ -969,6 +969,7 @@ async function renderDashboard() {
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#1a8754;"></span>Actual</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;border-top:2px dashed #2e86c1;"></span>Projected</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal ($1,000)</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;border-top:2px dashed #9b59b6;"></span>Average</span>
           </div>
         </div>
 
@@ -1091,6 +1092,32 @@ async function renderDashboard() {
       const projLine    = [...Array(histLabels.length).fill(null), ...projVals];
       if (histLabels.length) projLine[histLabels.length - 1] = lastTotal;
 
+      // Average of actual (non-zero) months only
+      const nonZero   = histTotals.filter(v => v > 0);
+      const avgVal    = nonZero.length ? Math.round(nonZero.reduce((a,b) => a+b, 0) / nonZero.length) : 0;
+
+      const avgLinePlugin = {
+        id: 'avgLine',
+        afterDraw(chart) {
+          if (!avgVal) return;
+          const {ctx, chartArea:{left,right}, scales:{y}} = chart;
+          const yPos = y.getPixelForValue(avgVal);
+          ctx.save();
+          ctx.beginPath(); ctx.setLineDash([3,3]);
+          ctx.strokeStyle = '#9b59b6'; ctx.lineWidth = 1.5;
+          ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+          ctx.setLineDash([]);
+          const lbl = 'Avg ' + fmtMoney(avgVal);
+          const lw  = ctx.measureText(lbl).width + 10;
+          ctx.fillStyle = isDark ? '#2d1a3a' : '#f5eeff';
+          ctx.fillRect(left, yPos - 10, lw, 18);
+          ctx.fillStyle = '#7d3c98'; ctx.font = 'bold 10px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(lbl, left + 4, yPos + 4);
+          ctx.restore();
+        }
+      };
+
       if (window._dashLineChart) { window._dashLineChart.destroy(); }
       const lineCanvas = document.getElementById('dash-line-chart');
       if (lineCanvas) {
@@ -1121,7 +1148,7 @@ async function renderDashboard() {
             plugins: { legend:{display:false}, tooltip:{ callbacks:{ label: ctx => ctx.raw===null?null: ctx.dataset.label+': '+fmtMoney(ctx.raw) } } },
             scales: { x:{ grid:{display:false}, ticks:{color:tickCol,font:{size:11}} }, y:{ ...yScaleOpts } }
           },
-          plugins: [goalLinePlugin]
+          plugins: [goalLinePlugin, avgLinePlugin]
         });
       }
     }
