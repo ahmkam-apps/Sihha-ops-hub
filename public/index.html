@@ -539,19 +539,14 @@
       <div class="nav-item active" onclick="nav('dashboard')" id="nav-dashboard">
         <span class="icon">◈</span> Dashboard
       </div>
-      <div class="nav-item" onclick="nav('cycles')" id="nav-cycles">
-        <span class="icon">↻</span> Cycles
+      <div class="nav-item" onclick="nav('deliveries')" id="nav-deliveries">
+        <span class="icon">↻</span> Deliveries
       </div>
-      <div class="nav-item" onclick="nav('volunteers')" id="nav-volunteers">
-        <span class="icon">◎</span> Volunteers
-      </div>
-
-      <div class="nav-section">Families</div>
       <div class="nav-item" onclick="nav('families')" id="nav-families">
         <span class="icon">⌂</span> Families
       </div>
-      <div class="nav-item" onclick="nav('orders')" id="nav-orders">
-        <span class="icon">▤</span> Food Orders
+      <div class="nav-item" onclick="nav('volunteers')" id="nav-volunteers">
+        <span class="icon">◎</span> Volunteers
       </div>
 
       <div class="nav-section">Finance</div>
@@ -686,8 +681,8 @@ function showApp() {
   }
   // Treasurer: show only Finance section
   if (STATE.user.role === 'treasurer') {
-    ['nav-dashboard','nav-cycles','nav-volunteers',
-     'nav-families','nav-orders'].forEach(id => {
+    ['nav-dashboard','nav-deliveries','nav-volunteers',
+     'nav-families'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
@@ -714,8 +709,8 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     payments: 'Payments', donations: 'Donations', users: 'Users',
-    cycles: 'Delivery Cycles', catalog: 'Food Catalog',
-    cycle_detail: 'Cycle Detail', orders: 'Food Orders'
+    deliveries: 'Deliveries', catalog: 'Food Catalog',
+    cycle_detail: 'Delivery Detail', orders: 'Food Orders'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   closeDrawer();
@@ -723,7 +718,7 @@ function nav(page) {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
     payments: renderPayments, donations: renderDonations,
-    users: renderUsers, cycles: renderCycles, catalog: renderCatalog,
+    users: renderUsers, deliveries: renderDeliveries, catalog: renderCatalog,
     orders: renderOrders
   };
   if (renders[page]) renders[page]();
@@ -774,7 +769,7 @@ function downloadPDF(path) {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function renderDashboard() {
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Cycles</button>`;
+    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const [s, cycles] = await Promise.all([
@@ -782,7 +777,7 @@ async function renderDashboard() {
       GET('/delivery-cycles')
     ]);
 
-    // ── Active Cycle Banner ──────────────────────────────────────────────────
+    // ── Active Delivery Banner ──────────────────────────────────────────────────
     const activeCycle = cycles.find(c => c.status === 'shopping')
                      || cycles.find(c => c.status === 'upcoming')
                      || cycles[0];
@@ -801,7 +796,7 @@ async function renderDashboard() {
         actions.push(`<button class="btn btn-sm" onclick="generateSlotsFromDash('${activeCycle.id}')">Slots</button>`);
         actions.push(`<button class="btn btn-sm" onclick="triggerRemindersFromDash()">Remind</button>`);
       }
-      actions.push(`<button class="btn btn-sm btn-outline" onclick="nav('cycles')">Manage →</button>`);
+      actions.push(`<button class="btn btn-sm btn-outline" onclick="nav('deliveries')">Manage →</button>`);
 
       const slotsTotal = s.slots_open + s.slots_claimed + s.slots_complete;
       const slotsPct   = slotsTotal > 0 ? Math.round((s.slots_claimed + s.slots_complete) / slotsTotal * 100) : 0;
@@ -825,13 +820,13 @@ async function renderDashboard() {
         <div style="background:${sb};border:1.5px solid ${sc}30;border-left:4px solid ${sc};border-radius:8px;padding:16px 20px;margin-bottom:20px;">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;">
             <div style="flex:1;min-width:200px;">
-              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:3px;">Active Cycle</div>
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:3px;">Active Delivery</div>
               <div style="font-size:16px;font-weight:700;color:#111;">${activeCycle.title}</div>
               <div style="font-size:12px;color:#666;margin-top:3px;">
                 ${fmtDateShort(activeCycle.delivery_date_start)} – ${fmtDateShort(activeCycle.delivery_date_end)}
                 &nbsp;·&nbsp;
                 <span style="font-weight:700;color:${sc};text-transform:uppercase;">${activeCycle.status}</span>
-                &nbsp;·&nbsp; ${s.orders_this_cycle} orders
+                &nbsp;·&nbsp; ${s.orders_this_cycle} families
               </div>
               ${slotsBar}
             </div>
@@ -843,8 +838,8 @@ async function renderDashboard() {
         <div style="background:#f9f9f9;border:1.5px dashed #ddd;border-radius:8px;padding:16px 20px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
           <span style="color:#888;font-size:14px;">No active delivery cycle</span>
           <div style="display:flex;gap:8px;">
-            <button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Cycles</button>
-            <button class="btn" onclick="nav('cycles')">+ Create Cycle</button>
+            <button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>
+            <button class="btn" onclick="openCycleForm()">+ New Delivery</button>
           </div>
         </div>`;
     }
@@ -1822,7 +1817,7 @@ async function viewVolunteer(id) {
         <div class="hist-stat-cell"><div class="hist-stat-num">${s.completed||0}</div><div class="hist-stat-lbl">Completed</div></div>
         <div class="hist-stat-cell"><div class="hist-stat-num">${s.shopping||0}</div><div class="hist-stat-lbl">Shopping</div></div>
         <div class="hist-stat-cell"><div class="hist-stat-num">${s.delivery||0}</div><div class="hist-stat-lbl">Deliveries</div></div>
-        <div class="hist-stat-cell"><div class="hist-stat-num">${s.cycles_served||0}</div><div class="hist-stat-lbl">Cycles</div></div>
+        <div class="hist-stat-cell"><div class="hist-stat-num">${s.cycles_served||0}</div><div class="hist-stat-lbl">Deliveries</div></div>
         <div class="hist-stat-cell"><div class="hist-stat-num">${s.families_served||0}</div><div class="hist-stat-lbl">Families</div></div>
         <div class="hist-stat-cell"><div class="hist-stat-num">${s.total_tasks||0}</div><div class="hist-stat-lbl">Total Tasks</div></div>
       </div>`;
@@ -2513,7 +2508,7 @@ async function renderOrders() {
       ? cycles.map(c =>
           `<option value="${c.id}" ${c.id === defaultCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
         ).join('')
-      : '<option value="">No cycles yet</option>';
+      : '<option value="">No deliveries yet</option>';
 
     document.getElementById('topbar-actions').innerHTML =
       `<button class="btn" onclick="window.open('/order','_blank')">⇗ Family Order Form</button>`;
@@ -2525,7 +2520,7 @@ async function renderOrders() {
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <select id="orders-cycle-select" class="search-input" style="min-width:240px;"
                     onchange="loadOrdersForCycle(this.value)">
-              <option value="">— Select a cycle —</option>
+              <option value="">— Select a delivery —</option>
               ${cycleOptions}
             </select>
             <button class="btn" id="gen-slots-btn" onclick="generateSlotsForSelected()" style="display:none;">
@@ -2534,7 +2529,7 @@ async function renderOrders() {
           </div>
         </div>
         <div id="orders-table-wrap">
-          <p style="padding:24px;color:var(--gray-4);">Select a cycle above to view orders.</p>
+          <p style="padding:24px;color:var(--gray-4);">Select a delivery above to view orders.</p>
         </div>
       </div>`;
 
@@ -2582,7 +2577,7 @@ async function loadOrdersForCycle(cycleId) {
   if (orders.length === 0) {
     wrap.innerHTML = `
       <div style="padding:32px;text-align:center;color:var(--gray-4);">
-        No orders for this cycle yet.<br>
+        No orders for this delivery yet.<br>
         <a href="/order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order form →</a>
       </div>`;
     return;
@@ -2630,11 +2625,11 @@ async function generateSlotsForSelected() {
 
 let _cyclesCache = [];
 
-async function renderCycles(filterStatus) {
+async function renderDeliveries(filterStatus) {
   filterStatus = filterStatus || STATE.filter || 'all';
   STATE.filter = filterStatus;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn" onclick="openCycleForm()">+ New Cycle</button>`;
+    `<button class="btn" onclick="openCycleForm()">+ New Delivery</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const url = filterStatus !== 'all' ? '/delivery-cycles?status=' + filterStatus : '/delivery-cycles';
@@ -2645,31 +2640,30 @@ async function renderCycles(filterStatus) {
       <div style="margin-bottom:16px">
         <div class="filter-tabs">
           ${['all','upcoming','shopping','delivered'].map(s =>
-            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderCycles('${s}')">${s === 'all' ? 'All' : statusLabels[s]}</div>`
+            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]}</div>`
           ).join('')}
         </div>
       </div>
       <div class="table-card">
-        <div class="table-header"><span class="table-title">Delivery Cycles</span></div>
+        <div class="table-header"><span class="table-title">All Deliveries</span></div>
         <table>
           <thead><tr>
-            <th>Title</th><th>Delivery Dates</th><th>Status</th><th>Confirmed</th><th>Orders</th><th></th>
+            <th>Title</th><th>Delivery Dates</th><th>Status</th><th>Families</th><th></th>
           </tr></thead>
           <tbody>
             ${_cyclesCache.length ? _cyclesCache.map(c => `
-              <tr>
+              <tr style="cursor:pointer" onclick="viewCycleDetail('${c.id}')">
                 <td><strong>${c.title}</strong></td>
                 <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)} – ${fmtDate(c.delivery_date_end)}</td>
                 <td><span class="badge ${statusColors[c.status]||'badge-pending'}">${statusLabels[c.status]||c.status}</span></td>
                 <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
-                <td><button class="btn btn-outline btn-sm" onclick="viewCycleDetail('${c.id}')">View</button></td>
-                <td>
+                <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
-                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Shopping</button>` : ''}
-                  ${c.status === 'shopping' ? `<button class="btn btn-sm" style="margin-left:4px" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
+                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Shopping</button>` : ''}
+                  ${c.status === 'shopping' ? `<button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="6">No cycles found</td></tr>'}
+              '<tr class="empty-row"><td colspan="5">No deliveries found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -2698,19 +2692,19 @@ async function advanceCycleStatus(id, current) {
   const next = { upcoming:'shopping', shopping:'delivered' };
   if (!next[current]) return;
   const label = { upcoming:'Shopping', shopping:'Delivered' };
-  if (!confirm(`Mark this cycle as "${label[next[current]]}"?`)) return;
+  if (!confirm(`Mark this delivery as "${label[next[current]]}"?`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: next[current] });
-    renderCycles();
+    renderDeliveries();
   } catch(e) { alert(e.message); }
 }
 
 function openCycleForm(id) {
   STATE.editId = id || null;
   const c = id ? _cyclesCache.find(x => x.id === id) : null;
-  openDrawer(id ? 'Edit Cycle' : 'New Delivery Cycle', `
+  openDrawer(id ? 'Edit Delivery' : 'New Delivery', `
     <div class="form-group">
-      <label>Cycle Title *</label>
+      <label>Delivery Title *</label>
       <input type="text" id="cy-title" placeholder="e.g. May 9–10, 2026" value="${c?.title||''}">
     </div>
     <div class="form-row">
@@ -2729,7 +2723,7 @@ function openCycleForm(id) {
         ${['upcoming','shopping','delivered'].map(s => `<option value="${s}" ${c?.status===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
       </select>
     </div>` : `<p style="font-size:13px;color:#1a8754;background:#f0faf5;padding:10px 12px;border-radius:8px;margin-top:4px;">
-      ✓ All active families will be automatically enrolled when the cycle is created.
+      ✓ All active families will be automatically enrolled when the delivery is created.
     </p>`}
     <div class="form-group">
       <label>Notes</label>
@@ -2756,16 +2750,16 @@ async function saveCycle() {
       ? await PUT('/delivery-cycles/' + STATE.editId, payload)
       : await POST('/delivery-cycles', payload);
     if (!STATE.editId && res.enrolled > 0)
-      alert(`✅ Cycle created! ${res.enrolled} families auto-enrolled.`);
-    closeDrawer(); renderCycles();
+      alert(`✅ Delivery created! ${res.enrolled} families auto-enrolled.`);
+    closeDrawer(); renderDeliveries();
   } catch(e) { showErr(e.message); }
 }
 
 async function viewCycleDetail(cycleId) {
   const cycle = _cyclesCache.find(c => c.id === cycleId);
-  document.getElementById('page-title').textContent = cycle ? cycle.title : 'Cycle Detail';
+  document.getElementById('page-title').textContent = cycle ? cycle.title : 'Delivery Detail';
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="renderCycles()">← Back</button>
+    `<button class="btn btn-outline" onclick="renderDeliveries()">← Back</button>
      <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
      <button class="btn btn-outline" onclick="viewSlotBoard('${cycleId}')">Slot Board</button>
      <button class="btn btn-outline" onclick="downloadPDF('/reports/shopping-list/${cycleId}')">⬇ Shopping PDF</button>
@@ -2780,7 +2774,7 @@ async function viewCycleDetail(cycleId) {
         · Delivery: ${fmtDate(cycle?.delivery_date_start)} – ${fmtDate(cycle?.delivery_date_end)}
       </div>
       <div class="table-card">
-        <div class="table-header"><span class="table-title">Orders for This Cycle</span></div>
+        <div class="table-header"><span class="table-title">Families This Delivery</span></div>
         <table>
           <thead><tr>
             <th>Family</th><th>Phone</th><th>Bundle</th><th>Items Selected</th><th>Status</th><th>Submitted</th>
@@ -2869,9 +2863,9 @@ async function generateSlots(cycleId) {
 
 async function viewSlotBoard(cycleId) {
   const cycle = _cyclesCache.find(c => c.id === cycleId);
-  document.getElementById('page-title').textContent = (cycle ? cycle.title : 'Cycle') + ' — Slot Board';
+  document.getElementById('page-title').textContent = (cycle ? cycle.title : 'Delivery') + ' — Slot Board';
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="renderCycles()">← Back to Cycles</button>
+    `<button class="btn btn-outline" onclick="renderDeliveries()">← Back to Deliveries</button>
      <button class="btn btn-outline" onclick="viewCycleDetail('${cycleId}')">Orders</button>
      <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
      <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
