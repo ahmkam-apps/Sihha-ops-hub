@@ -4048,17 +4048,13 @@ def seed_cycles_2026():
         return cycles
 
     db = get_db()
-    cycles_to_seed = build_cycles()
-    seed_dates = [c['delivery_date_start'] for c in cycles_to_seed]
-
-    # Wipe any existing 2026 cycles (regardless of status) and reseed cleanly
-    deleted = db.execute(
-        "DELETE FROM delivery_cycles WHERE delivery_date_start >= '2026-01-01'"
-    ).rowcount
-    db.commit()
-
-    created = 0
-    for c in cycles_to_seed:
+    existing_starts = {r['delivery_date_start'] for r in
+                       db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
+    created = skipped = 0
+    for c in build_cycles():
+        if c['delivery_date_start'] in existing_starts:
+            skipped += 1
+            continue
         cid = str(uuid.uuid4())
         db.execute(
             '''INSERT INTO delivery_cycles
@@ -4066,13 +4062,14 @@ def seed_cycles_2026():
                 request_open_at, request_close_at, status, notes, created_by, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (cid, c['title'], c['delivery_date_start'], c['delivery_date_end'],
-             c['request_open_at'], c['request_close_at'], 'upcoming', c['notes'],
+             c['request_open_at'], c['request_close_at'], c['status'], c['notes'],
              g.user['user_id'], now())
         )
+        db.commit()
+        # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
         created += 1
-    db.commit()
-    log.info(f'seed-cycles-2026: deleted={deleted}, created={created}')
-    return jsonify({'ok': True, 'created': created, 'deleted': deleted})
+    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}')
+    return jsonify({'ok': True, 'created': created, 'skipped': skipped})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])
@@ -4081,37 +4078,6 @@ def trigger_reminders():
     """Admin manual trigger — also used if Railway Cron is configured."""
     sent, target_date = _send_reminders_job()
     return jsonify({'ok': True, 'reminders_sent': sent, 'target_date': target_date})
-
-
-@app.route('/api/admin/db-debug', methods=['GET'])
-@require_auth(roles=['admin'])
-def db_debug():
-    """Diagnostic: show delivery_cycles schema + all rows."""
-    db = get_db()
-    schema = db.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
-    ).fetchone()
-    cycles = db.execute(
-        "SELECT id, title, delivery_date_start, status FROM delivery_cycles ORDER BY delivery_date_start"
-    ).fetchall()
-    # Try a test insert to see if upcoming status is allowed
-    test_error = None
-    try:
-        db.execute(
-            "INSERT INTO delivery_cycles (id,title,delivery_date_start,delivery_date_end,request_open_at,request_close_at,status,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            ('__test__','Test','2099-01-01','2099-01-02','','','upcoming','diag','2026-01-01')
-        )
-        db.execute("DELETE FROM delivery_cycles WHERE id='__test__'")
-        db.commit()
-        test_error = None
-    except Exception as e:
-        test_error = str(e)
-    return jsonify({
-        'schema': schema[0] if schema else None,
-        'cycle_count': len(cycles),
-        'cycles': [dict(r) for r in cycles],
-        'upcoming_insert_test': 'OK' if test_error is None else f'FAILED: {test_error}'
-    })
 
 def _send_family_confirmation_reminders():
     """7 days before delivery: create food_requests for all active families then WhatsApp opt-in link.
