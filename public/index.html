@@ -507,6 +507,7 @@
     .drawer { width: 100%; }
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -900,62 +901,245 @@ async function renderDashboard() {
 
     // ── Donations Card ───────────────────────────────────────────────────────
     const dm = s.donations_by_month || [];
-    const maxVal = Math.max(...dm.map(m => m.total), 1);
     const mLabel = iso => new Date(+iso.slice(0,4), +iso.slice(5,7)-1, 1)
                             .toLocaleDateString('en-US', {month:'short'});
-    const barChart = dm.length ? `
-      <div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <div style="font-size:10px;font-weight:500;color:#888;text-transform:uppercase;letter-spacing:.6px;">Last 6 months</div>
-          <div style="display:flex;gap:10px;font-size:10px;">
-            <span style="color:#1a8754;">● Recurring</span>
-            <span style="color:#b2dfdb;">● One-time</span>
-          </div>
+
+    const DONATION_GOAL = 1000;
+    const gap = Math.max(0, DONATION_GOAL - (s.donations_month || 0));
+
+    const kpiRow = `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+        <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">This month</div>
+          <div style="font-size:22px;font-weight:700;color:#1a8754;">${fmtMoney(s.donations_month)}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">vs ${fmtMoney(DONATION_GOAL)} goal</div>
         </div>
-        <div style="display:flex;align-items:flex-end;gap:6px;height:64px;">
-          ${dm.map(m => {
-            const totalPct   = Math.round(m.total     / maxVal * 80);
-            const recurPct   = Math.round(m.recurring / maxVal * 80);
-            const oneTimePct = Math.max(0, totalPct - recurPct);
-            return `
-            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
-              <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:46px;gap:1px;">
-                <div style="width:100%;height:${recurPct}px;background:#1a8754;border-radius:3px 3px 0 0;min-height:${m.recurring>0?2:0}px;"></div>
-                <div style="width:100%;height:${oneTimePct}px;background:#b2dfdb;min-height:${m.one_time>0?2:0}px;border-radius:${recurPct===0?'3px 3px':0} 0 0;"></div>
-              </div>
-              <div style="font-size:9px;color:#aaa;">${mLabel(m.month)}</div>
-            </div>`;
-          }).join('')}
+        <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">Recurring / mo</div>
+          <div style="font-size:22px;font-weight:700;color:#2e86c1;">${fmtMoney(s.donations_recurring_month)}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">predictable base</div>
         </div>
-      </div>` : '';
+        <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">All time</div>
+          <div style="font-size:22px;font-weight:700;color:#333;">${fmtMoney(s.donations_total)}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">since Feb 2026</div>
+        </div>
+        <div style="background:${gap>0?'#fffbec':'#f0faf5'};border-radius:8px;padding:12px 14px;">
+          <div style="font-size:11px;color:${gap>0?'#b8860b':'#1a8754'};margin-bottom:4px;">Goal gap</div>
+          <div style="font-size:22px;font-weight:700;color:${gap>0?'#e0a800':'#1a8754'};">${gap>0?fmtMoney(gap):'✓ Met'}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">${gap>0?'still needed/month':'donations sufficient'}</div>
+        </div>
+      </div>`;
 
     const donationsHTML = `
-      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:16px 20px;margin-top:4px;cursor:pointer;" onclick="nav('donations')">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:14px;">Donations</div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;">
-          <div style="display:flex;gap:10px;flex:1;min-width:200px;">
-            <div style="flex:1;background:#f7f7f7;border-radius:8px;padding:10px 12px;">
-              <div style="font-size:10px;color:#888;margin-bottom:3px;">This month</div>
-              <div style="font-size:20px;font-weight:700;color:#1a8754;">${fmtMoney(s.donations_month)}</div>
+      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:16px 20px;margin-top:4px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:14px;">Donations & Projections</div>
+        ${kpiRow}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:.6px;">Monthly trend</div>
+            <div style="position:relative;height:200px;">
+              <canvas id="dash-don-chart"></canvas>
             </div>
-            <div style="flex:1;background:#f7f7f7;border-radius:8px;padding:10px 12px;">
-              <div style="font-size:10px;color:#888;margin-bottom:3px;">Recurring / mo</div>
-              <div style="font-size:20px;font-weight:700;color:#333;">${fmtMoney(s.donations_recurring_month)}</div>
-            </div>
-            <div style="flex:1;background:#f7f7f7;border-radius:8px;padding:10px 12px;">
-              <div style="font-size:10px;color:#888;margin-bottom:3px;">All time</div>
-              <div style="font-size:20px;font-weight:700;color:#333;">${fmtMoney(s.donations_total)}</div>
+            <div style="display:flex;gap:14px;margin-top:8px;flex-wrap:wrap;">
+              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#1a8754;"></span>Recurring</span>
+              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#b2dfdb;"></span>One-time</span>
+              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal</span>
+              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#2e86c1;border-top:2px dashed #2e86c1;background:none;"></span>Projected</span>
             </div>
           </div>
-          ${dm.length ? `<div style="flex:2;min-width:200px;">${barChart}</div>` : ''}
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:12px;text-transform:uppercase;letter-spacing:.6px;">Projection calculator</div>
+            <div style="display:flex;flex-direction:column;gap:12px;">
+              <div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                  <label style="font-size:12px;color:#666;">Families to support</label>
+                  <span style="font-size:13px;font-weight:700;color:#111;" id="proj-fam-val">5</span>
+                </div>
+                <input type="range" min="1" max="30" value="5" step="1" id="proj-fam"
+                  style="width:100%;accent-color:#1a3a2a;"
+                  oninput="updateDashProjection()">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                  <label style="font-size:12px;color:#666;">Cost per family per cycle</label>
+                  <span style="font-size:13px;font-weight:700;color:#111;" id="proj-cost-val">$100</span>
+                </div>
+                <input type="range" min="25" max="300" value="100" step="25" id="proj-cost"
+                  style="width:100%;accent-color:#1a3a2a;"
+                  oninput="updateDashProjection()">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                  <label style="font-size:12px;color:#666;">Cycles per month</label>
+                  <span style="font-size:13px;font-weight:700;color:#111;" id="proj-cyc-val">2</span>
+                </div>
+                <input type="range" min="1" max="4" value="2" step="1" id="proj-cyc"
+                  style="width:100%;accent-color:#1a3a2a;"
+                  oninput="updateDashProjection()">
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="proj-results"></div>
+            </div>
+          </div>
         </div>
       </div>`;
 
     document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsHTML;
 
+    // ── Draw Chart.js donation chart ─────────────────────────────────────────
+    if (typeof Chart !== 'undefined') {
+      const canvas = document.getElementById('dash-don-chart');
+      if (canvas) {
+        const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches;
+        const gridCol = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)';
+        const tickCol = isDark ? '#999' : '#888';
+
+        const histLabels   = dm.map(m => mLabel(m.month));
+        const histRecur    = dm.map(m => m.recurring || 0);
+        const histOneTime  = dm.map(m => m.one_time   || 0);
+
+        // Build a simple linear projection for next 6 months
+        const lastTotal = dm.length ? (dm[dm.length-1].total || 0) : 0;
+        const projLabels = [];
+        const projVals   = [];
+        if (dm.length) {
+          const lastDate = new Date(dm[dm.length-1].month + '-01');
+          const step = (DONATION_GOAL - lastTotal) / 6;
+          for (let i = 1; i <= 6; i++) {
+            const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
+            projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
+            projVals.push(Math.round(Math.min(DONATION_GOAL, lastTotal + step * i)));
+          }
+        }
+
+        const allLabels   = [...histLabels, ...projLabels];
+        const recurData   = [...histRecur,  ...Array(projLabels.length).fill(null)];
+        const oneTimeData = [...histOneTime,...Array(projLabels.length).fill(null)];
+        const projLineData= [...Array(histLabels.length).fill(null), ...projVals];
+        if (histLabels.length) projLineData[histLabels.length - 1] = lastTotal;
+
+        const maxY = Math.max(DONATION_GOAL * 1.2, ...dm.map(m => m.total || 0));
+
+        if (window._dashDonChart) { window._dashDonChart.destroy(); }
+        window._dashDonChart = new Chart(canvas.getContext('2d'), {
+          data: {
+            labels: allLabels,
+            datasets: [
+              {
+                type: 'bar', label: 'Recurring',
+                data: recurData, backgroundColor: '#1a8754',
+                stack: 'don', barThickness: 22,
+                borderRadius: {topLeft:3,topRight:3}, order: 2,
+              },
+              {
+                type: 'bar', label: 'One-time',
+                data: oneTimeData, backgroundColor: '#b2dfdb',
+                stack: 'don', barThickness: 22,
+                borderRadius: {topLeft:3,topRight:3}, order: 2,
+              },
+              {
+                type: 'line', label: 'Projected',
+                data: projLineData,
+                borderColor: '#2e86c1', borderDash: [5,4], borderWidth: 2,
+                pointBackgroundColor: '#2e86c1',
+                pointRadius: ctx => ctx.dataIndex >= histLabels.length ? 4 : 0,
+                tension: 0.35, fill: false, order: 1,
+              }
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode:'index', intersect:false },
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: { label: ctx => ctx.raw===null?null: ctx.dataset.label+': '+fmtMoney(ctx.raw) } }
+            },
+            scales: {
+              x: { grid:{display:false}, ticks:{color:tickCol,font:{size:11}} },
+              y: {
+                min: 0, max: Math.ceil(maxY/200)*200,
+                grid: { color: gridCol },
+                border: { display: false },
+                ticks: { color:tickCol, font:{size:11}, stepSize:200, callback: v => '$'+v.toLocaleString() }
+              }
+            }
+          },
+          plugins: [{
+            id: 'goalLine',
+            afterDraw(chart) {
+              const {ctx, chartArea:{left,right}, scales:{y}} = chart;
+              const yPos = y.getPixelForValue(DONATION_GOAL);
+              ctx.save();
+              ctx.beginPath(); ctx.setLineDash([6,4]);
+              ctx.strokeStyle='#e0a800'; ctx.lineWidth=2;
+              ctx.moveTo(left,yPos); ctx.lineTo(right,yPos); ctx.stroke();
+              ctx.setLineDash([]);
+              const lbl = 'Goal '+fmtMoney(DONATION_GOAL);
+              const w = ctx.measureText(lbl).width + 12;
+              ctx.fillStyle = isDark?'#2a2200':'#fffbec';
+              ctx.fillRect(right-w, yPos-10, w, 18);
+              ctx.fillStyle='#b8860b'; ctx.font='bold 10px sans-serif';
+              ctx.textAlign='right'; ctx.fillText(lbl, right-4, yPos+4);
+              ctx.restore();
+            }
+          }]
+        });
+      }
+    }
+
+    // ── Projection calculator ────────────────────────────────────────────────
+    window._dashDonationsCurrent = s.donations_month || 0;
+    updateDashProjection();
+
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+function updateDashProjection() {
+  const families = parseInt(document.getElementById('proj-fam')?.value  || 5);
+  const cost     = parseInt(document.getElementById('proj-cost')?.value || 100);
+  const cycles   = parseInt(document.getElementById('proj-cyc')?.value  || 2);
+  const current  = window._dashDonationsCurrent || 0;
+
+  const fv = document.getElementById('proj-fam-val');
+  const cv = document.getElementById('proj-cost-val');
+  const yv = document.getElementById('proj-cyc-val');
+  if (fv) fv.textContent = families;
+  if (cv) cv.textContent = '$' + cost;
+  if (yv) yv.textContent = cycles;
+
+  const monthlyNeed = families * cost * cycles;
+  const annualNeed  = monthlyNeed * 12;
+  const gap         = Math.max(0, monthlyNeed - current);
+  const coverPct    = Math.min(100, Math.round(current / monthlyNeed * 100));
+  const donorsAt50  = Math.ceil(gap / 50);
+  const gapClass    = gap === 0 ? '#f0faf5' : coverPct >= 60 ? '#fffbec' : '#fff5f5';
+  const gapTextCol  = gap === 0 ? '#1a8754' : coverPct >= 60 ? '#b8860b' : '#c0392b';
+
+  const el = document.getElementById('proj-results');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="background:#f7f7f7;border-radius:8px;padding:10px 12px;">
+      <div style="font-size:10px;color:#888;margin-bottom:3px;">Monthly need</div>
+      <div style="font-size:18px;font-weight:700;color:#111;">${fmtMoney(monthlyNeed)}</div>
+      <div style="font-size:10px;color:#888;margin-top:2px;">${families} fam × $${cost} × ${cycles} cycles</div>
+    </div>
+    <div style="background:#f7f7f7;border-radius:8px;padding:10px 12px;">
+      <div style="font-size:10px;color:#888;margin-bottom:3px;">Annual need</div>
+      <div style="font-size:18px;font-weight:700;color:#111;">${fmtMoney(annualNeed)}</div>
+      <div style="font-size:10px;color:#888;margin-top:2px;">across 12 months</div>
+    </div>
+    <div style="background:${gapClass};border-radius:8px;padding:10px 12px;">
+      <div style="font-size:10px;color:${gapTextCol};margin-bottom:3px;">Funding gap</div>
+      <div style="font-size:18px;font-weight:700;color:${gapTextCol};">${gap===0?'✓ Covered':fmtMoney(gap)+'/mo'}</div>
+      <div style="font-size:10px;color:#888;margin-top:2px;">${coverPct}% funded currently</div>
+    </div>
+    <div style="background:#f7f7f7;border-radius:8px;padding:10px 12px;">
+      <div style="font-size:10px;color:#888;margin-bottom:3px;">New donors needed</div>
+      <div style="font-size:18px;font-weight:700;color:#111;">${gap===0?'0':donorsAt50}</div>
+      <div style="font-size:10px;color:#888;margin-top:2px;">${gap===0?'no gap to close':'at $50/mo to close gap'}</div>
+    </div>`;
 }
 
 function fmtDateShort(iso) {
