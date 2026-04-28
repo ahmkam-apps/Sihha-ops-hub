@@ -621,11 +621,13 @@ def bootstrap_db():
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
     ).fetchone()
     if cycles_sql and 'upcoming' not in cycles_sql[0]:
-        log.info('Migration: upgrading delivery_cycles for upcoming status')
+        log.info('Migration: upgrading delivery_cycles CHECK to include upcoming status')
         try:
             conn.execute('PRAGMA foreign_keys=OFF')
-            conn.executescript('''
-                CREATE TABLE IF NOT EXISTS delivery_cycles_new (
+            # Clean up any leftover _new table from a previous failed attempt
+            conn.execute('DROP TABLE IF EXISTS delivery_cycles_new')
+            conn.execute('''
+                CREATE TABLE delivery_cycles_new (
                     id                  TEXT PRIMARY KEY,
                     title               TEXT NOT NULL,
                     delivery_date_start TEXT NOT NULL,
@@ -638,19 +640,25 @@ def bootstrap_db():
                     created_by          TEXT,
                     created_at          TEXT NOT NULL,
                     updated_at          TEXT
-                );
-                INSERT OR IGNORE INTO delivery_cycles_new
-                    SELECT * FROM delivery_cycles;
-                DROP TABLE IF EXISTS delivery_cycles;
-                ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles;
-                UPDATE delivery_cycles SET status='upcoming'
-                    WHERE status IN ('draft','open','closed');
-            ''')
+                )''')
+            # Explicit column list so old rows (without updated_at) copy correctly
+            conn.execute('''
+                INSERT INTO delivery_cycles_new
+                    (id, title, delivery_date_start, delivery_date_end,
+                     request_open_at, request_close_at, status, notes, created_by, created_at)
+                SELECT id, title, delivery_date_start, delivery_date_end,
+                       COALESCE(request_open_at,''), COALESCE(request_close_at,''),
+                       status, notes, created_by, created_at
+                FROM delivery_cycles''')
+            conn.execute('DROP TABLE delivery_cycles')
+            conn.execute('ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles')
+            conn.execute("UPDATE delivery_cycles SET status='upcoming' WHERE status IN ('draft','open','closed')")
+            conn.commit()
             conn.execute('PRAGMA foreign_keys=ON')
-            log.info('Migration: delivery_cycles upgraded — upcoming status added, old draft/open/closed migrated')
+            log.info('Migration: delivery_cycles upgraded — upcoming status added')
         except Exception as _e:
             conn.execute('PRAGMA foreign_keys=ON')
-            log.info(f'Migration: delivery_cycles already upgraded — skipping ({_e})')
+            log.info(f'Migration: delivery_cycles upgrade failed — {_e}')
 
     # Upgrade food_requests status CHECK to include confirmation statuses
     freq_sql = conn.execute(
