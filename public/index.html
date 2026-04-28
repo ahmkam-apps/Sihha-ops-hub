@@ -1396,9 +1396,7 @@ async function renderFamilies(filter, search) {
                   ${r.status==='pending' ? `
                     <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
                     <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusFamily('${r.id}','inactive')">✗</button>
-                  ` : `
-                    <button class="btn btn-sm" onclick="openFamilyForm('${r.id}')">Edit</button>
-                  `}
+                  ` : ''}
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="10">No families found</td></tr>'}
@@ -1540,7 +1538,12 @@ async function famSaveField(famId, field, value) {
   try {
     await PUT('/families/' + famId, { [field]: value });
     const msg = document.getElementById('fam-saved-' + famId);
-    if (msg) { msg.textContent = '✓ Saved'; setTimeout(() => msg.textContent = '', 1500); }
+    if (msg) {
+      msg.innerHTML = '✓ Saved';
+      msg.style.cssText = 'font-size:13px;font-weight:600;color:#1a8754;transition:opacity .3s;';
+      clearTimeout(msg._t);
+      msg._t = setTimeout(() => { msg.style.opacity='0'; setTimeout(()=>{msg.innerHTML='';msg.style.opacity='1';},300); }, 2500);
+    }
   } catch(e) { alert('Failed to save: ' + e.message); }
 }
 
@@ -1643,7 +1646,7 @@ async function viewFamily(id) {
           ${badge(r.status)}
           ${r.bundle_size ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--gray-1);color:var(--gray-5);">Bundle: ${bundleLabel[r.bundle_size]||r.bundle_size}</span>` : ''}
         </div>
-        <span style="font-size:11px;color:var(--gray-3);" id="fam-saved-${fid}"></span>
+        <span id="fam-saved-${fid}" style="font-size:13px;font-weight:600;color:#1a8754;min-width:70px;text-align:right;"></span>
       </div>`;
 
     // ── Current cycle status ───────────────────────────────────────────────────
@@ -1677,7 +1680,10 @@ async function viewFamily(id) {
     // ── Edit grid ─────────────────────────────────────────────────────────────
     const editGrid = `
       <div style="background:#fff;border-radius:12px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);margin-bottom:4px;padding-bottom:10px;border-bottom:1px solid var(--gray-2);">Profile</div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px;padding-bottom:10px;border-bottom:1px solid var(--gray-2);">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);">Profile</span>
+          <span style="font-size:11px;color:var(--gray-3);">Fields save automatically when you click away</span>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px;">
           ${row('Name',        inp('name',          r.name))}
           ${row('Phone',       inp('phone',         r.phone,         'tel'))}
