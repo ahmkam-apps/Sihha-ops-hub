@@ -54,6 +54,10 @@ def _bundle_letter(family_size):
     elif size <= 5: return 'M'
     else:           return 'L'
 
+def _normalize_phone(phone):
+    """Strip all non-digit characters. '555-123-4567' → '5551234567'."""
+    return ''.join(c for c in (phone or '') if c.isdigit())
+
 def _make_family_code(phone, family_size, db_conn=None, exclude_id=None):
     """Generate unique human-readable family reference.
     Format: last 6 digits of phone + '-' + bundle size letter.
@@ -597,6 +601,39 @@ def bootstrap_db():
         except Exception as _e:
             # Another worker already ran this migration — safe to skip
             log.info(f'Migration: reimbursements table already upgraded or in progress — skipping ({_e})')
+
+    # ── Phase 6 migrations: phone normalisation + bundle size request ─────────────
+
+    # Add pending_bundle_size to families (coordinator must approve before it takes effect)
+    try:
+        conn.execute('ALTER TABLE families ADD COLUMN pending_bundle_size TEXT')
+        log.info('Migration: added pending_bundle_size to families')
+    except sqlite3.OperationalError:
+        pass
+
+    # Normalise all existing phone numbers — strip hyphens/spaces/parens to digits only
+    rows = conn.execute("SELECT id, phone FROM families WHERE phone IS NOT NULL").fetchall()
+    updated = 0
+    for row in rows:
+        normalized = ''.join(c for c in row[1] if c.isdigit())
+        if normalized != row[1]:
+            conn.execute("UPDATE families SET phone=? WHERE id=?", (normalized, row[0]))
+            updated += 1
+    if updated:
+        conn.commit()
+        log.info(f'Migration: normalised {updated} family phone numbers')
+
+    # Same for volunteers
+    vrows = conn.execute("SELECT id, phone FROM volunteers WHERE phone IS NOT NULL").fetchall()
+    vupdated = 0
+    for row in vrows:
+        normalized = ''.join(c for c in row[1] if c.isdigit())
+        if normalized != row[1]:
+            conn.execute("UPDATE volunteers SET phone=? WHERE id=?", (normalized, row[0]))
+            vupdated += 1
+    if vupdated:
+        conn.commit()
+        log.info(f'Migration: normalised {vupdated} volunteer phone numbers')
 
     # ── Phase 5 migrations: family WhatsApp + food_request confirmation ──────────
 
@@ -1454,15 +1491,16 @@ def create_family():
     data = request.json or {}
     if not data.get('name'):
         return jsonify({'error': 'Name is required'}), 422
+    phone = _normalize_phone(data.get('phone'))
     fid = str(uuid.uuid4())
     db = get_db()
-    family_code = _make_family_code(data.get('phone'), data.get('family_size'), db_conn=db)
+    family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
             dietary_notes,frequency,income_range,status,notes,source,family_code,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (fid, data['name'], data.get('phone'), data.get('address'), data.get('city'),
+        (fid, data['name'], phone, data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
          data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'),
@@ -1485,7 +1523,7 @@ def update_family(fid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
-    new_phone = d.get('phone', row['phone'])
+    new_phone = _normalize_phone(d.get('phone', row['phone']))
     new_size  = d.get('family_size', row['family_size'])
     new_code  = _make_family_code(new_phone, new_size, db_conn=db, exclude_id=fid)
     db.execute(
@@ -1504,6 +1542,75 @@ def update_family(fid):
     )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()))
+
+# ── Bundle size change request (family self-serve, coordinator must approve) ──
+
+@app.route('/api/families/<fid>/request-bundle-change', methods=['POST'])
+def request_bundle_change(fid):
+    """Family portal: request a bundle size change. Stored as pending until coordinator approves."""
+    data = request.json or {}
+    new_size = (data.get('bundle_size') or '').upper().strip()
+    if new_size not in ('S', 'M', 'L'):
+        return jsonify({'error': 'Bundle size must be S, M, or L'}), 422
+    db = get_db()
+    family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+    if not family:
+        return jsonify({'error': 'Family not found'}), 404
+    if family['bundle_size'] == new_size:
+        return jsonify({'error': 'That is already your current bundle size'}), 409
+    if family['pending_bundle_size'] == new_size:
+        return jsonify({'ok': True, 'message': 'Your request is already pending coordinator approval.'}), 200
+    db.execute(
+        "UPDATE families SET pending_bundle_size=?, updated_at=? WHERE id=?",
+        (new_size, now(), fid)
+    )
+    db.commit()
+    # Notify coordinator
+    coord = db.execute(
+        "SELECT name, wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
+    ).fetchone()
+    if coord and coord['wa_phone'] and coord['wa_apikey']:
+        sizes = {'S': 'Small', 'M': 'Medium', 'L': 'Large'}
+        msg = (f"Bundle size change request:\n"
+               f"Family: {family['name']} ({family['family_code']})\n"
+               f"Current: {sizes.get(family['bundle_size'] or 'M', family['bundle_size'])}\n"
+               f"Requested: {sizes.get(new_size, new_size)}\n"
+               f"Please log in to approve or deny.")
+        _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
+    log.info(f'Bundle change request: family {fid} → {new_size}')
+    return jsonify({'ok': True, 'message': 'Your request has been sent. The coordinator will review it and let you know.'}), 200
+
+
+@app.route('/api/families/<fid>/approve-bundle-change', methods=['POST'])
+@require_auth(roles=['admin'])
+def approve_bundle_change(fid):
+    """Admin: approve or deny a pending bundle size change request."""
+    data = request.json or {}
+    action = data.get('action')  # 'approve' or 'deny'
+    if action not in ('approve', 'deny'):
+        return jsonify({'error': 'action must be approve or deny'}), 422
+    db = get_db()
+    family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+    if not family:
+        return jsonify({'error': 'Not found'}), 404
+    if not family['pending_bundle_size']:
+        return jsonify({'error': 'No pending bundle size request for this family'}), 409
+    if action == 'approve':
+        db.execute(
+            "UPDATE families SET bundle_size=?, pending_bundle_size=NULL, updated_at=? WHERE id=?",
+            (family['pending_bundle_size'], now(), fid)
+        )
+        msg = f"Approved. Bundle size changed to {family['pending_bundle_size']}."
+    else:
+        db.execute(
+            "UPDATE families SET pending_bundle_size=NULL, updated_at=? WHERE id=?",
+            (now(), fid)
+        )
+        msg = "Bundle size change request denied. Current size kept."
+    db.commit()
+    log.info(f'Bundle change {action}: family {fid}')
+    return jsonify({'ok': True, 'message': msg})
+
 
 # ── Volunteers ────────────────────────────────────────────────────────────────
 
@@ -2866,21 +2973,40 @@ def public_intake():
     data = request.json or {}
     if not data.get('name') or not data.get('phone'):
         return jsonify({'error': 'Name and phone are required'}), 422
-    fid = str(uuid.uuid4())
+    phone = _normalize_phone(data['phone'])
+    if not phone:
+        return jsonify({'error': 'A valid phone number is required'}), 422
     db = get_db()
-    family_code = _make_family_code(data['phone'], data.get('family_size'), db_conn=db)
+    # Duplicate guard — block a second record for the same phone number
+    existing = db.execute(
+        "SELECT id, status FROM families WHERE phone=?", (phone,)
+    ).fetchone()
+    if existing:
+        if existing['status'] == 'inactive':
+            return jsonify({
+                'error': 'duplicate',
+                'message': 'This phone number was previously registered but is no longer active. '
+                           'Please message your coordinator on WhatsApp to reactivate your account.'
+            }), 409
+        return jsonify({
+            'error': 'duplicate',
+            'message': 'This phone number is already registered. '
+                       'If you cannot log in, please send a WhatsApp message to your coordinator.'
+        }), 409
+    fid = str(uuid.uuid4())
+    family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
             dietary_notes,frequency,income_range,status,source,family_code,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (fid, data['name'], data['phone'], data.get('address'), data.get('city'),
+        (fid, data['name'], phone, data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
          'pending', 'intake_form', family_code, now())
     )
     db.commit()
-    log.info(f'New intake: {data["name"]} ({data["phone"]})')
+    log.info(f'New intake: {data["name"]} ({phone})')
     return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
 
 @app.route('/api/volunteer-signup', methods=['POST'])
@@ -3034,7 +3160,7 @@ def pwa_icons(filename):
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
     """Check if a phone number is registered and if there's an open cycle."""
-    phone = (request.args.get('phone') or '').strip()
+    phone = _normalize_phone(request.args.get('phone') or '')
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
 
@@ -3043,12 +3169,26 @@ def check_food_order_eligibility():
 
     # Check family exists
     family = db.execute(
-        "SELECT id, name, family_size, family_code FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+        "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
+        "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
     ).fetchone()
 
     if not family:
-        return jsonify({'registered': False,
-                        'message': 'Phone number not found. Please register first.'})
+        # Look up coordinator WA number for the helpful message
+        coord = db.execute(
+            "SELECT wa_phone FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
+        ).fetchone()
+        coord_phone = coord['wa_phone'] if coord else None
+        wa_link = f'https://wa.me/{coord_phone}' if coord_phone else None
+        return jsonify({
+            'registered': False,
+            'coordinator_wa': wa_link,
+            'message': (
+                'We could not find a record for that phone number. '
+                'If you are already enrolled, make sure you are using the same number you registered with. '
+                'If you need help, please send a WhatsApp message to your coordinator.'
+            )
+        })
 
     # Last order context (most recent completed order across all cycles)
     last_order_row = db.execute(
@@ -3196,7 +3336,7 @@ def portal_page():
 @app.route('/api/portal/login', methods=['POST'])
 def portal_login():
     data = request.json or {}
-    phone = (data.get('phone') or '').strip()
+    phone = _normalize_phone(data.get('phone') or '')
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
     db = get_db()
@@ -3204,7 +3344,9 @@ def portal_login():
         "SELECT * FROM volunteers WHERE phone=? AND status='active'", (phone,)
     ).fetchone()
     if not vol:
-        return jsonify({'error': 'No active volunteer found with this phone number. Contact a coordinator if you need help.'}), 404
+        return jsonify({'error': 'No active volunteer found with this phone number. '
+                                 'Make sure you use the same number you signed up with, '
+                                 'or contact a coordinator for help.'}), 404
     token = str(uuid.uuid4())
     expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
     db.execute(
