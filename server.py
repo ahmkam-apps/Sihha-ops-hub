@@ -4082,6 +4082,37 @@ def trigger_reminders():
     sent, target_date = _send_reminders_job()
     return jsonify({'ok': True, 'reminders_sent': sent, 'target_date': target_date})
 
+
+@app.route('/api/admin/db-debug', methods=['GET'])
+@require_auth(roles=['admin'])
+def db_debug():
+    """Diagnostic: show delivery_cycles schema + all rows."""
+    db = get_db()
+    schema = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
+    ).fetchone()
+    cycles = db.execute(
+        "SELECT id, title, delivery_date_start, status FROM delivery_cycles ORDER BY delivery_date_start"
+    ).fetchall()
+    # Try a test insert to see if upcoming status is allowed
+    test_error = None
+    try:
+        db.execute(
+            "INSERT INTO delivery_cycles (id,title,delivery_date_start,delivery_date_end,request_open_at,request_close_at,status,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            ('__test__','Test','2099-01-01','2099-01-02','','','upcoming','diag','2026-01-01')
+        )
+        db.execute("DELETE FROM delivery_cycles WHERE id='__test__'")
+        db.commit()
+        test_error = None
+    except Exception as e:
+        test_error = str(e)
+    return jsonify({
+        'schema': schema[0] if schema else None,
+        'cycle_count': len(cycles),
+        'cycles': [dict(r) for r in cycles],
+        'upcoming_insert_test': 'OK' if test_error is None else f'FAILED: {test_error}'
+    })
+
 def _send_family_confirmation_reminders():
     """7 days before delivery: create food_requests for all active families then WhatsApp opt-in link.
     Families who have wa_phone + wa_apikey get a WA message.

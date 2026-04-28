@@ -1342,58 +1342,11 @@ async function triggerRemindersFromDash() {
 }
 
 async function seedCycles2026() {
-  // Build all 17 bi-weekly Sat-Sun cycles for 2026 (May 9 → Dec 19-20)
-  const cycles = [];
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let sat = new Date('2026-05-09');
-  while (sat <= new Date('2026-12-31')) {
-    const sun = new Date(sat); sun.setDate(sat.getDate() + 1);
-    const close = new Date(sat); close.setDate(sat.getDate() - 7);
-    const open  = new Date(sat); open.setDate(sat.getDate() - 13);
-    const fmt = d => d.toISOString().slice(0,10);
-    cycles.push({
-      title: `${months[sat.getMonth()]} ${sat.getDate()}–${sun.getDate()}, 2026`,
-      delivery_date_start: fmt(sat),
-      delivery_date_end:   fmt(sun),
-      request_open_at:     fmt(open)  + 'T08:00:00',
-      request_close_at:    fmt(close) + 'T23:59:00',
-      status: 'upcoming',
-      notes: 'Auto-seeded'
-    });
-    sat.setDate(sat.getDate() + 14);
-  }
-
-  // First try the bulk endpoint
   try {
-    const res = await fetch('/api/admin/seed-cycles-2026', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token }
-    });
-    if (res.ok) {
-      const data = await res.json();
-      alert(`Done! Created ${data.created} delivery cycles for 2026.${data.deleted > 0 ? ` (Replaced ${data.deleted} old entries.)` : ''}`);
-      renderDashboard();
-      return;
-    }
-    const txt = await res.text();
-    console.warn('Bulk seed failed (' + res.status + '):', txt);
-  } catch(e) { console.warn('Bulk seed threw:', e); }
-
-  // Fallback: create each cycle via the standard endpoint
-  if (!confirm(`Creating ${cycles.length} delivery cycles one by one. Continue?`)) return;
-  let created = 0, skipped = 0;
-  for (const c of cycles) {
-    try {
-      await POST('/delivery-cycles', c);
-      created++;
-    } catch(e) {
-      if (e.message && e.message.toLowerCase().includes('exist')) skipped++;
-      else console.warn('Skipped', c.title, e.message);
-      skipped++;
-    }
-  }
-  alert(`Done! Created: ${created} · Skipped: ${skipped}`);
-  renderDashboard();
+    const res = await POST('/admin/seed-cycles-2026', {});
+    alert(`Done! Created: ${res.created} cycles · Skipped (already existed): ${res.skipped}`);
+    renderDashboard();
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // ── Families ──────────────────────────────────────────────────────────────────
