@@ -1421,7 +1421,15 @@ def list_families():
                   AND vs.task_type = 'delivery'
                   AND vs.claimed_by IS NOT NULL
                 ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_delivery_date
+                LIMIT 1) AS last_delivery_date,
+               (SELECT dc.delivery_date_start
+                FROM volunteer_slots vs
+                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+                WHERE vs.family_id = f.id
+                  AND vs.task_type = 'shopping'
+                  AND vs.claimed_by IS NOT NULL
+                ORDER BY vs.created_at DESC
+                LIMIT 1) AS last_shopping_date
         FROM families f
         WHERE 1=1"""
     params = []
@@ -1474,13 +1482,14 @@ def update_family(fid):
     new_code  = _make_family_code(new_phone, new_size, db_conn=db, exclude_id=fid)
     db.execute(
         '''UPDATE families SET name=?,phone=?,address=?,city=?,family_size=?,children_count=?,
-           dietary_notes=?,frequency=?,income_range=?,status=?,notes=?,family_code=?,
+           dietary_notes=?,frequency=?,income_range=?,status=?,bundle_size=?,notes=?,family_code=?,
            wa_phone=?,wa_apikey=?,updated_at=? WHERE id=?''',
         (d.get('name', row['name']), new_phone,
          d.get('address', row['address']), d.get('city', row['city']),
          new_size, d.get('children_count', row['children_count']),
          d.get('dietary_notes', row['dietary_notes']), d.get('frequency', row['frequency']),
          d.get('income_range', row['income_range']), d.get('status', row['status']),
+         d.get('bundle_size', row['bundle_size']),
          d.get('notes', row['notes']), new_code,
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          now(), fid)
