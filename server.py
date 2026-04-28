@@ -3481,6 +3481,136 @@ def _send_reminders_job():
     finally:
         conn.close()
 
+@app.route('/api/admin/wipe-test-data', methods=['POST'])
+@require_auth(roles=['admin'])
+def wipe_test_data():
+    """Wipe all operational data. Preserves: users, food catalog, donations, sessions."""
+    db = get_db()
+    db.execute('PRAGMA foreign_keys=OFF')
+    counts = {}
+    for t in ['reminder_log','portal_sessions','food_request_items','food_requests',
+              'volunteer_slots','receipts','reimbursements','cycle_assignments',
+              'delivery_cycles','volunteers','families']:
+        try:
+            n = db.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+            db.execute(f'DELETE FROM {t}')
+            counts[t] = n
+        except Exception:
+            counts[t] = 0
+    db.execute('PRAGMA foreign_keys=ON')
+    db.commit()
+    log.info(f'wipe-test-data: {counts}')
+    return jsonify({'ok': True, 'wiped': counts})
+
+
+@app.route('/api/admin/import-historical', methods=['POST'])
+@require_auth(roles=['admin'])
+def import_historical():
+    """Import real families, volunteers and historical cycles in one shot.
+    Bypasses auto-enrollment — handles delivery matrix directly."""
+    data = request.json or {}
+    db   = get_db()
+    n    = now()
+
+    results = {'families': 0, 'volunteers': 0, 'cycles': 0, 'food_requests': 0, 'errors': []}
+
+    # ── Families ─────────────────────────────────────────────────────────────
+    fam_id_map = {}  # name → id
+    for f in data.get('families', []):
+        fid = str(uuid.uuid4())
+        # Derive family_size from bundle_size
+        bsize = f.get('bundle_size', 'M')
+        size_map = {'S': 2, 'M': 4, 'L': 6}
+        family_size = size_map.get(bsize, 4)
+        # Generate family_code
+        phone = f.get('phone', '')
+        digits = ''.join(c for c in phone if c.isdigit())
+        code = digits[-4:] + bsize if digits else fid[:4].upper()
+        try:
+            db.execute(
+                '''INSERT INTO families
+                   (id,name,phone,address,city,family_size,dietary_notes,status,
+                    source,family_code,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                (fid, f['name'], phone, f.get('address',''),
+                 f.get('city','Rochester'), family_size,
+                 f.get('dietary_notes',''), 'active', 'import', code, n)
+            )
+            fam_id_map[f['name']] = fid
+            results['families'] += 1
+        except Exception as e:
+            results['errors'].append(f"Family {f['name']}: {e}")
+
+    # ── Volunteers ───────────────────────────────────────────────────────────
+    vol_id_map = {}  # name → id
+    for v in data.get('volunteers', []):
+        vid = str(uuid.uuid4())
+        try:
+            db.execute(
+                '''INSERT INTO volunteers
+                   (id,name,phone,email,status,source,created_at)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (vid, v['name'], v.get('phone',''), v.get('email',''),
+                 'active', 'import', n)
+            )
+            vol_id_map[v['name']] = vid
+            results['volunteers'] += 1
+        except Exception as e:
+            results['errors'].append(f"Volunteer {v['name']}: {e}")
+
+    db.commit()
+
+    # ── Food items for pre-populating requests ───────────────────────────────
+    all_items = [r['id'] for r in db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()]
+
+    # ── Historical cycles ────────────────────────────────────────────────────
+    for cyc in data.get('cycles', []):
+        cid = str(uuid.uuid4())
+        try:
+            db.execute(
+                '''INSERT INTO delivery_cycles
+                   (id,title,delivery_date_start,delivery_date_end,
+                    request_open_at,request_close_at,status,notes,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)''',
+                (cid, cyc['title'], cyc['delivery_date_start'], cyc['delivery_date_end'],
+                 '', '', 'delivered', 'Imported from historical records', n)
+            )
+            results['cycles'] += 1
+        except Exception as e:
+            results['errors'].append(f"Cycle {cyc['title']}: {e}")
+            continue
+
+        # Create food_request for every family — confirmed if they received, skipped otherwise
+        delivered_names = set(cyc.get('delivered_families', []))
+        for fname, fid in fam_id_map.items():
+            status = 'confirmed' if fname in delivered_names else 'skipped'
+            token  = str(uuid.uuid4())
+            rid    = str(uuid.uuid4())
+            try:
+                db.execute(
+                    '''INSERT INTO food_requests
+                       (id,cycle_id,family_id,bundle_size,submitted_at,status,
+                        confirmation_token,confirmed_at)
+                       VALUES (?,?,?,?,?,?,?,?)''',
+                    (rid, cid, fid, 'M', cyc['delivery_date_start'],
+                     status, token,
+                     cyc['delivery_date_end'] if status == 'confirmed' else None)
+                )
+                if status == 'confirmed':
+                    for item_id in all_items:
+                        db.execute(
+                            'INSERT OR IGNORE INTO food_request_items (id,request_id,food_item_id,selected) VALUES (?,?,?,1)',
+                            (str(uuid.uuid4()), rid, item_id)
+                        )
+                results['food_requests'] += 1
+            except Exception as e:
+                results['errors'].append(f"food_request {fname}/{cyc['title']}: {e}")
+
+    db.commit()
+    log.info(f'import-historical: {results}')
+    return jsonify({'ok': True, 'results': results})
+
+
 @app.route('/api/admin/seed-cycles-2026', methods=['POST'])
 @require_auth(roles=['admin'])
 def seed_cycles_2026():
