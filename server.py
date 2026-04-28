@@ -3174,6 +3174,12 @@ def pwa_icons(filename):
 
 # ── Public Food Order (no auth) ───────────────────────────────────────────────
 
+@app.errorhandler(Exception)
+def handle_unhandled_exception(e):
+    """Return JSON instead of HTML for any unhandled server error."""
+    log.exception(f'Unhandled exception: {e}')
+    return jsonify({'error': 'Internal server error', 'detail': str(e)}), 500
+
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
     """Check if a phone number is registered and if there's an open cycle."""
@@ -3181,14 +3187,52 @@ def check_food_order_eligibility():
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
 
-    db = get_db()
-    auto_update_cycle_statuses(db)
+    try:
+        db = get_db()
+        auto_update_cycle_statuses(db)
 
-    # Check family exists
-    family = db.execute(
-        "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
-        "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
-    ).fetchone()
+        # Ensure pending_bundle_size column exists (idempotent guard)
+        try:
+            db.execute('ALTER TABLE families ADD COLUMN pending_bundle_size TEXT')
+            db.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Check family exists — fetch all base columns defensively
+        family_row = db.execute(
+            "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
+            "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+        ).fetchone()
+    except Exception as exc:
+        log.exception(f'check_food_order_eligibility DB error: {exc}')
+        # Fallback: try without pending_bundle_size in case column truly missing
+        try:
+            db2 = get_db()
+            family_row_basic = db2.execute(
+                "SELECT id, name, family_size, family_code, bundle_size "
+                "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+            ).fetchone()
+            if family_row_basic is None:
+                return jsonify({'registered': False, 'message': 'Phone number not found.'})
+            # Rebuild as dict with missing column defaulted
+            family = dict(family_row_basic)
+            family['pending_bundle_size'] = None
+            # Run abbreviated response (no cycle lookup to keep it safe)
+            return jsonify({
+                'registered': True,
+                'family_name': family['name'],
+                'family_id': family['id'],
+                'bundle_size': family['bundle_size'],
+                'pending_bundle_size': None,
+                'open_cycle': False,
+                'history': [],
+                'message': 'There are no upcoming deliveries to confirm right now. Check back soon.'
+            })
+        except Exception as exc2:
+            log.exception(f'check_food_order_eligibility fallback error: {exc2}')
+            return jsonify({'error': 'Could not look up your record. Please try again later.'}), 500
+
+    family = dict(family_row) if family_row else None
 
     if not family:
         # Look up coordinator WA number for the helpful message

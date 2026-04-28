@@ -524,6 +524,7 @@
       renderDashboard();
 
     } catch(e) {
+      console.error('doLogin error:', e);
       showLoginError(currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
       btn.disabled = false;
     }
