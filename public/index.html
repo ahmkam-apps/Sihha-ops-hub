@@ -1811,22 +1811,16 @@ async function renderDonations(filter) {
       <div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin-bottom:18px;">
         ${months.map(m => {
           const d = byMonth[m];
-          const recurPct = d.total > 0 ? Math.round(d.recurring / d.total * 100) : 0;
+          const pillsHTML = [
+            d.recurring > 0 ? `<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:#e8f5e9;color:#1a5e34;margin-right:4px;margin-top:4px;">Monthly ${fmtMoney(d.recurring)}</span>` : '',
+            d.oneTime   > 0 ? `<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:#e0f2f1;color:#00695c;margin-top:4px;">One-time ${fmtMoney(d.oneTime)}</span>` : ''
+          ].filter(Boolean).join('');
           return `
-          <div style="min-width:140px;background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:12px 14px;flex-shrink:0;">
+          <div style="min-width:150px;background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:12px 14px;flex-shrink:0;">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px;">${monthLabel(m)}</div>
             <div style="font-size:20px;font-weight:800;color:#1a8754;">${fmtMoney(d.total)}</div>
-            <div style="font-size:11px;color:#aaa;margin-top:2px;">${d.count} donation${d.count !== 1 ? 's' : ''}</div>
-            ${d.recurring > 0 ? `
-            <div style="margin-top:8px;">
-              <div style="display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-bottom:3px;">
-                <span style="color:#1a8754;">↺ ${fmtMoney(d.recurring)}</span>
-                <span style="color:#e67e22;">◎ ${fmtMoney(d.oneTime)}</span>
-              </div>
-              <div style="height:4px;background:#f0f0f0;border-radius:2px;overflow:hidden;">
-                <div style="height:100%;width:${recurPct}%;background:#1a8754;border-radius:2px;"></div>
-              </div>
-            </div>` : ''}
+            <div style="font-size:11px;color:#aaa;margin-top:2px;margin-bottom:2px;">${d.count} donation${d.count !== 1 ? 's' : ''}</div>
+            ${pillsHTML}
           </div>`;
         }).join('')}
       </div>` : '';
