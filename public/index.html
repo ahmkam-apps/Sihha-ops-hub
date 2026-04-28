@@ -1376,7 +1376,7 @@ async function renderFamilies(filter, search) {
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
-              <tr id="frow-${r.id}">
+              <tr id="frow-${r.id}" style="cursor:pointer" onclick="viewFamily('${r.id}')">
                 <td><span style="font-family:monospace;font-size:12px;font-weight:700;color:var(--black)">${r.family_code||'—'}</span></td>
                 <td><strong>${r.name}</strong></td>
                 <td>${r.phone||'—'}</td>
@@ -1385,13 +1385,12 @@ async function renderFamilies(filter, search) {
                 <td>${badge(r.status)}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${r.source||'admin'}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
-                <td style="white-space:nowrap">
+                <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   ${r.status==='pending' ? `
                     <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
-                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00" onclick="quickStatusFamily('${r.id}','inactive')" style="margin-left:4px">✗</button>
+                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusFamily('${r.id}','inactive')">✗</button>
                   ` : `
-                    <button class="btn btn-outline btn-sm" onclick="viewFamily('${r.id}')">View</button>
-                    <button class="btn btn-sm" onclick="openFamilyForm('${r.id}')" style="margin-left:4px">Edit</button>
+                    <button class="btn btn-sm" onclick="openFamilyForm('${r.id}')">Edit</button>
                   `}
                 </td>
               </tr>`).join('') :
@@ -1537,66 +1536,80 @@ async function viewFamily(id) {
       GET('/families/' + id + '/history')
     ]);
 
-    const detailsHTML = `
-      <div class="detail-row"><div class="detail-label">Family ID</div><div class="detail-value"><span style="font-family:monospace;font-size:16px;font-weight:700;letter-spacing:1px">${r.family_code||'—'}</span></div></div>
-      <div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
-      <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
-      <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Address</div><div class="detail-value">${r.address||'—'}, ${r.city||''}</div></div>
-      <div class="detail-row"><div class="detail-label">Household Size</div><div class="detail-value">${r.family_size||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Children</div><div class="detail-value">${r.children_count||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Dietary</div><div class="detail-value">${r.dietary_notes||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Frequency</div><div class="detail-value">${r.frequency||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Income Range</div><div class="detail-value">${r.income_range||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
-      <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
-      ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`;
-
     const orders = hist.orders || [];
-    const histHTML = orders.length === 0
-      ? '<p style="color:var(--gray-4);font-size:13px">No orders placed yet.</p>'
-      : orders.map((o, idx) => {
-          const shopper  = o.slots.find(s => s.task_type === 'shopping');
-          const delivery = o.slots.find(s => s.task_type === 'delivery');
-          const statusLabel = o.delivered_at
-            ? `<span style="color:#1a7a3c;font-weight:600">✓ Delivered ${fmtDate(o.delivered_at)}</span>`
-            : `${badge(o.status)}`;
-          return `
-            <div class="hist-row">
-              <div class="hist-row-head" onclick="toggleHistRow('fhr-${idx}')">
-                <div>
-                  <div style="font-size:13px;font-weight:600">${o.cycle_title}</div>
-                  <div style="font-size:11px;color:var(--gray-4);margin-top:2px">
-                    ${o.selected_items.length} items · Bundle ${o.bundle_size}
-                    · Submitted ${fmtDate(o.submitted_at)}
-                  </div>
+
+    // ── Compact info bar ──────────────────────────────────────────────────────
+    const infoBar = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray-2);margin-bottom:24px;">
+        <div style="background:var(--gray-1);padding:12px 14px;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Status</div>
+          <div>${badge(r.status)}</div>
+        </div>
+        <div style="background:var(--gray-1);padding:12px 14px;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Family ID</div>
+          <div style="font-family:monospace;font-size:13px;font-weight:700;letter-spacing:1px;">${r.family_code||'—'}</div>
+        </div>
+        <div style="background:var(--gray-1);padding:12px 14px;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Phone</div>
+          <div style="font-size:14px;">${r.phone||'—'}</div>
+        </div>
+        <div style="background:var(--gray-1);padding:12px 14px;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Bundle</div>
+          <div style="font-size:14px;font-weight:700;">${r.bundle_size||'—'} &nbsp;·&nbsp; ${r.family_size||'—'} people${r.children_count ? ` · ${r.children_count} children` : ''}</div>
+        </div>
+        <div style="background:var(--gray-1);padding:12px 14px;grid-column:span 2;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Address</div>
+          <div style="font-size:14px;">${r.address||'—'}${r.city ? ', ' + r.city : ''}</div>
+        </div>
+        ${r.dietary_notes ? `
+        <div style="background:var(--gray-1);padding:12px 14px;grid-column:span 2;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Dietary</div>
+          <div style="font-size:14px;">${r.dietary_notes}</div>
+        </div>` : ''}
+        ${r.notes ? `
+        <div style="background:#fffbe6;padding:12px 14px;grid-column:span 2;border-left:3px solid #f0c040;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Notes</div>
+          <div style="font-size:13px;">${r.notes}</div>
+        </div>` : ''}
+      </div>`;
+
+    // ── Delivery history ──────────────────────────────────────────────────────
+    const deliverySection = `
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--gray-4);font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--gray-2);">
+        Delivery History (${orders.length})
+      </div>
+      ${orders.length === 0
+        ? '<p style="color:var(--gray-4);font-size:13px;padding:8px 0;">No deliveries yet.</p>'
+        : orders.map(o => {
+            const shopper  = o.slots?.find(s => s.task_type === 'shopping');
+            const delivery = o.slots?.find(s => s.task_type === 'delivery');
+            const delivered = !!o.delivered_at;
+            const statusColor = delivered ? '#1a7a3c' : '#888';
+            const statusText  = delivered
+              ? `✓ Delivered ${fmtDate(o.delivered_at)}`
+              : (o.status || 'pending');
+            return `
+              <div style="border:1px solid var(--gray-2);margin-bottom:10px;padding:14px;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+                  <div style="font-size:13px;font-weight:700;">${o.cycle_title}</div>
+                  <div style="font-size:12px;font-weight:600;color:${statusColor};">${statusText}</div>
                 </div>
-                <div style="display:flex;align-items:center;gap:8px">
-                  ${statusLabel}
-                  <span style="color:var(--gray-4);font-size:12px">▾</span>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;color:var(--gray-5);">
+                  <div><span style="color:var(--gray-4);">Bundle:</span> ${o.bundle_size||'—'}</div>
+                  <div><span style="color:var(--gray-4);">Items:</span> ${o.selected_items?.length||0}</div>
+                  <div><span style="color:var(--gray-4);">Shopper:</span> ${shopper?.volunteer_name || (shopper ? 'Unclaimed' : '—')}</div>
+                  <div><span style="color:var(--gray-4);">Driver:</span> ${delivery?.volunteer_name || (delivery ? 'Unclaimed' : '—')}</div>
                 </div>
-              </div>
-              <div class="hist-row-body" id="fhr-${idx}">
-                <div class="hist-items">
-                  ${o.selected_items.map(i =>
-                    `<span class="hist-item-chip">${i.name}</span>`).join('')}
-                </div>
-                <div style="margin-top:10px;font-size:12px;color:var(--gray-5)">
-                  <strong>Shopper:</strong> ${shopper?.volunteer_name || (shopper?.status === 'open' ? 'Unclaimed' : '—')} &nbsp;·&nbsp;
-                  <strong>Delivery:</strong> ${delivery?.volunteer_name || (delivery?.status === 'open' ? 'Unclaimed' : '—')}
-                  ${o.delivered_at ? `<br><strong>Delivered:</strong> ${fmtDate(o.delivered_at)}` : ''}
-                </div>
-              </div>
-            </div>`;
-        }).join('');
+                ${o.selected_items?.length ? `
+                <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:5px;">
+                  ${o.selected_items.map(i => `<span class="hist-item-chip">${i.name}</span>`).join('')}
+                </div>` : ''}
+              </div>`;
+          }).join('')
+      }`;
 
     openDrawer(r.name,
-      `<div class="drawer-tabs">
-         <div class="drawer-tab active" id="dtab-details" onclick="switchDrawerTab('details','family')">Details</div>
-         <div class="drawer-tab" id="dtab-history" onclick="switchDrawerTab('history','family')">Order History (${orders.length})</div>
-       </div>
-       <div class="drawer-pane active" id="dpane-details">${detailsHTML}</div>
-       <div class="drawer-pane" id="dpane-history">${histHTML}</div>`,
+      infoBar + deliverySection,
       `<button class="btn" onclick="openFamilyForm('${id}')">Edit</button>
        <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
     );
