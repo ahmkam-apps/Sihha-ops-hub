@@ -1785,6 +1785,7 @@ async function renderDonations(filter) {
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="syncWixDonations()" id="wix-sync-btn">🔄 Sync Wix</button>
+     <button class="btn btn-outline" onclick="exportDonations()" style="margin-left:8px">⬇ Export Excel</button>
      <button class="btn" onclick="openDonationForm()" style="margin-left:8px">+ Log Donation</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
@@ -1879,6 +1880,31 @@ async function syncWixDonations() {
       alert('Sync failed: ' + e.message);
     }
   }
+}
+
+function exportDonations() {
+  const token = STATE.token;
+  const url = '/api/donations/export';
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  // Pass auth token via a temporary fetch → blob download
+  fetch(url, { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(res => {
+      if (!res.ok) throw new Error('Export failed');
+      return res.blob();
+    })
+    .then(blob => {
+      const blobUrl = URL.createObjectURL(blob);
+      a.href = blobUrl;
+      const today = new Date().toISOString().slice(0,10).replace(/-/g,'');
+      a.download = `sihaa_donations_${today}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    })
+    .catch(e => alert('Export failed: ' + e.message));
 }
 
 function openDonationForm() {

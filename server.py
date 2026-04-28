@@ -1475,6 +1475,70 @@ def list_donations():
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 
+@app.route('/api/donations/export', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def export_donations():
+    """Download all donations as an Excel file."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from flask import send_file
+    import io
+
+    db   = get_db()
+    rows = db.execute(
+        "SELECT date, donor_name, donor_email, amount, frequency, type, source, notes, reference_id, created_at "
+        "FROM donations ORDER BY date DESC, created_at DESC"
+    ).fetchall()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Donations'
+
+    # Header styling
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='1A3A2A')
+    headers = ['Date', 'Donor', 'Email', 'Amount ($)', 'Frequency', 'Type', 'Source', 'Campaign / Notes', 'Reference ID', 'Imported At']
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font      = header_font
+        cell.fill      = header_fill
+        cell.alignment = Alignment(horizontal='center')
+
+    # Column widths
+    col_widths = [12, 18, 24, 12, 12, 10, 10, 28, 36, 20]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    # Data rows
+    alt_fill = PatternFill('solid', fgColor='F0FAF5')
+    for row_idx, r in enumerate(rows, 2):
+        vals = [
+            r['date'] or '',
+            r['donor_name'] or 'Anonymous',
+            r['donor_email'] or '',
+            round(r['amount'] or 0, 2),
+            r['frequency'] or 'one-time',
+            r['type'] or 'online',
+            r['source'] or 'manual',
+            r['notes'] or '',
+            r['reference_id'] or '',
+            (r['created_at'] or '')[:10],
+        ]
+        for col_idx, val in enumerate(vals, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            if row_idx % 2 == 0:
+                cell.fill = alt_fill
+
+    # Freeze header row
+    ws.freeze_panes = 'A2'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"sihaa_donations_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return send_file(buf, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=filename)
+
 @app.route('/api/donations', methods=['POST'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def create_donation():
