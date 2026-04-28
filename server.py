@@ -2296,6 +2296,79 @@ def list_delivery_cycles():
     q += " ORDER BY delivery_date_start ASC"
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
+def _fix_delivery_cycles_schema(db):
+    """
+    Ensure delivery_cycles.status CHECK includes 'upcoming'.
+    Works regardless of which columns exist on the live DB.
+    Idempotent — no-ops if schema is already correct.
+    """
+    schema_row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
+    ).fetchone()
+    if not schema_row or 'upcoming' in schema_row[0]:
+        return  # nothing to do
+
+    log.info('_fix_delivery_cycles_schema: rebuilding table to add upcoming status')
+    db.execute('PRAGMA foreign_keys=OFF')
+
+    # Discover which columns actually exist in the live table
+    col_info  = db.execute('PRAGMA table_info(delivery_cycles)').fetchall()
+    live_cols = {row[1] for row in col_info}   # row[1] = column name
+
+    # Build the SELECT list, supplying '' for missing TEXT NOT NULL columns
+    wanted = [
+        ('id',                  'id'),
+        ('title',               'title'),
+        ('delivery_date_start', 'delivery_date_start'),
+        ('delivery_date_end',   'delivery_date_end'),
+        ('request_open_at',     "COALESCE(request_open_at,'')"),
+        ('request_close_at',    "COALESCE(request_close_at,'')"),
+        ('status',              'status'),
+        ('notes',               'notes'),
+        ('created_by',          'created_by'),
+        ('created_at',          'created_at'),
+    ]
+    dst_cols = []
+    src_exprs = []
+    for col_name, expr in wanted:
+        raw = col_name if 'COALESCE' not in expr else col_name
+        if raw in live_cols:
+            dst_cols.append(col_name)
+            src_exprs.append(expr)
+        elif col_name in ('request_open_at', 'request_close_at'):
+            # Column doesn't exist at all — supply empty string
+            dst_cols.append(col_name)
+            src_exprs.append("''")
+
+    db.execute('DROP TABLE IF EXISTS delivery_cycles_new')
+    db.execute('''
+        CREATE TABLE delivery_cycles_new (
+            id                  TEXT PRIMARY KEY,
+            title               TEXT NOT NULL,
+            delivery_date_start TEXT NOT NULL,
+            delivery_date_end   TEXT NOT NULL,
+            request_open_at     TEXT NOT NULL DEFAULT '',
+            request_close_at    TEXT NOT NULL DEFAULT '',
+            status              TEXT NOT NULL DEFAULT 'upcoming'
+                                CHECK(status IN
+                                  ('draft','open','closed','upcoming','shopping','delivered')),
+            notes               TEXT,
+            created_by          TEXT,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT
+        )''')
+
+    db.execute(
+        f"INSERT INTO delivery_cycles_new ({', '.join(dst_cols)}) "
+        f"SELECT {', '.join(src_exprs)} FROM delivery_cycles"
+    )
+    db.execute('DROP TABLE delivery_cycles')
+    db.execute('ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles')
+    db.commit()
+    db.execute('PRAGMA foreign_keys=ON')
+    log.info('_fix_delivery_cycles_schema: done')
+
+
 @app.route('/api/delivery-cycles', methods=['POST'])
 @require_auth(roles=['admin'])
 def create_delivery_cycle():
@@ -2304,35 +2377,27 @@ def create_delivery_cycle():
         return jsonify({'error': 'title, delivery_date_start and delivery_date_end are required'}), 422
     cid = str(uuid.uuid4())
     db  = get_db()
-    # Default open/close dates if not supplied
-    delivery_start = data['delivery_date_start']
+
+    # Ensure schema supports 'upcoming' before inserting
+    try:
+        _fix_delivery_cycles_schema(db)
+    except Exception as _e:
+        log.error(f'create_delivery_cycle: schema fix failed: {_e}')
+        return jsonify({'error': f'Schema migration failed: {_e}'}), 500
+
     req_open  = data.get('request_open_at')  or ''
     req_close = data.get('request_close_at') or ''
-    # Inline schema guard: if the live schema lacks 'upcoming' in its CHECK constraint,
-    # bypass it via PRAGMA so this insert always succeeds regardless of migration state.
-    try:
-        schema_row = db.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
-        ).fetchone()
-        if schema_row and 'upcoming' not in schema_row[0]:
-            db.execute('PRAGMA ignore_check_constraints=1')
-    except Exception:
-        pass  # PRAGMA not available on this SQLite build — proceed anyway
     db.execute(
         '''INSERT INTO delivery_cycles
            (id, title, delivery_date_start, delivery_date_end,
             request_open_at, request_close_at, status, notes, created_by, created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
-        (cid, data['title'], delivery_start, data['delivery_date_end'],
+        (cid, data['title'], data['delivery_date_start'], data['delivery_date_end'],
          req_open, req_close,
          data.get('status') or 'upcoming', data.get('notes'),
          g.user['user_id'], now())
     )
     db.commit()
-    try:
-        db.execute('PRAGMA ignore_check_constraints=0')
-    except Exception:
-        pass
     # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
     result = dict(db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone())
     return jsonify(result), 201
@@ -4081,15 +4146,12 @@ def seed_cycles_2026():
     db = get_db()
     cycles_to_seed = build_cycles()
 
-    # Bypass CHECK constraint on live DB if schema hasn't been migrated yet
+    # Fix schema before any inserts
     try:
-        schema_row = db.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
-        ).fetchone()
-        if schema_row and 'upcoming' not in schema_row[0]:
-            db.execute('PRAGMA ignore_check_constraints=1')
-    except Exception:
-        pass
+        _fix_delivery_cycles_schema(db)
+    except Exception as _e:
+        log.error(f'seed_cycles_2026: schema fix failed: {_e}')
+        return jsonify({'error': f'Schema migration failed: {_e}'}), 500
 
     # Wipe any existing 2026 cycles (regardless of status) and reseed cleanly
     deleted = db.execute(
@@ -4111,10 +4173,6 @@ def seed_cycles_2026():
         )
         created += 1
     db.commit()
-    try:
-        db.execute('PRAGMA ignore_check_constraints=0')
-    except Exception:
-        pass
     log.info(f'seed-cycles-2026: deleted={deleted}, created={created}')
     return jsonify({'ok': True, 'created': created, 'deleted': deleted})
 
