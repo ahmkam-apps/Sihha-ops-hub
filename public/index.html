@@ -1606,7 +1606,7 @@ function slotBox(allSlots, taskType, taskLabel, vols, familyId, cycleId) {
   const volRows = assigned.map(s =>
     `<div style="display:flex;align-items:center;justify-content:space-between;padding:1px 0;">
        <span style="font-size:12px;font-weight:600;color:var(--black);">${s.volunteer_name}</span>
-       <button onclick="removeSlot('${s.id}','${familyId}')"
+       <button onclick="removeSlot('${s.id}','${familyId}',this)"
          style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:18px;line-height:1;padding:0 2px;margin-left:6px;"
          title="Remove">×</button>
      </div>`
@@ -1630,17 +1630,28 @@ async function addSlot(cycleId, familyId, taskType, selectId) {
   const sel = document.getElementById(selectId);
   const volunteerId = sel?.value;
   if (!volunteerId) return;
+  const volunteerName = sel.options[sel.selectedIndex].text;
   try {
-    await POST('/volunteer-slots', { cycle_id: cycleId, family_id: familyId, task_type: taskType, claimed_by: volunteerId });
-    viewFamily(familyId);
+    const slot = await POST('/volunteer-slots', { cycle_id: cycleId, family_id: familyId, task_type: taskType, claimed_by: volunteerId });
+    // Surgically insert the new volunteer row before the select — no page reload
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:3px;';
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">${volunteerName}</span>
+      <button onclick="removeSlot('${slot.id}','${familyId}',this)"
+        style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;" title="Remove">×</button>`;
+    sel.parentNode.insertBefore(row, sel);
+    sel.style.marginTop = '4px';
+    sel.value = '';
   } catch(e) { alert('Failed to add: ' + e.message); }
 }
 
-async function removeSlot(slotId, familyId) {
+async function removeSlot(slotId, familyId, btn) {
   if (!confirm('Remove this volunteer?')) return;
   try {
     await DEL('/volunteer-slots/' + slotId);
-    viewFamily(familyId);
+    // Surgically remove the volunteer row — no page reload
+    if (btn) btn.closest('div')?.remove();
+    else viewFamily(familyId); // fallback for any other callers
   } catch(e) { alert('Failed to remove: ' + e.message); }
 }
 
@@ -1796,7 +1807,7 @@ async function viewFamily(id) {
           ${assigned.map(s =>
             `<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px;">
                <span style="font-size:12px;font-weight:600;">${s.volunteer_name}</span>
-               <button onclick="removeSlot('${s.id}','${fid}')"
+               <button onclick="removeSlot('${s.id}','${fid}',this)"
                  style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;" title="Remove">×</button>
              </div>`).join('')}
           <select id="${selId}" style="width:100%;font-size:11px;border:1px solid var(--gray-3);padding:3px 5px;background:#fff;border-radius:4px;margin-top:${assigned.length?'4px':'0'};"
