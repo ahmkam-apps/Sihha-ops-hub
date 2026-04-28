@@ -1535,31 +1535,32 @@ async function saveFamily() {
   } catch(e) { showErr(e.message); }
 }
 
-async function setFamilyField(id, field, value) {
-  try {
-    await PUT('/families/' + id, { [field]: value });
-    // Update button group in place
-    const group = document.getElementById(`fam-${field === 'status' ? 'status' : 'bundle'}-btns-${id}`);
-    if (group) {
-      group.querySelectorAll('button').forEach(btn => {
-        const active = btn.textContent.trim().toLowerCase() === value.toLowerCase();
-        btn.style.background  = active ? 'var(--black)' : 'var(--white)';
-        btn.style.color       = active ? 'var(--white)' : 'var(--black)';
-        btn.style.borderColor = active ? 'var(--black)' : 'var(--gray-3)';
-      });
-    }
-    const msg = document.getElementById('fam-msg-' + id);
-    if (msg) { msg.textContent = '✓ Saved'; setTimeout(() => msg.textContent = '', 2000); }
-  } catch(e) { alert('Failed to update: ' + e.message); }
+function famFieldEdit(famId, field) {
+  document.getElementById(`fif-display-${famId}-${field}`).style.display = 'none';
+  document.getElementById(`fif-edit-${famId}-${field}`).style.display   = 'block';
+  const inp = document.getElementById(`fif-${famId}-${field}`);
+  if (inp) { inp.focus(); inp.select && inp.select(); }
+  // Esc cancels
+  if (inp) inp.onkeydown = e => { if (e.key === 'Escape') famFieldCancel(famId, field); };
 }
 
-async function saveFamilyNotes(id) {
-  const notes = document.getElementById('fam-notes-' + id)?.value || '';
+function famFieldCancel(famId, field) {
+  document.getElementById(`fif-display-${famId}-${field}`).style.display = '';
+  document.getElementById(`fif-edit-${famId}-${field}`).style.display   = 'none';
+}
+
+async function famFieldSave(famId, field) {
+  const inp = document.getElementById(`fif-${famId}-${field}`);
+  const value = inp?.value ?? '';
   try {
-    await PUT('/families/' + id, { notes });
-    const msg = document.getElementById('fam-msg-' + id);
-    if (msg) { msg.textContent = '✓ Notes saved'; setTimeout(() => msg.textContent = '', 2000); }
-  } catch(e) { alert('Failed to save notes: ' + e.message); }
+    await PUT('/families/' + famId, { [field]: value });
+    // Update display value in place
+    const display = document.getElementById(`fif-display-${famId}-${field}`);
+    display.innerHTML = value || '<span style="color:var(--gray-3)">Click to edit</span>';
+    famFieldCancel(famId, field);
+    const msg = document.getElementById('fam-msg-' + famId);
+    if (msg) { msg.textContent = '✓ Saved'; setTimeout(() => msg.textContent = '', 2000); }
+  } catch(e) { alert('Failed to save: ' + e.message); }
 }
 
 function slotBox(slot, label, vols, familyId) {
@@ -1612,73 +1613,66 @@ async function viewFamily(id) {
 
     const orders = hist.orders || [];
 
-    // ── Quick-edit controls ───────────────────────────────────────────────────
-    const statusBtns = ['active','pending','paused','inactive'].map(v => `
-      <button onclick="setFamilyField('${r.id}','status','${v}')"
-        style="flex:1;padding:7px 4px;font-size:11px;font-weight:600;text-transform:capitalize;
-               border:1.5px solid ${r.status===v?'var(--black)':'var(--gray-3)'};
-               background:${r.status===v?'var(--black)':'var(--white)'};
-               color:${r.status===v?'var(--white)':'var(--black)'};cursor:pointer;">
-        ${v}
-      </button>`).join('');
+    // ── Inline-editable info bar ──────────────────────────────────────────────
+    // Each field: click value → becomes input → Enter/✓ saves, Esc cancels
+    const famId = r.id;
+    const inlineField = (label, field, value, opts = {}) => {
+      const displayVal = value || '<span style="color:var(--gray-3)">Click to edit</span>';
+      const inputType  = opts.type || 'text';
+      const isSelect   = !!opts.options;
+      const isTextarea = opts.textarea;
+      const inputEl = isSelect
+        ? `<select id="fif-${famId}-${field}" style="width:100%;border:1.5px solid var(--black);padding:6px 8px;font-size:13px;font-family:var(--font-body);outline:none;background:#fff;">
+             ${opts.options.map(o => `<option value="${o}" ${value===o?'selected':''}>${o}</option>`).join('')}
+           </select>`
+        : isTextarea
+        ? `<textarea id="fif-${famId}-${field}" rows="3"
+             style="width:100%;border:1.5px solid var(--black);padding:6px 8px;font-size:13px;font-family:var(--font-body);outline:none;resize:vertical;"
+             >${value||''}</textarea>`
+        : `<input id="fif-${famId}-${field}" type="${inputType}" value="${value||''}"
+             style="width:100%;border:1.5px solid var(--black);padding:6px 8px;font-size:13px;font-family:var(--font-body);outline:none;">`;
 
-    const bundleBtns = ['S','M','L'].map(v => `
-      <button onclick="setFamilyField('${r.id}','bundle_size','${v}')"
-        style="flex:1;padding:7px 4px;font-size:12px;font-weight:700;
-               border:1.5px solid ${r.bundle_size===v?'var(--black)':'var(--gray-3)'};
-               background:${r.bundle_size===v?'var(--black)':'var(--white)'};
-               color:${r.bundle_size===v?'var(--white)':'var(--black)'};cursor:pointer;">
-        ${v}
-      </button>`).join('');
+      return `
+        <div style="padding:11px 14px;background:var(--white);${opts.span?'grid-column:span 2;':''}" id="fif-wrap-${famId}-${field}">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${label}</div>
+          <div id="fif-display-${famId}-${field}"
+               onclick="famFieldEdit('${famId}','${field}')"
+               style="font-size:13px;cursor:pointer;padding:2px 0;border-bottom:1px dashed var(--gray-3);min-height:20px;">
+            ${displayVal}
+          </div>
+          <div id="fif-edit-${famId}-${field}" style="display:none;">
+            ${inputEl}
+            <div style="display:flex;gap:8px;margin-top:6px;">
+              <button onclick="famFieldSave('${famId}','${field}')"
+                style="padding:5px 14px;background:var(--black);color:#fff;border:none;font-size:12px;cursor:pointer;">✓ Save</button>
+              <button onclick="famFieldCancel('${famId}','${field}')"
+                style="padding:5px 14px;background:none;border:1px solid var(--gray-3);font-size:12px;cursor:pointer;">✕</button>
+            </div>
+          </div>
+        </div>`;
+    };
 
     const infoBar = `
-      <!-- Read-only info -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray-2);margin-bottom:20px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray-2);margin-bottom:24px;">
         <div style="background:var(--gray-1);padding:11px 14px;">
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Family ID</div>
           <div style="font-family:monospace;font-size:13px;font-weight:700;">${r.family_code||'—'}</div>
         </div>
         <div style="background:var(--gray-1);padding:11px 14px;">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Phone</div>
-          <div style="font-size:13px;">${r.phone||'—'}</div>
-        </div>
-        <div style="background:var(--gray-1);padding:11px 14px;grid-column:span 2;">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Address</div>
-          <div style="font-size:13px;">${r.address||'—'}${r.city?', '+r.city:''}</div>
-        </div>
-        <div style="background:var(--gray-1);padding:11px 14px;grid-column:span 2;">
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">Household</div>
-          <div style="font-size:13px;">${r.family_size||'—'} people${r.children_count?' · '+r.children_count+' children':''}${r.dietary_notes?' · '+r.dietary_notes:''}</div>
+          <div style="font-size:13px;">${r.family_size||'—'} people${r.children_count?' · '+r.children_count+' children':''}</div>
         </div>
       </div>
-
-      <!-- Quick edit: Status -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:6px;font-weight:600;">Status</div>
-        <div style="display:flex;gap:6px;" id="fam-status-btns-${r.id}">${statusBtns}</div>
-        <div style="font-size:11px;color:var(--gray-4);margin-top:4px;min-height:14px;" id="fam-msg-${r.id}"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray-2);margin-bottom:24px;">
+        ${inlineField('Status', 'status', r.status, { options: ['active','pending','paused','inactive'] })}
+        ${inlineField('Bundle Size', 'bundle_size', r.bundle_size, { options: ['S','M','L'] })}
+        ${inlineField('Phone', 'phone', r.phone, { type: 'tel', span: false })}
+        ${inlineField('Name', 'name', r.name, { span: false })}
+        ${inlineField('Address', 'address', r.address, { span: true })}
+        ${inlineField('Dietary Notes', 'dietary_notes', r.dietary_notes, { span: true })}
+        ${inlineField('Notes', 'notes', r.notes, { textarea: true, span: true })}
       </div>
-
-      <!-- Quick edit: Bundle size -->
-      <div style="margin-bottom:16px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:6px;font-weight:600;">Bundle Size</div>
-        <div style="display:flex;gap:6px;max-width:180px;" id="fam-bundle-btns-${r.id}">${bundleBtns}</div>
-      </div>
-
-      <!-- Quick edit: Notes -->
-      <div style="margin-bottom:24px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:6px;font-weight:600;">Notes</div>
-        <div style="display:flex;gap:8px;align-items:flex-start;">
-          <textarea id="fam-notes-${r.id}"
-            style="flex:1;border:1.5px solid var(--gray-3);padding:8px 10px;font-size:13px;font-family:var(--font-body);resize:vertical;min-height:64px;outline:none;"
-            onfocus="this.style.borderColor='var(--black)'" onblur="this.style.borderColor='var(--gray-3)'"
-            placeholder="Add a note…">${r.notes||''}</textarea>
-          <button onclick="saveFamilyNotes('${r.id}')"
-            style="padding:8px 14px;background:var(--black);color:#fff;border:none;font-size:12px;cursor:pointer;white-space:nowrap;">
-            Save
-          </button>
-        </div>
-      </div>`;
+      <div style="font-size:11px;color:var(--gray-4);min-height:16px;margin-bottom:8px;" id="fam-msg-${famId}"></div>`;
 
     // ── Delivery history ──────────────────────────────────────────────────────
     const deliverySection = `
@@ -1719,8 +1713,7 @@ async function viewFamily(id) {
 
     openDrawer(r.name,
       infoBar + deliverySection,
-      `<button class="btn btn-outline" onclick="openFamilyForm('${id}')">Edit Name / Address / Household</button>
-       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
+      `<button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
     );
   } catch(e) { console.error(e); }
 }
