@@ -2966,6 +2966,14 @@ def update_cycle_assignment(aid):
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()))
 
+@app.route('/my-order')
+def my_order_page():
+    return send_from_directory('public', 'my-order.html')
+
+@app.route('/volunteer-signup')
+def volunteer_signup_page():
+    return send_from_directory('public', 'volunteer-signup.html')
+
 # ── Public Intake (no auth) ───────────────────────────────────────────────────
 
 @app.route('/api/intake', methods=['POST'])
@@ -3016,19 +3024,28 @@ def public_volunteer_signup():
         return jsonify({'error': 'Name and phone are required'}), 422
     if not data.get('role'):
         return jsonify({'error': 'Please select a role'}), 422
-    vid = str(uuid.uuid4())
-    role = data.get('role', 'shopper')
+    phone = _normalize_phone(data['phone'])
+    if not phone:
+        return jsonify({'error': 'A valid phone number is required'}), 422
     db = get_db()
+    existing = db.execute("SELECT id, status FROM volunteers WHERE phone=?", (phone,)).fetchone()
+    if existing:
+        return jsonify({
+            'error': 'duplicate',
+            'message': 'This phone number is already registered as a volunteer. '
+                       'Visit /portal to log in, or contact a coordinator for help.'
+        }), 409
+    vid = str(uuid.uuid4())
     db.execute(
         '''INSERT INTO volunteers
-           (id,name,phone,email,role,notes,status,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)''',
-        (vid, data['name'], data['phone'], data.get('email'),
-         role, data.get('notes'),
-         'pending', 'signup_form', now())
+           (id,name,phone,email,role,availability,notes,status,source,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (vid, data['name'], phone, data.get('email'),
+         data.get('role', 'shopper'), data.get('availability'),
+         data.get('notes'), 'pending', 'signup_form', now())
     )
     db.commit()
-    log.info(f'New volunteer signup: {data["name"]}')
+    log.info(f'New volunteer signup: {data["name"]} ({phone})')
     return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
 
 # ── Static Pages ──────────────────────────────────────────────────────────────
@@ -3207,11 +3224,25 @@ def check_food_order_eligibility():
     ).fetchone()
 
     if not cycle:
-        return jsonify({'registered': True, 'family_name': family['name'],
-                        'family_id': family['id'],
-                        'open_cycle': False,
-                        'last_order': last_order,
-                        'message': 'There are no open delivery cycles at this time. Please check back soon.'})
+        history_rows = db.execute(
+            '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
+                      dc.title as cycle_title, dc.delivery_date_start
+               FROM food_requests fr
+               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+               WHERE fr.family_id=?
+               ORDER BY dc.delivery_date_start DESC LIMIT 20''',
+            (family['id'],)
+        ).fetchall()
+        return jsonify({
+            'registered': True, 'family_name': family['name'],
+            'family_id': family['id'],
+            'bundle_size': family['bundle_size'],
+            'pending_bundle_size': family['pending_bundle_size'],
+            'open_cycle': False,
+            'last_order': last_order,
+            'history': [dict(r) for r in history_rows],
+            'message': 'There are no upcoming deliveries to confirm right now. Check back soon.'
+        })
 
     # Check if already submitted for this cycle
     existing = db.execute(
@@ -3230,12 +3261,37 @@ def check_food_order_eligibility():
             'message': 'You have already submitted a request for this delivery cycle.'
         })
 
-    # Determine bundle size
-    size = db.execute(
-        "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
-        (family['family_size'] or 1, family['family_size'] or 1)
-    ).fetchone()
-    bundle_size = size['bundle_size'] if size else 'M'
+    # Determine bundle size (family override → rule → default M)
+    bundle_size = family['bundle_size'] or None
+    if not bundle_size:
+        size = db.execute(
+            "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
+            (family['family_size'] or 1, family['family_size'] or 1)
+        ).fetchone()
+        bundle_size = size['bundle_size'] if size else 'M'
+
+    # Order history — all past requests for this family, newest first
+    history_rows = db.execute(
+        '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
+                  dc.title as cycle_title, dc.delivery_date_start
+           FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+           WHERE fr.family_id=?
+           ORDER BY dc.delivery_date_start DESC
+           LIMIT 20''',
+        (family['id'],)
+    ).fetchall()
+    history = [dict(r) for r in history_rows]
+
+    base = {
+        'registered': True,
+        'family_name': family['name'],
+        'family_id': family['id'],
+        'family_code': family['family_code'],
+        'bundle_size': bundle_size,
+        'pending_bundle_size': family['pending_bundle_size'],
+        'history': history,
+    }
 
     # Get active food items
     items = db.execute(
@@ -3247,9 +3303,7 @@ def check_food_order_eligibility():
            ORDER BY fc.display_order, fi.display_order''').fetchall()
 
     return jsonify({
-        'registered': True, 'family_name': family['name'],
-        'family_id': family['id'],
-        'family_code': family['family_code'],
+        **base,
         'open_cycle': True, 'already_submitted': False,
         'last_order': last_order,
         'cycle_id': cycle['id'],
@@ -3257,7 +3311,6 @@ def check_food_order_eligibility():
         'delivery_start': cycle['delivery_date_start'],
         'delivery_end': cycle['delivery_date_end'],
         'request_close_at': cycle['request_close_at'],
-        'bundle_size': bundle_size,
         'food_items': [dict(i) for i in items]
     })
 
