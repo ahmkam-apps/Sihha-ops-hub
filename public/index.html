@@ -1593,6 +1593,11 @@ async function removeSlot(slotId, familyId) {
 }
 
 async function viewFamily(id) {
+  document.getElementById('page-title').textContent = 'Loading…';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+
   try {
     const [r, hist, vols, taskTypes] = await Promise.all([
       GET('/families/' + id),
@@ -1601,93 +1606,192 @@ async function viewFamily(id) {
       GET('/task-types')
     ]);
 
-    const orders = hist.orders || [];
-    const fid = r.id;
+    const orders  = hist.orders || [];
+    const fid     = r.id;
+    const activeTT = taskTypes.filter(t => t.is_active);
 
-    const inp  = (field, val, type='text') =>
-      `<input type="${type}" value="${(val||'').replace(/"/g,'&quot;')}"
-         style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:13px;font-family:var(--font-body);background:transparent;outline:none;"
+    document.getElementById('page-title').textContent = r.name;
+
+    // ── Field helpers ─────────────────────────────────────────────────────────
+    const inp = (field, val, type='text') =>
+      `<input type="${type}" value="${(val!=null?String(val):'').replace(/"/g,'&quot;')}"
+         style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;"
          onfocus="this.style.borderBottomColor='var(--black)'"
          onblur="this.style.borderBottomColor='var(--gray-2)';famSaveField('${fid}','${field}',this.value)"
          onkeydown="if(event.key==='Enter')this.blur()">`;
 
-    const sel  = (field, val, options) =>
-      `<select style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:13px;font-family:var(--font-body);background:transparent;outline:none;"
+    const sel = (field, val, options) =>
+      `<select style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;"
          onchange="famSaveField('${fid}','${field}',this.value)">
-         ${options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}
+         ${options.map(o=>{const v=o.value!=null?o.value:o,l=o.label||o;return`<option value="${v}" ${String(val)===String(v)?'selected':''}>${l}</option>`;}).join('')}
        </select>`;
 
-    const row  = (label, content, span=false) =>
-      `<div style="padding:12px 0;border-bottom:1px solid var(--gray-2);${span?'grid-column:span 2;':''}">
-         <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${label}</div>
+    const row = (label, content, span=false) =>
+      `<div style="padding:11px 0;border-bottom:1px solid var(--gray-2);${span?'grid-column:span 2;':''}">
+         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.9px;color:var(--gray-4);margin-bottom:5px;">${label}</div>
          ${content}
        </div>`;
 
-    const infoBar = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-        <div>
-          <span style="font-family:monospace;font-size:12px;font-weight:700;background:var(--gray-1);padding:3px 8px;">${r.family_code||'—'}</span>
-          <span style="font-size:12px;color:var(--gray-4);margin-left:10px;">${r.family_size||'—'} people${r.children_count?' · '+r.children_count+' children':''}</span>
+    // ── Summary strip ─────────────────────────────────────────────────────────
+    const bundleLabel = {S:'Small',M:'Medium',L:'Large'};
+    const summaryStrip = `
+      <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-family:monospace;font-size:13px;font-weight:800;background:var(--gray-1);padding:4px 10px;border-radius:4px;letter-spacing:.5px;">${r.family_code||'—'}</span>
+          <span style="font-size:15px;font-weight:700;">${r.name}</span>
+          <span style="font-size:13px;color:var(--gray-4);">${r.family_size||'—'} people${r.children_count?' · '+r.children_count+' children':''}</span>
+          ${badge(r.status)}
+          ${r.bundle_size ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--gray-1);color:var(--gray-5);">Bundle: ${bundleLabel[r.bundle_size]||r.bundle_size}</span>` : ''}
         </div>
-        <span style="font-size:11px;color:var(--gray-4);" id="fam-saved-${fid}"></span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;margin-bottom:24px;">
-        ${row('Status',      sel('status',      r.status,      ['active','pending','paused','inactive']), false)}
-        ${row('Bundle Size', sel('bundle_size', r.bundle_size, ['S','M','L']), false)}
-        ${row('Name',          inp('name',          r.name),          false)}
-        ${row('Phone',         inp('phone',         r.phone, 'tel'),  false)}
-        ${row('Address',       inp('address',       r.address),       true)}
-        ${row('Dietary Notes', inp('dietary_notes', r.dietary_notes), true)}
-        ${row('WA Phone', inp('wa_phone', r.wa_phone, 'tel'), false)}
-        ${row('WA API Key <span style="font-weight:400;font-size:11px;color:var(--gray-4)">CallMeBot</span>', inp('wa_apikey', r.wa_apikey), false)}
-        ${row('Notes',
-          `<textarea style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:13px;font-family:var(--font-body);background:transparent;outline:none;resize:vertical;min-height:56px;"
-             onfocus="this.style.borderBottomColor='var(--black)'"
-             onblur="this.style.borderBottomColor='var(--gray-2)';famSaveField('${fid}','notes',this.value)"
-           >${r.notes||''}</textarea>`, true)}
+        <span style="font-size:11px;color:var(--gray-3);" id="fam-saved-${fid}"></span>
       </div>`;
 
-    // ── Delivery history ──────────────────────────────────────────────────────
-    const deliverySection = `
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--gray-4);font-weight:600;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--gray-2);">
-        Delivery History (${orders.length})
-      </div>
-      ${orders.length === 0
-        ? '<p style="color:var(--gray-4);font-size:13px;padding:8px 0;">No deliveries yet.</p>'
-        : orders.map(o => {
-            const delivered   = !!o.delivered_at;
-            const statusColor = delivered ? '#1a7a3c' : '#888';
-            const statusText  = delivered
-              ? `✓ Delivered ${fmtDate(o.delivered_at)}`
-              : (o.status || 'pending');
-            const activeTT = taskTypes.filter(t => t.is_active);
-            const cols     = Math.min(activeTT.length, 3);
-            return `
-              <div style="border:1px solid var(--gray-2);margin-bottom:10px;padding:14px;">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-                  <div style="font-size:13px;font-weight:700;">${o.cycle_title}</div>
-                  <div style="font-size:12px;font-weight:600;color:${statusColor};">${statusText}</div>
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;color:var(--gray-5);margin-bottom:8px;">
-                  <div><span style="color:var(--gray-4);">Bundle:</span> ${o.bundle_size||'—'}</div>
-                  <div><span style="color:var(--gray-4);">Items:</span> ${o.selected_items?.length||0}</div>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:6px;font-size:12px;">
-                  ${activeTT.map(tt => slotBox(o.slots||[], tt.slug, tt.label, vols, id, o.cycle_id)).join('')}
-                </div>
-                ${o.selected_items?.length ? `
-                <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:5px;">
-                  ${o.selected_items.map(i => `<span class="hist-item-chip">${i.name}</span>`).join('')}
-                </div>` : ''}
-              </div>`;
-          }).join('')
-      }`;
+    // ── Current cycle status ───────────────────────────────────────────────────
+    const latestOrder = orders[0];
+    let cycleStrip = '';
+    if (latestOrder) {
+      const scMap = {
+        confirmed:            { bg:'#e8f5e9', color:'#1a5e34', label:'Confirmed ✓' },
+        auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed ✓' },
+        skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
+        pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Awaiting Response' },
+        cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
+      };
+      const sc = scMap[latestOrder.status] || { bg:'#f5f5f0', color:'#888', label:latestOrder.status };
+      const overrideBtns = latestOrder.status === 'confirmed'
+        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${latestOrder.id}','skipped','${latestOrder.cycle_id}','${fid}')">Mark Skipped</button>`
+        : latestOrder.status === 'skipped'
+        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${latestOrder.id}','confirmed','${latestOrder.cycle_id}','${fid}')">Mark Confirmed</button>`
+        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;margin-right:4px;" onclick="overrideFoodRequest('${latestOrder.id}','confirmed','${latestOrder.cycle_id}','${fid}')">✓ Confirm</button>
+           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${latestOrder.id}','skipped','${latestOrder.cycle_id}','${fid}')">Skip</button>`;
+      cycleStrip = `
+        <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
+          <span style="font-size:13px;font-weight:700;">${latestOrder.cycle_title}</span>
+          ${latestOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(latestOrder.delivery_date_start)}</span>` : ''}
+          <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
+          <div style="display:flex;gap:6px;margin-left:auto;">${overrideBtns}</div>
+        </div>`;
+    }
 
-    openDrawer(r.name,
-      infoBar + deliverySection,
-      `<button class="btn btn-outline" onclick="closeDrawer()">Close</button>`
-    );
-  } catch(e) { console.error(e); }
+    // ── Edit grid ─────────────────────────────────────────────────────────────
+    const editGrid = `
+      <div style="background:#fff;border-radius:12px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);margin-bottom:4px;padding-bottom:10px;border-bottom:1px solid var(--gray-2);">Profile</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px;">
+          ${row('Name',        inp('name',          r.name))}
+          ${row('Phone',       inp('phone',         r.phone,         'tel'))}
+          ${row('City',        inp('city',          r.city))}
+          ${row('Family Size', inp('family_size',   r.family_size,   'number'))}
+          ${row('Children',    inp('children_count',r.children_count,'number'))}
+          ${row('Status',      sel('status',      r.status,      ['active','pending','paused','inactive']))}
+          ${row('Bundle Size', sel('bundle_size', r.bundle_size, ['S','M','L']))}
+          ${row('Frequency',   sel('frequency',   r.frequency,   [
+            {value:'weekly',    label:'Weekly'},
+            {value:'biweekly',  label:'Bi-weekly'},
+            {value:'monthly',   label:'Monthly'},
+            {value:'as_needed', label:'As Needed'},
+          ]))}
+          ${row('Income Range',sel('income_range',r.income_range,[
+            {value:'',       label:'—'},
+            {value:'<20k',   label:'<$20k'},
+            {value:'20-40k', label:'$20k–$40k'},
+            {value:'40-60k', label:'$40k–$60k'},
+            {value:'>60k',   label:'>$60k'},
+          ]))}
+          ${row('WA Phone',   inp('wa_phone',  r.wa_phone,  'tel'))}
+          ${row('WA API Key <span style="font-weight:400;font-size:10px;color:var(--gray-4)">CallMeBot</span>', inp('wa_apikey', r.wa_apikey))}
+          ${row('Address',       inp('address',       r.address),       true)}
+          ${row('Dietary Notes', inp('dietary_notes', r.dietary_notes), true)}
+          ${row('Notes',
+            `<textarea style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;resize:vertical;min-height:60px;"
+               onfocus="this.style.borderBottomColor='var(--black)'"
+               onblur="this.style.borderBottomColor='var(--gray-2)';famSaveField('${fid}','notes',this.value)"
+             >${r.notes||''}</textarea>`, true)}
+        </div>
+      </div>`;
+
+    // ── Delivery history table ─────────────────────────────────────────────────
+    const scMap2 = {
+      confirmed:            { bg:'#e8f5e9', color:'#1a5e34', label:'Confirmed' },
+      auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed' },
+      skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
+      pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Pending' },
+      cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
+    };
+
+    const historyRows = orders.map(o => {
+      const delivered = !!o.delivered_at;
+      const sc = delivered
+        ? { bg:'#e8f5e9', color:'#1a5e34', label:'✓ Delivered' }
+        : (scMap2[o.status] || { bg:'#f5f5f0', color:'#888', label:o.status });
+      const itemList = o.selected_items?.length
+        ? o.selected_items.map(i => i.name).join(', ')
+        : '—';
+      const slotCells = activeTT.map(tt => {
+        const assigned = (o.slots||[]).filter(s => s.task_type === tt.slug && s.volunteer_name);
+        const selId = `hslot-${tt.slug}-${o.id}`;
+        const volOpts = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+        return `<td style="padding:10px;min-width:120px;vertical-align:top;">
+          ${assigned.map(s =>
+            `<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+               <span style="font-size:12px;font-weight:600;">${s.volunteer_name}</span>
+               <button onclick="removeSlot('${s.id}','${fid}')"
+                 style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;">×</button>
+             </div>`).join('')}
+          <div style="display:flex;gap:4px;margin-top:${assigned.length?'4px':'0'};">
+            <select id="${selId}" style="flex:1;font-size:11px;border:1px solid var(--gray-3);padding:2px 4px;background:#fff;">
+              <option value="">+ Add…</option>${volOpts}
+            </select>
+            <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;"
+              onclick="addSlot('${o.cycle_id}','${fid}','${tt.slug}','${selId}')">Add</button>
+          </div>
+        </td>`;
+      }).join('');
+
+      return `<tr style="border-bottom:1px solid var(--gray-1);">
+        <td style="padding:10px 10px 10px 0;font-weight:600;white-space:nowrap;">${o.cycle_title}</td>
+        <td style="padding:10px;color:var(--gray-5);white-space:nowrap;">${o.delivery_date_start?fmtDateShort(o.delivery_date_start):'—'}</td>
+        <td style="padding:10px;white-space:nowrap;">
+          <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
+        </td>
+        <td style="padding:10px;color:var(--gray-5);">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
+        <td style="padding:10px;color:var(--gray-5);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${itemList}">${itemList}</td>
+        ${slotCells}
+      </tr>`;
+    }).join('');
+
+    const historySection = `
+      <div style="background:#fff;border-radius:12px;padding:20px 24px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);padding-bottom:10px;border-bottom:1px solid var(--gray-2);">
+          Delivery History <span style="font-weight:400;color:var(--gray-3);">(${orders.length})</span>
+        </div>
+        ${orders.length === 0
+          ? '<p style="color:var(--gray-4);font-size:13px;padding:16px 0 0;">No deliveries yet.</p>'
+          : `<div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead>
+                  <tr style="border-bottom:2px solid var(--gray-2);">
+                    <th style="text-align:left;padding:8px 10px 8px 0;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;white-space:nowrap;">Cycle</th>
+                    <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;white-space:nowrap;">Date</th>
+                    <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">Response</th>
+                    <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">Bundle</th>
+                    <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">Items</th>
+                    ${activeTT.map(tt => `<th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">${tt.label}</th>`).join('')}
+                  </tr>
+                </thead>
+                <tbody>${historyRows}</tbody>
+              </table>
+            </div>`
+        }
+      </div>`;
+
+    document.getElementById('content').innerHTML = summaryStrip + cycleStrip + editGrid + historySection;
+
+  } catch(e) {
+    console.error(e);
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
 }
 
 function toggleHistRow(id) {
@@ -3043,10 +3147,11 @@ async function viewCycleDetail(cycleId) {
   }
 }
 
-async function overrideFoodRequest(requestId, newStatus, cycleId) {
+async function overrideFoodRequest(requestId, newStatus, cycleId, fromFamilyId) {
   try {
     await PUT('/food-requests/' + requestId, { status: newStatus });
-    viewCycleDetail(cycleId); // refresh
+    if (fromFamilyId) viewFamily(fromFamilyId);
+    else viewCycleDetail(cycleId);
   } catch(e) { alert('Failed to update: ' + e.message); }
 }
 
