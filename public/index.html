@@ -752,7 +752,12 @@ function fmtDate(s) {
 }
 function fmtMoney(n) {
   if (n === null || n === undefined) return '—';
-  return '$' + Number(n).toFixed(2);
+  const num = Number(n);
+  if (num === 0) return '$0';
+  // Drop cents if the value is a whole number
+  return num % 1 === 0
+    ? '$' + num.toLocaleString('en-US')
+    : '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function downloadPDF(path) {
   // Open PDF in a new tab — browser will show it inline or prompt download
@@ -888,9 +893,9 @@ async function renderDashboard() {
           <div class="stat-sub">${fmtMoney(s.reimb_paid_total)} all time</div>
         </div>
         <div class="stat-card" onclick="nav('donations')" style="cursor:pointer;">
-          <div class="stat-label">Donations</div>
-          <div class="stat-value" style="color:#1a8754">${fmtMoney(s.donations_month)}</div>
-          <div class="stat-sub">This month · ${fmtMoney(s.donations_total)} total</div>
+          <div class="stat-label">Donations — All Time</div>
+          <div class="stat-value" style="color:#1a8754">${fmtMoney(s.donations_total)}</div>
+          <div class="stat-sub">${fmtMoney(s.donations_month)} this month · ${s.donations_count} total</div>
         </div>
         <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Spend This Month</div>
