@@ -2579,38 +2579,20 @@ def public_intake():
 
 @app.route('/api/volunteer-signup', methods=['POST'])
 def public_volunteer_signup():
-    import json as _json
     data = request.json or {}
     if not data.get('name') or not data.get('phone'):
         return jsonify({'error': 'Name and phone are required'}), 422
+    if not data.get('role'):
+        return jsonify({'error': 'Please select a role'}), 422
     vid = str(uuid.uuid4())
-    # Map volunteer areas to role field
-    areas = data.get('volunteer_areas', [])
-    if isinstance(areas, list):
-        if 'delivery' in areas and ('shopping' in areas or 'packing' in areas):
-            role = 'both'
-        elif 'delivery' in areas:
-            role = 'delivery'
-        elif areas:
-            role = 'shopper'
-        else:
-            role = 'general'
-    else:
-        role = 'shopper'
+    role = data.get('role', 'shopper')
     db = get_db()
     db.execute(
         '''INSERT INTO volunteers
-           (id,name,phone,email,role,availability,contact_preference,
-            volunteer_areas,comfort_level,skills,other_info,status,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+           (id,name,phone,email,role,notes,status,source,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)''',
         (vid, data['name'], data['phone'], data.get('email'),
-         role,
-         _json.dumps(data.get('availability', {})) if isinstance(data.get('availability'), dict) else data.get('availability'),
-         data.get('contact_preference'),
-         _json.dumps(areas) if isinstance(areas, list) else areas,
-         data.get('comfort_level'),
-         data.get('skills'),
-         data.get('other_info'),
+         role, data.get('notes'),
          'pending', 'signup_form', now())
     )
     db.commit()

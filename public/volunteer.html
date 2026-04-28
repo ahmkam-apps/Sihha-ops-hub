@@ -302,7 +302,7 @@
 
   <div id="form-state">
     <h1 class="page-title">Volunteer with Sihha</h1>
-    <p class="page-desc">Thank you for your interest in volunteering. Please fill out this form and we will be in touch to discuss how you can help. Volunteering is typically bi-weekly.</p>
+    <p class="page-desc">Thank you for your interest in volunteering. Please fill out this short form and a coordinator will be in touch. Volunteering is bi-weekly.</p>
 
     <form id="vol-form" onsubmit="submitForm(event)" novalidate>
 
@@ -315,93 +315,30 @@
 
       <div class="field-row">
         <div class="field">
-          <label>Email <span class="required-star">*</span></label>
-          <input type="email" id="email" placeholder="your@email.com" required autocomplete="email">
+          <label>Phone <span class="required-star">*</span></label>
+          <input type="tel" id="phone" placeholder="(507) 000-0000" required autocomplete="tel">
         </div>
         <div class="field">
-          <label>Phone <span class="required-star">*</span></label>
-          <input type="tel" id="phone" placeholder="(585) 000-0000" required autocomplete="tel">
+          <label>Email</label>
+          <input type="email" id="email" placeholder="your@email.com" autocomplete="email">
         </div>
       </div>
 
-      <div class="field">
-        <label>Preferred Contact Method <span class="required-star">*</span></label>
-        <div class="radio-group">
-          <label class="radio-item">
-            <input type="radio" name="contact_pref" value="Email"> Email
-          </label>
-          <label class="radio-item">
-            <input type="radio" name="contact_pref" value="Text Message"> Text Message
-          </label>
-        </div>
-      </div>
-
-      <div class="section-label">Volunteering Interests</div>
+      <div class="section-label">Role</div>
 
       <div class="field">
-        <label>Areas you'd like to help with <span class="required-star">*</span></label>
-        <div class="check-group">
-          <label class="check-item">
-            <input type="checkbox" class="area-check" value="shopping">
-            <span class="check-label"><strong>Shopping & Supply Pickup</strong> — Collecting items based on our weekly list</span>
-          </label>
-          <label class="check-item">
-            <input type="checkbox" class="area-check" value="packing">
-            <span class="check-label"><strong>Packing & Organizing Bundles</strong> — Sorting and assembling items for delivery</span>
-          </label>
-          <label class="check-item">
-            <input type="checkbox" class="area-check" value="delivery">
-            <span class="check-label"><strong>Delivery</strong> — Dropping off bundles to homes in the community</span>
-          </label>
-          <label class="check-item">
-            <input type="checkbox" class="area-check" value="general">
-            <span class="check-label"><strong>General Help</strong> — Open to helping with any of the above</span>
-          </label>
-        </div>
-      </div>
-
-      <div class="section-label">Availability</div>
-      <p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">Volunteering is bi-weekly. Please select the times that work for you.</p>
-
-      <div class="field">
-        <table class="avail-grid">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Morning<br><span style="font-weight:400">9am–12pm</span></th>
-              <th>Afternoon<br><span style="font-weight:400">12pm–4pm</span></th>
-              <th>Evening<br><span style="font-weight:400">4pm–7pm</span></th>
-            </tr>
-          </thead>
-          <tbody id="avail-body"></tbody>
-        </table>
-      </div>
-
-      <div class="section-label">About You</div>
-
-      <div class="field">
-        <label>Comfort working independently</label>
-        <div class="scale-group" id="comfort-scale">
-          <div class="scale-item" onclick="selectScale(1)">1</div>
-          <div class="scale-item" onclick="selectScale(2)">2</div>
-          <div class="scale-item" onclick="selectScale(3)">3</div>
-          <div class="scale-item" onclick="selectScale(4)">4</div>
-          <div class="scale-item" onclick="selectScale(5)">5</div>
-        </div>
-        <div class="scale-labels">
-          <span>Not comfortable</span>
-          <span>Very comfortable</span>
-        </div>
+        <label>How would you like to help? <span class="required-star">*</span></label>
+        <select id="role">
+          <option value="">— Select a role —</option>
+          <option value="shopper">Shopper — collect items from stores</option>
+          <option value="delivery">Delivery — drop off bundles to families</option>
+          <option value="both">Both — shopping and delivery</option>
+        </select>
       </div>
 
       <div class="field">
-        <label>Relevant Skills or Experience <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
-        <textarea id="skills" placeholder="e.g. driving, organizing, food handling experience…"></textarea>
-      </div>
-
-      <div class="field">
-        <label>Anything else we should know? <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
-        <textarea id="other_info" placeholder="Any additional information about your availability or interests…"></textarea>
+        <label>Notes <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <textarea id="notes" placeholder="Anything we should know — availability, constraints, etc."></textarea>
       </div>
 
       <button type="submit" class="submit-btn" id="submit-btn">Submit Application</button>
@@ -414,8 +351,8 @@
   <div id="success-state">
     <div class="success-icon">✓</div>
     <h2 class="success-title">Application Received</h2>
-    <p class="success-text">Thank you for signing up to volunteer with Sihha. We truly appreciate your generosity. A coordinator will be in touch soon.</p>
-    <p class="success-text" style="margin-top:12px;">Once approved, you can log into the Volunteer Portal using the phone number you just provided to view open tasks and claim delivery or shopping slots.</p>
+    <p class="success-text">Thank you for signing up to volunteer with Sihha. We truly appreciate your generosity. A coordinator will be in touch soon, inshAllah.</p>
+    <p class="success-text" style="margin-top:12px;">Once approved, you can log into the Volunteer Portal using the phone number you just provided to view and claim delivery or shopping tasks.</p>
     <a class="success-link" href="/portal" style="display:block;margin-bottom:12px;">Go to Volunteer Portal →</a>
     <a class="success-link" href="https://www.sihha.org" style="background:transparent;color:#111;border:1.5px solid #111;">Return to sihha.org</a>
   </div>
@@ -425,67 +362,20 @@
 <script>
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
-  // Build availability grid
-  const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  const SLOTS = ['morning','afternoon','evening'];
-  const tbody = document.getElementById('avail-body');
-  DAYS.forEach(day => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="day-label">${day}</td>` +
-      SLOTS.map(slot => `<td><input type="checkbox" data-day="${day}" data-slot="${slot}"></td>`).join('');
-    tbody.appendChild(tr);
-  });
-
-  // Highlight check/radio items
-  document.querySelectorAll('.check-item input, .radio-item input').forEach(inp => {
-    inp.addEventListener('change', function() {
-      const item = this.closest('.check-item, .radio-item');
-      if (this.type === 'radio') {
-        document.querySelectorAll(`input[name="${this.name}"]`).forEach(r =>
-          r.closest('.radio-item').classList.remove('selected'));
-        if (this.checked) item.classList.add('selected');
-      } else {
-        item.classList.toggle('selected', this.checked);
-      }
-    });
-  });
-
-  // Scale selector
-  let selectedScale = null;
-  function selectScale(val) {
-    selectedScale = val;
-    document.querySelectorAll('.scale-item').forEach((el, i) => {
-      el.classList.toggle('selected', i + 1 === val);
-    });
-  }
-
-  // Get availability grid values
-  function getAvailability() {
-    const avail = {};
-    document.querySelectorAll('#avail-body input[type="checkbox"]:checked').forEach(cb => {
-      const day = cb.dataset.day;
-      if (!avail[day]) avail[day] = [];
-      avail[day].push(cb.dataset.slot);
-    });
-    return avail;
-  }
-
   async function submitForm(e) {
     e.preventDefault();
     const errEl = document.getElementById('form-error');
     errEl.style.display = 'none';
 
-    const name = document.getElementById('name').value.trim();
-    const email = document.getElementById('email').value.trim();
+    const name  = document.getElementById('name').value.trim();
     const phone = document.getElementById('phone').value.trim();
-    const contact_pref = document.querySelector('input[name="contact_pref"]:checked');
-    const areas = Array.from(document.querySelectorAll('.area-check:checked')).map(c => c.value);
+    const email = document.getElementById('email').value.trim();
+    const role  = document.getElementById('role').value;
+    const notes = document.getElementById('notes').value.trim();
 
-    if (!name) return showError('Please enter your full name.');
-    if (!email) return showError('Please enter your email address.');
+    if (!name)  return showError('Please enter your full name.');
     if (!phone) return showError('Please enter your phone number.');
-    if (!contact_pref) return showError('Please select your preferred contact method.');
-    if (areas.length === 0) return showError('Please select at least one area you would like to help with.');
+    if (!role)  return showError('Please select how you would like to help.');
 
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
@@ -495,15 +385,7 @@
       const res = await fetch('/api/volunteer-signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name, email, phone,
-          contact_preference: contact_pref.value,
-          volunteer_areas: areas,
-          availability: getAvailability(),
-          comfort_level: selectedScale,
-          skills: document.getElementById('skills').value.trim() || null,
-          other_info: document.getElementById('other_info').value.trim() || null
-        })
+        body: JSON.stringify({ name, phone, email, role, notes })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Submission failed');

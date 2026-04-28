@@ -1302,7 +1302,7 @@ async function renderVolunteers(filter, search) {
         <table>
           <thead><tr>
             <th>Name</th><th>Phone</th><th>Email</th><th>Role</th>
-            <th>Area</th><th>Status</th><th>Added</th><th></th>
+            <th>Status</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -1311,7 +1311,6 @@ async function renderVolunteers(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.email||'—'}</td>
                 <td><span style="font-size:11px;text-transform:capitalize">${r.role||'—'}</span></td>
-                <td>${r.service_area||'—'}</td>
                 <td>${badge(r.status)}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap">
@@ -1324,7 +1323,7 @@ async function renderVolunteers(filter, search) {
                   `}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="8">No volunteers found</td></tr>'}
+              '<tr class="empty-row"><td colspan="7">No volunteers found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -1364,7 +1363,7 @@ function volunteerFormHTML(r) {
       </div>
     </div>
 
-    <div class="form-section">Role & Availability</div>
+    <div class="form-section">Role & Status</div>
     <div class="form-row">
       <div class="form-group">
         <label>Role</label>
@@ -1380,16 +1379,6 @@ function volunteerFormHTML(r) {
             `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
         </select>
       </div>
-    </div>
-    <div class="form-group">
-      <label>Availability</label>
-      <input type="text" id="v-avail" value="${r.availability||''}"
-        placeholder="e.g. Weekends, Monday evenings">
-    </div>
-    <div class="form-group">
-      <label>Service Area</label>
-      <input type="text" id="v-area" value="${r.service_area||''}"
-        placeholder="e.g. North Rochester, Brighton">
     </div>
     <div class="form-group">
       <label>Notes</label>
@@ -1441,8 +1430,6 @@ async function saveVolunteer() {
     email: document.getElementById('v-email').value.trim(),
     role: document.getElementById('v-role').value,
     status: document.getElementById('v-status').value,
-    availability: document.getElementById('v-avail').value.trim(),
-    service_area: document.getElementById('v-area').value.trim(),
     notes: document.getElementById('v-notes').value.trim(),
     wa_phone: document.getElementById('v-wa-phone').value.trim(),
     wa_apikey: document.getElementById('v-wa-apikey').value.trim()
@@ -1468,8 +1455,6 @@ async function viewVolunteer(id) {
       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
       <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
       <div class="detail-row"><div class="detail-label">Role</div><div class="detail-value" style="text-transform:capitalize">${r.role||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Availability</div><div class="detail-value">${r.availability||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Service Area</div><div class="detail-value">${r.service_area||'—'}</div></div>
       <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
       ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`;
