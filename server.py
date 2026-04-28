@@ -1199,18 +1199,27 @@ def dashboard_stats():
     """).fetchall()
     stats['donations_by_month'] = [dict(r) for r in monthly_rows]
 
-    # Recurring donor growth stats for projection
-    # All-time monthly recurring donor counts to compute avg new donors/month
-    all_recurring = db.execute("""
-        SELECT substr(date,1,7) AS month,
-               COUNT(DISTINCT donor_name) AS recurring_donors,
-               COALESCE(SUM(amount),0) AS recurring_total
+    # Projection stats: avg new donors/month and avg gift over last 3 months
+    proj_rows = db.execute("""
+        SELECT substr(date,1,7)           AS month,
+               COUNT(DISTINCT donor_name) AS donors,
+               COALESCE(SUM(amount),0)    AS total,
+               COALESCE(AVG(amount),0)    AS avg_gift
         FROM donations
-        WHERE frequency='monthly'
+        WHERE date >= date('now','-3 months')
         GROUP BY month
         ORDER BY month ASC
     """).fetchall()
-    stats['recurring_by_month'] = [dict(r) for r in all_recurring]
+    proj_rows = [dict(r) for r in proj_rows]
+    if proj_rows:
+        avg_donors_3mo = sum(r['donors'] for r in proj_rows) / len(proj_rows)
+        avg_gift_3mo   = sum(r['total']  for r in proj_rows) / sum(r['donors'] for r in proj_rows) if sum(r['donors'] for r in proj_rows) > 0 else 0
+    else:
+        avg_donors_3mo = 0
+        avg_gift_3mo   = 0
+    stats['proj_avg_donors_per_month'] = round(avg_donors_3mo, 1)
+    stats['proj_avg_gift']             = round(avg_gift_3mo, 2)
+    stats['proj_monthly_growth']       = round(avg_donors_3mo * avg_gift_3mo, 2)
 
     # Active cycle stats
     active_cycle = db.execute(

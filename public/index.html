@@ -1011,29 +1011,17 @@ async function renderDashboard() {
         </div>
       </div>`;
 
-    // ── Recurring growth model (computed before chart & calculator) ──────────
+    // ── Projection model: avg new donors/month × avg gift (last 3 months) ───
     const histLabels  = dm.map(m => mLabel(m.month));
     const histRecur   = dm.map(m => m.recurring || 0);
     const histOneTime = dm.map(m => m.one_time   || 0);
     const histTotals  = dm.map(m => m.total      || 0);
     const lastTotal   = histTotals.length ? histTotals[histTotals.length - 1] : 0;
 
-    const rbm = s.recurring_by_month || [];
-    const totalRecurDonors    = rbm.length ? rbm[rbm.length-1].recurring_donors : 0;
-    const totalRecurAmount    = rbm.length ? rbm[rbm.length-1].recurring_total  : 0;
-    const avgDonationPerDonor = totalRecurDonors > 0 ? totalRecurAmount / totalRecurDonors : 0;
-
-    const recurDeltas = [];
-    for (let i = 1; i < rbm.length; i++) {
-      const delta = rbm[i].recurring_donors - rbm[i-1].recurring_donors;
-      if (delta > 0) recurDeltas.push(delta);
-    }
-    if (rbm.length === 1) recurDeltas.push(rbm[0].recurring_donors);
-    const avgNewDonorsPerMonth  = recurDeltas.length ? recurDeltas.reduce((a,b)=>a+b,0)/recurDeltas.length : 0;
-    const monthlyRecurGrowth    = Math.round(avgNewDonorsPerMonth * avgDonationPerDonor);
-    const currentRecurBase      = rbm.length ? rbm[rbm.length-1].recurring_total : 0;
-    const avgOneTime            = dm.filter(m=>m.one_time>0).length
-      ? dm.reduce((a,m)=>a+(m.one_time||0),0) / dm.filter(m=>m.one_time>0).length : 0;
+    const avgNewDonorsPerMonth = s.proj_avg_donors_per_month || 0;
+    const avgDonationPerDonor  = s.proj_avg_gift             || 0;
+    const monthlyRecurGrowth   = s.proj_monthly_growth       || 0;
+    const currentRecurBase     = lastTotal;
 
     document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsHTML;
 
@@ -1098,6 +1086,7 @@ async function renderDashboard() {
       }
 
       // ── Line chart (tab 2) ────────────────────────────────────────────────
+      // Each month adds avg new donors × avg gift on top of the growing base
       const projLabels = [];
       const projVals   = [];
       if (dm.length) {
@@ -1105,8 +1094,7 @@ async function renderDashboard() {
         for (let i = 1; i <= 6; i++) {
           const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
           projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
-          const projRecur = currentRecurBase + monthlyRecurGrowth * i;
-          projVals.push(Math.round(projRecur + avgOneTime));
+          projVals.push(Math.round(currentRecurBase + monthlyRecurGrowth * i));
         }
       }
       const lineLabels  = [...histLabels, ...projLabels];
@@ -1232,8 +1220,8 @@ function updateDashProjection() {
   const basisEl = document.getElementById('proj-basis-label');
   if (basisEl) {
     basisEl.textContent = avgNew > 0
-      ? `Projection: avg ${avgNew} new recurring donor${avgNew !== 1 ? 's' : ''}/mo · ${avgGift ? fmtMoney(avgGift) + '/donor' : ''}`
-      : 'Projection: based on your donation history';
+      ? `Based on 3-mo avg: ${avgNew} donor${avgNew !== 1 ? 's' : ''}/mo · ${fmtMoney(avgGift)} avg gift`
+      : 'Based on last 3 months of donations';
   }
 
   const monthlyNeed = families * cost * cycles;
