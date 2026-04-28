@@ -598,6 +598,107 @@ def bootstrap_db():
             # Another worker already ran this migration — safe to skip
             log.info(f'Migration: reimbursements table already upgraded or in progress — skipping ({_e})')
 
+    # ── Phase 5 migrations: family WhatsApp + food_request confirmation ──────────
+
+    # Add wa_phone / wa_apikey to families (for confirmation messages)
+    for _col in ['wa_phone', 'wa_apikey']:
+        try:
+            conn.execute(f'ALTER TABLE families ADD COLUMN {_col} TEXT')
+            log.info(f'Migration: added {_col} to families')
+        except sqlite3.OperationalError:
+            pass
+
+    # Add confirmation fields to food_requests
+    for _col, _def in [('confirmation_token', 'TEXT'), ('confirmed_at', 'TEXT'), ('confirmation_sent_at', 'TEXT')]:
+        try:
+            conn.execute(f'ALTER TABLE food_requests ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added {_col} to food_requests')
+        except sqlite3.OperationalError:
+            pass
+
+    # Upgrade delivery_cycles status CHECK to include 'upcoming'
+    cycles_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
+    ).fetchone()
+    if cycles_sql and 'upcoming' not in cycles_sql[0]:
+        log.info('Migration: upgrading delivery_cycles for upcoming status')
+        try:
+            conn.execute('PRAGMA foreign_keys=OFF')
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS delivery_cycles_new (
+                    id                  TEXT PRIMARY KEY,
+                    title               TEXT NOT NULL,
+                    delivery_date_start TEXT NOT NULL,
+                    delivery_date_end   TEXT NOT NULL,
+                    request_open_at     TEXT NOT NULL DEFAULT '',
+                    request_close_at    TEXT NOT NULL DEFAULT '',
+                    status              TEXT NOT NULL DEFAULT 'upcoming'
+                                        CHECK(status IN ('draft','open','closed','upcoming','shopping','delivered')),
+                    notes               TEXT,
+                    created_by          TEXT,
+                    created_at          TEXT NOT NULL,
+                    updated_at          TEXT
+                );
+                INSERT OR IGNORE INTO delivery_cycles_new
+                    SELECT * FROM delivery_cycles;
+                DROP TABLE IF EXISTS delivery_cycles;
+                ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles;
+                UPDATE delivery_cycles SET status='upcoming'
+                    WHERE status IN ('draft','open','closed');
+            ''')
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info('Migration: delivery_cycles upgraded — upcoming status added, old draft/open/closed migrated')
+        except Exception as _e:
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info(f'Migration: delivery_cycles already upgraded — skipping ({_e})')
+
+    # Upgrade food_requests status CHECK to include confirmation statuses
+    freq_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='food_requests'"
+    ).fetchone()
+    if freq_sql and 'pending_confirmation' not in freq_sql[0]:
+        log.info('Migration: upgrading food_requests for confirmation statuses')
+        try:
+            conn.execute('PRAGMA foreign_keys=OFF')
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS food_requests_new (
+                    id                   TEXT PRIMARY KEY,
+                    cycle_id             TEXT NOT NULL,
+                    family_id            TEXT NOT NULL,
+                    bundle_size          TEXT NOT NULL CHECK(bundle_size IN ('S','M','L')),
+                    submitted_at         TEXT NOT NULL,
+                    status               TEXT NOT NULL DEFAULT 'pending_confirmation'
+                                         CHECK(status IN ('submitted','assigned','delivered','cancelled',
+                                                          'pending_confirmation','confirmed','skipped','auto_confirmed')),
+                    assigned_volunteer_id TEXT,
+                    delivered_at         TEXT,
+                    notes                TEXT,
+                    confirmation_token   TEXT,
+                    confirmed_at         TEXT,
+                    confirmation_sent_at TEXT,
+                    UNIQUE(cycle_id, family_id),
+                    FOREIGN KEY (cycle_id)  REFERENCES delivery_cycles(id),
+                    FOREIGN KEY (family_id) REFERENCES families(id)
+                );
+                INSERT OR IGNORE INTO food_requests_new
+                    (id, cycle_id, family_id, bundle_size, submitted_at, status,
+                     assigned_volunteer_id, delivered_at, notes,
+                     confirmation_token, confirmed_at, confirmation_sent_at)
+                SELECT id, cycle_id, family_id, bundle_size, submitted_at, status,
+                       assigned_volunteer_id, delivered_at, notes,
+                       confirmation_token, confirmed_at, confirmation_sent_at
+                FROM food_requests;
+                DROP TABLE IF EXISTS food_requests;
+                ALTER TABLE food_requests_new RENAME TO food_requests;
+            ''')
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info('Migration: food_requests upgraded — confirmation statuses added')
+        except Exception as _e:
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info(f'Migration: food_requests already upgraded — skipping ({_e})')
+
+    conn.commit()
+
     # Back-fill family_code for existing families that don't have one
     existing = conn.execute(
         "SELECT id, phone, family_size FROM families WHERE family_code IS NULL OR family_code=''"
@@ -1099,7 +1200,7 @@ def dashboard_stats():
 
     # Active cycle stats
     active_cycle = db.execute(
-        "SELECT id, title, status FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start LIMIT 1"
+        "SELECT id, title, status FROM delivery_cycles WHERE status IN ('upcoming','shopping') ORDER BY delivery_date_start LIMIT 1"
     ).fetchone()
     if active_cycle:
         cid = active_cycle['id']
@@ -1931,17 +2032,46 @@ def update_bundle_size_rules():
 # ── Delivery Cycles ───────────────────────────────────────────────────────────
 
 def auto_update_cycle_statuses(db):
-    """Auto-advance cycle status based on dates."""
-    n = now()
-    db.execute(
-        """UPDATE delivery_cycles SET status='open', updated_at=?
-           WHERE status='draft' AND request_open_at <= ?""", (n, n)
-    )
-    db.execute(
-        """UPDATE delivery_cycles SET status='closed', updated_at=?
-           WHERE status='open' AND request_close_at <= ?""", (n, n)
-    )
+    """No-op — cycles are now manually advanced (upcoming→shopping→delivered)."""
+    pass
+
+def _enroll_families_in_cycle(db, cycle_id, delivery_date_start):
+    """Auto-create food_requests for all active families in a new cycle."""
+    families = db.execute(
+        "SELECT id, family_size FROM families WHERE status='active'"
+    ).fetchall()
+    items = db.execute(
+        "SELECT id FROM food_items WHERE is_active=1"
+    ).fetchall()
+    enrolled = 0
+    for fam in families:
+        # Compute bundle size from household size
+        bundle = db.execute(
+            "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
+            (fam['family_size'] or 1, fam['family_size'] or 1)
+        ).fetchone()
+        bsize = bundle['bundle_size'] if bundle else 'M'
+        token = str(uuid.uuid4())
+        rid = str(uuid.uuid4())
+        try:
+            db.execute(
+                '''INSERT INTO food_requests
+                   (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmation_token)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (rid, cycle_id, fam['id'], bsize, now(), 'pending_confirmation', token)
+            )
+            # Pre-populate all food items as selected
+            for item in items:
+                db.execute(
+                    'INSERT OR IGNORE INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,1)',
+                    (str(uuid.uuid4()), rid, item['id'])
+                )
+            enrolled += 1
+        except Exception:
+            pass  # Already enrolled (UNIQUE constraint)
     db.commit()
+    log.info(f'Auto-enrolled {enrolled} families in cycle {cycle_id}')
+    return enrolled
 
 @app.route('/api/delivery-cycles', methods=['GET'])
 @require_auth()
@@ -1960,23 +2090,30 @@ def list_delivery_cycles():
 @require_auth(roles=['admin'])
 def create_delivery_cycle():
     data = request.json or {}
-    required = ('title', 'delivery_date_start', 'delivery_date_end',
-                'request_open_at', 'request_close_at')
-    if not all(data.get(k) for k in required):
-        return jsonify({'error': 'All date fields and title are required'}), 422
+    if not all(data.get(k) for k in ('title', 'delivery_date_start', 'delivery_date_end')):
+        return jsonify({'error': 'title, delivery_date_start and delivery_date_end are required'}), 422
     cid = str(uuid.uuid4())
-    get_db().execute(
+    db  = get_db()
+    # Default open/close dates if not supplied
+    delivery_start = data['delivery_date_start']
+    req_open  = data.get('request_open_at')  or ''
+    req_close = data.get('request_close_at') or ''
+    db.execute(
         '''INSERT INTO delivery_cycles
            (id, title, delivery_date_start, delivery_date_end,
             request_open_at, request_close_at, status, notes, created_by, created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
-        (cid, data['title'], data['delivery_date_start'], data['delivery_date_end'],
-         data['request_open_at'], data['request_close_at'],
-         data.get('status', 'draft'), data.get('notes'),
+        (cid, data['title'], delivery_start, data['delivery_date_end'],
+         req_open, req_close,
+         'upcoming', data.get('notes'),
          g.user['user_id'], now())
     )
-    get_db().commit()
-    return jsonify(dict(get_db().execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone())), 201
+    db.commit()
+    # Auto-enroll all active families
+    enrolled = _enroll_families_in_cycle(db, cid, delivery_start)
+    result = dict(db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone())
+    result['enrolled'] = enrolled
+    return jsonify(result), 201
 
 @app.route('/api/delivery-cycles/<cid>', methods=['PUT'])
 @require_auth(roles=['admin'])
@@ -2498,6 +2635,87 @@ def volunteer_page():
 def order_page():
     return send_from_directory('public', 'order.html')
 
+@app.route('/confirm/<token>')
+def confirm_page(token):
+    return send_from_directory('public', 'confirm.html')
+
+@app.route('/api/family/confirm/<token>', methods=['GET'])
+def get_family_confirmation(token):
+    """Public — family views their pre-populated bundle via confirmation token."""
+    db = get_db()
+    req = db.execute(
+        '''SELECT fr.*, f.name as family_name, f.family_size, f.dietary_notes,
+                  dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
+           FROM food_requests fr
+           JOIN families f  ON fr.family_id  = f.id
+           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+           WHERE fr.confirmation_token = ?''',
+        (token,)
+    ).fetchone()
+    if not req:
+        return jsonify({'error': 'Invalid or expired link'}), 404
+    req = dict(req)
+
+    # Get all active food items with bundle quantities and current selection
+    items = db.execute(
+        '''SELECT fi.id, fi.name, fi.unit, fc.name as category, fc.display_order as cat_order,
+                  fi.display_order as item_order,
+                  bq.quantity,
+                  COALESCE(fri.selected, 1) as selected
+           FROM food_items fi
+           JOIN food_categories fc ON fi.category_id = fc.id
+           LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = ?
+           LEFT JOIN food_request_items fri ON fri.food_item_id = fi.id AND fri.request_id = ?
+           WHERE fi.is_active = 1
+           ORDER BY fc.display_order, fi.display_order''',
+        (req['bundle_size'], req['id'])
+    ).fetchall()
+
+    req['items'] = [dict(i) for i in items]
+    return jsonify(req)
+
+@app.route('/api/family/confirm/<token>', methods=['POST'])
+def submit_family_confirmation(token):
+    """Public — family confirms, modifies, or skips their bundle."""
+    db  = get_db()
+    req = db.execute(
+        "SELECT * FROM food_requests WHERE confirmation_token=?", (token,)
+    ).fetchone()
+    if not req:
+        return jsonify({'error': 'Invalid or expired link'}), 404
+    if req['status'] in ('skipped',):
+        return jsonify({'error': 'This order has already been processed'}), 400
+
+    data   = request.json or {}
+    action = data.get('action', 'confirm')  # confirm | skip
+
+    if action == 'skip':
+        db.execute(
+            "UPDATE food_requests SET status='skipped', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
+            (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
+        )
+        db.commit()
+        return jsonify({'ok': True, 'action': 'skipped'})
+
+    # Save item selections
+    selected_ids = set(data.get('selected_items', []))
+    all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
+    for item in all_items:
+        is_selected = 1 if item['id'] in selected_ids else 0
+        db.execute(
+            '''INSERT INTO food_request_items (id, request_id, food_item_id, selected)
+               VALUES (?,?,?,?)
+               ON CONFLICT(request_id, food_item_id) DO UPDATE SET selected=?''',
+            (str(uuid.uuid4()), req['id'], item['id'], is_selected, is_selected)
+        )
+
+    db.execute(
+        "UPDATE food_requests SET status='confirmed', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
+        (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
+    )
+    db.commit()
+    return jsonify({'ok': True, 'action': 'confirmed'})
+
 # ── PWA assets ────────────────────────────────────────────────────────────────
 
 @app.route('/sw.js')
@@ -2722,9 +2940,16 @@ def portal_login():
 @app.route('/api/portal/cycles')
 @require_portal_auth()
 def portal_list_cycles():
-    """Return cycles that are open, closed, or shopping — relevant to volunteers."""
+    """Return all upcoming/shopping cycles within the next 6 months — volunteers can sign up to any."""
+    cutoff = (datetime.utcnow() + timedelta(days=183)).strftime('%Y-%m-%d')
+    today  = datetime.utcnow().strftime('%Y-%m-%d')
     rows = get_db().execute(
-        "SELECT * FROM delivery_cycles WHERE status IN ('open','closed','shopping') ORDER BY delivery_date_start ASC"
+        """SELECT * FROM delivery_cycles
+           WHERE status IN ('upcoming','shopping')
+             AND delivery_date_start >= ?
+             AND delivery_date_start <= ?
+           ORDER BY delivery_date_start ASC""",
+        (today, cutoff)
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -3277,7 +3502,7 @@ def seed_cycles_2026():
                 'delivery_date_end':   sun.isoformat(),
                 'request_open_at':     f'{order_open.isoformat()}T08:00:00',
                 'request_close_at':    f'{order_close.isoformat()}T23:59:00',
-                'status':              'draft',
+                'status':              'upcoming',
                 'notes':               'Auto-seeded by admin endpoint',
             })
             d += timedelta(days=14)
@@ -3286,24 +3511,26 @@ def seed_cycles_2026():
     db = get_db()
     existing_starts = {r['delivery_date_start'] for r in
                        db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
-    created = skipped = 0
+    created = skipped = enrolled_total = 0
     for c in build_cycles():
         if c['delivery_date_start'] in existing_starts:
             skipped += 1
             continue
+        cid = str(uuid.uuid4())
         db.execute(
             '''INSERT INTO delivery_cycles
                (id, title, delivery_date_start, delivery_date_end,
                 request_open_at, request_close_at, status, notes, created_by, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)''',
-            (str(uuid.uuid4()), c['title'], c['delivery_date_start'], c['delivery_date_end'],
+            (cid, c['title'], c['delivery_date_start'], c['delivery_date_end'],
              c['request_open_at'], c['request_close_at'], c['status'], c['notes'],
              g.user['user_id'], now())
         )
+        db.commit()
+        enrolled_total += _enroll_families_in_cycle(db, cid, c['delivery_date_start'])
         created += 1
-    db.commit()
-    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}')
-    return jsonify({'ok': True, 'created': created, 'skipped': skipped})
+    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}, enrolled={enrolled_total}')
+    return jsonify({'ok': True, 'created': created, 'skipped': skipped, 'families_enrolled': enrolled_total})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])
@@ -3312,6 +3539,72 @@ def trigger_reminders():
     """Admin manual trigger — also used if Railway Cron is configured."""
     sent, target_date = _send_reminders_job()
     return jsonify({'ok': True, 'reminders_sent': sent, 'target_date': target_date})
+
+def _send_family_confirmation_reminders():
+    """5 days before delivery: WhatsApp families to confirm their bundle."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        target = (datetime.utcnow() + timedelta(days=5)).strftime('%Y-%m-%d')
+        rows = conn.execute(
+            '''SELECT fr.id, fr.confirmation_token, fr.bundle_size,
+                      f.name as family_name, f.wa_phone, f.wa_apikey,
+                      dc.title as cycle_title, dc.delivery_date_start
+               FROM food_requests fr
+               JOIN families f ON fr.family_id = f.id
+               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+               WHERE dc.delivery_date_start = ?
+                 AND fr.status = 'pending_confirmation'
+                 AND fr.confirmation_sent_at IS NULL
+                 AND f.wa_phone IS NOT NULL AND f.wa_apikey IS NOT NULL''',
+            (target,)
+        ).fetchall()
+        sent = 0
+        base_url = os.environ.get('APP_URL', 'https://sihha-ops-hub-production.up.railway.app')
+        for r in rows:
+            link = f"{base_url}/confirm/{r['confirmation_token']}"
+            msg  = (f"Assalamu Alaikum {r['family_name']}!\n\n"
+                    f"Your SIHAA food bundle for {r['delivery_date_start']} is ready.\n"
+                    f"Please review and confirm your items:\n{link}\n\n"
+                    f"If you need to skip this delivery, you can do that on the same page.\n"
+                    f"JazakAllah Khair!")
+            if _wa_send(r['wa_phone'], r['wa_apikey'], msg):
+                conn.execute(
+                    "UPDATE food_requests SET confirmation_sent_at=? WHERE id=?",
+                    (datetime.utcnow().isoformat(), r['id'])
+                )
+                sent += 1
+        conn.commit()
+        log.info(f'Family confirmation reminders: {sent} sent for delivery {target}')
+        return sent
+    finally:
+        conn.close()
+
+def _auto_confirm_families():
+    """2 days before delivery: auto-confirm all families who haven't responded."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        target = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
+        rows = conn.execute(
+            '''SELECT fr.id FROM food_requests fr
+               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+               WHERE dc.delivery_date_start = ?
+                 AND fr.status = 'pending_confirmation' ''',
+            (target,)
+        ).fetchall()
+        confirmed = len(rows)
+        if confirmed:
+            conn.execute(
+                '''UPDATE food_requests SET status='auto_confirmed', confirmed_at=?
+                   WHERE id IN ({})'''.format(','.join('?' * confirmed)),
+                [datetime.utcnow().isoformat()] + [r['id'] for r in rows]
+            )
+            conn.commit()
+        log.info(f'Auto-confirmed {confirmed} family bundles for delivery {target}')
+        return confirmed
+    finally:
+        conn.close()
 
 # ── Bootstrap on startup (runs under both gunicorn and direct execution) ──────
 
@@ -3324,8 +3617,12 @@ try:
     _scheduler = BackgroundScheduler(timezone='UTC')
     _scheduler.add_job(_send_reminders_job, 'cron', hour=8, minute=0,
                        id='daily_reminders', replace_existing=True)
+    _scheduler.add_job(_send_family_confirmation_reminders, 'cron', hour=9, minute=0,
+                       id='family_confirmations', replace_existing=True)
+    _scheduler.add_job(_auto_confirm_families, 'cron', hour=9, minute=30,
+                       id='auto_confirm_families', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — daily WhatsApp reminders at 08:00 UTC')
+    log.info('APScheduler started — volunteer reminders 08:00, family confirmations 09:00, auto-confirm 09:30 UTC')
 except ImportError:
     log.warning('APScheduler not installed. Run: pip install apscheduler')
 except Exception as _e:

@@ -782,22 +782,21 @@ async function renderDashboard() {
     ]);
 
     // ── Active Cycle Banner ──────────────────────────────────────────────────
-    const activeCycle = cycles.find(c => c.status === 'open')
-                     || cycles.find(c => c.status === 'shopping')
-                     || cycles.find(c => c.status === 'closed')
+    const activeCycle = cycles.find(c => c.status === 'shopping')
+                     || cycles.find(c => c.status === 'upcoming')
                      || cycles[0];
 
-    const statusColors = { draft:'#888', open:'#1a8754', closed:'#e0a800', shopping:'#2e86c1', delivered:'#555' };
-    const statusBg     = { draft:'#f5f5f5', open:'#f0faf5', closed:'#fffbec', shopping:'#eaf4fb', delivered:'#f5f5f5' };
+    const statusColors = { upcoming:'#1a8754', shopping:'#2e86c1', delivered:'#555' };
+    const statusBg     = { upcoming:'#f0faf5', shopping:'#eaf4fb', delivered:'#f5f5f5' };
 
     let cycleHTML = '';
     if (activeCycle) {
       const sc = statusColors[activeCycle.status] || '#888';
       const sb = statusBg[activeCycle.status]     || '#f9f9f9';
       const actions = [];
-      if (['open','closed'].includes(activeCycle.status))
+      if (['upcoming','shopping'].includes(activeCycle.status))
         actions.push(`<button class="btn btn-sm" onclick="nav('orders')">Orders</button>`);
-      if (['closed','shopping'].includes(activeCycle.status)) {
+      if (['upcoming','shopping'].includes(activeCycle.status)) {
         actions.push(`<button class="btn btn-sm" onclick="generateSlotsFromDash('${activeCycle.id}')">Slots</button>`);
         actions.push(`<button class="btn btn-sm" onclick="triggerRemindersFromDash()">Remind</button>`);
       }
@@ -2166,9 +2165,8 @@ async function renderOrders() {
 
   try {
     const cycles = await GET('/delivery-cycles');
-    const openCycle   = cycles.find(c => c.status === 'open');
-    const defaultCycle = openCycle || cycles.find(c => c.status === 'shopping')
-                      || cycles.find(c => c.status === 'closed') || cycles[0];
+    const defaultCycle = cycles.find(c => c.status === 'shopping')
+                      || cycles.find(c => c.status === 'upcoming') || cycles[0];
     const defaultCycleId = defaultCycle ? defaultCycle.id : null;
 
     const cycleOptions = cycles.length
@@ -2301,13 +2299,13 @@ async function renderCycles(filterStatus) {
   try {
     const url = filterStatus !== 'all' ? '/delivery-cycles?status=' + filterStatus : '/delivery-cycles';
     _cyclesCache = await GET(url);
-    const statusColors = { draft:'badge-pending', open:'badge-active', closed:'badge-paused',
-                           shopping:'badge-approved', delivered:'badge-completed' };
+    const statusColors = { upcoming:'badge-pending', shopping:'badge-approved', delivered:'badge-completed' };
+    const statusLabels = { upcoming:'Upcoming', shopping:'Shopping', delivered:'Delivered' };
     document.getElementById('content').innerHTML = `
       <div style="margin-bottom:16px">
         <div class="filter-tabs">
-          ${['all','draft','open','closed','shopping','delivered'].map(s =>
-            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderCycles('${s}')">${s}</div>`
+          ${['all','upcoming','shopping','delivered'].map(s =>
+            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderCycles('${s}')">${s === 'all' ? 'All' : statusLabels[s]}</div>`
           ).join('')}
         </div>
       </div>
@@ -2315,35 +2313,52 @@ async function renderCycles(filterStatus) {
         <div class="table-header"><span class="table-title">Delivery Cycles</span></div>
         <table>
           <thead><tr>
-            <th>Title</th><th>Delivery Dates</th><th>Request Window</th>
-            <th>Status</th><th>Orders</th><th></th>
+            <th>Title</th><th>Delivery Dates</th><th>Status</th><th>Confirmed</th><th>Orders</th><th></th>
           </tr></thead>
           <tbody>
             ${_cyclesCache.length ? _cyclesCache.map(c => `
               <tr>
                 <td><strong>${c.title}</strong></td>
-                <td style="font-size:12px">${fmtDate(c.delivery_date_start)} – ${fmtDate(c.delivery_date_end)}</td>
-                <td style="font-size:12px;color:var(--gray-4)">${fmtDate(c.request_open_at)} → ${fmtDate(c.request_close_at)}</td>
-                <td><span class="badge ${statusColors[c.status]||'badge-pending'}">${c.status}</span></td>
-                <td><button class="btn btn-outline btn-sm" onclick="viewCycleDetail('${c.id}')">View Orders</button></td>
+                <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)} – ${fmtDate(c.delivery_date_end)}</td>
+                <td><span class="badge ${statusColors[c.status]||'badge-pending'}">${statusLabels[c.status]||c.status}</span></td>
+                <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
+                <td><button class="btn btn-outline btn-sm" onclick="viewCycleDetail('${c.id}')">View</button></td>
                 <td>
                   <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
-                  ${c.status !== 'delivered' ? `<button class="btn btn-sm" style="margin-left:4px" onclick="advanceCycleStatus('${c.id}','${c.status}')">Advance</button>` : ''}
+                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Shopping</button>` : ''}
+                  ${c.status === 'shopping' ? `<button class="btn btn-sm" style="margin-left:4px" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="6">No cycles found</td></tr>'}
           </tbody>
         </table>
       </div>`;
+    // Load confirmation counts async
+    _cyclesCache.forEach(c => loadConfirmationCount(c.id));
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
 }
 
+async function loadConfirmationCount(cycleId) {
+  try {
+    const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
+    const total     = orders.length;
+    const confirmed = orders.filter(o => ['confirmed','auto_confirmed'].includes(o.status)).length;
+    const skipped   = orders.filter(o => o.status === 'skipped').length;
+    const pending   = orders.filter(o => o.status === 'pending_confirmation').length;
+    const el = document.getElementById('conf-' + cycleId);
+    if (el) el.innerHTML = total
+      ? `<span style="color:#1a8754">${confirmed} confirmed</span> · ${pending} pending · ${skipped} skip`
+      : `<span style="color:#aaa">0 enrolled</span>`;
+  } catch(e) {}
+}
+
 async function advanceCycleStatus(id, current) {
-  const next = { draft:'open', open:'closed', closed:'shopping', shopping:'delivered' };
+  const next = { upcoming:'shopping', shopping:'delivered' };
   if (!next[current]) return;
-  if (!confirm(`Advance this cycle from "${current}" to "${next[current]}"?`)) return;
+  const label = { upcoming:'Shopping', shopping:'Delivered' };
+  if (!confirm(`Mark this cycle as "${label[next[current]]}"?`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: next[current] });
     renderCycles();
@@ -2353,13 +2368,11 @@ async function advanceCycleStatus(id, current) {
 function openCycleForm(id) {
   STATE.editId = id || null;
   const c = id ? _cyclesCache.find(x => x.id === id) : null;
-  const statusOptions = ['draft','open','closed','shopping','delivered'];
   openDrawer(id ? 'Edit Cycle' : 'New Delivery Cycle', `
     <div class="form-group">
       <label>Cycle Title *</label>
-      <input type="text" id="cy-title" placeholder="e.g. May Delivery — Cycle 1" value="${c?.title||''}">
+      <input type="text" id="cy-title" placeholder="e.g. May 9–10, 2026" value="${c?.title||''}">
     </div>
-    <div class="form-section">Delivery Days</div>
     <div class="form-row">
       <div class="form-group">
         <label>Delivery Start *</label>
@@ -2370,24 +2383,14 @@ function openCycleForm(id) {
         <input type="date" id="cy-del-end" value="${c?.delivery_date_end?.slice(0,10)||''}">
       </div>
     </div>
-    <div class="form-section">Request Window</div>
-    <p style="font-size:12px;color:var(--gray-4);margin-bottom:12px">Families can submit orders between these dates. Close date should be ~1 week before delivery.</p>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Opens *</label>
-        <input type="date" id="cy-open" value="${c?.request_open_at?.slice(0,10)||''}">
-      </div>
-      <div class="form-group">
-        <label>Closes *</label>
-        <input type="date" id="cy-close" value="${c?.request_close_at?.slice(0,10)||''}">
-      </div>
-    </div>
     ${id ? `<div class="form-group">
       <label>Status</label>
       <select id="cy-status">
-        ${statusOptions.map(s => `<option value="${s}" ${c?.status===s?'selected':''}>${s}</option>`).join('')}
+        ${['upcoming','shopping','delivered'].map(s => `<option value="${s}" ${c?.status===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
       </select>
-    </div>` : ''}
+    </div>` : `<p style="font-size:13px;color:#1a8754;background:#f0faf5;padding:10px 12px;border-radius:8px;margin-top:4px;">
+      ✓ All active families will be automatically enrolled when the cycle is created.
+    </p>`}
     <div class="form-group">
       <label>Notes</label>
       <textarea id="cy-notes">${c?.notes||''}</textarea>
@@ -2400,23 +2403,20 @@ function openCycleForm(id) {
 
 async function saveCycle() {
   const showErr = msg => { const el = document.getElementById('cy-err'); el.textContent=msg; el.style.display='block'; };
-  const title = document.getElementById('cy-title').value.trim();
+  const title    = document.getElementById('cy-title').value.trim();
   const delStart = document.getElementById('cy-del-start').value;
-  const delEnd = document.getElementById('cy-del-end').value;
-  const openAt = document.getElementById('cy-open').value;
-  const closeAt = document.getElementById('cy-close').value;
-  if (!title || !delStart || !delEnd || !openAt || !closeAt)
-    return showErr('All fields except notes are required');
-  const payload = {
-    title, delivery_date_start: delStart, delivery_date_end: delEnd,
-    request_open_at: openAt, request_close_at: closeAt,
-    notes: document.getElementById('cy-notes').value.trim()
-  };
+  const delEnd   = document.getElementById('cy-del-end').value;
+  if (!title || !delStart || !delEnd) return showErr('Title and delivery dates are required');
+  const payload  = { title, delivery_date_start: delStart, delivery_date_end: delEnd,
+                     notes: document.getElementById('cy-notes').value.trim() };
   const statusEl = document.getElementById('cy-status');
   if (statusEl) payload.status = statusEl.value;
   try {
-    if (STATE.editId) await PUT('/delivery-cycles/' + STATE.editId, payload);
-    else await POST('/delivery-cycles', payload);
+    const res = STATE.editId
+      ? await PUT('/delivery-cycles/' + STATE.editId, payload)
+      : await POST('/delivery-cycles', payload);
+    if (!STATE.editId && res.enrolled > 0)
+      alert(`✅ Cycle created! ${res.enrolled} families auto-enrolled.`);
     closeDrawer(); renderCycles();
   } catch(e) { showErr(e.message); }
 }
