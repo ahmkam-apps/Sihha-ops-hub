@@ -1848,6 +1848,25 @@ async function saveVolunteer() {
   } catch(e) { showErr(e.message); }
 }
 
+async function setVolunteerRole(id, role) {
+  try {
+    await PUT('/volunteers/' + id, { role });
+    // Update button styles in place
+    ['shopper','delivery','both'].forEach(v => {
+      const btn = document.querySelector(`#role-btns-${id} button:nth-child(${['shopper','delivery','both'].indexOf(v)+1})`);
+      if (!btn) return;
+      const active = v === role;
+      btn.style.background    = active ? 'var(--black)' : 'var(--white)';
+      btn.style.color         = active ? 'var(--white)' : 'var(--black)';
+      btn.style.borderColor   = active ? 'var(--black)' : 'var(--gray-3)';
+    });
+    const msg = document.getElementById('role-msg-' + id);
+    if (msg) { msg.textContent = '✓ Saved'; setTimeout(() => msg.textContent = '', 2000); }
+  } catch(e) {
+    alert('Failed to update role: ' + e.message);
+  }
+}
+
 async function viewVolunteer(id) {
   try {
     const [r, hist] = await Promise.all([
@@ -1855,13 +1874,27 @@ async function viewVolunteer(id) {
       GET('/volunteers/' + id + '/history')
     ]);
 
+    const roleBtns = ['shopper','delivery','both'].map(v => `
+      <button onclick="setVolunteerRole('${r.id}','${v}')"
+        style="flex:1;padding:8px 4px;font-size:12px;font-weight:600;
+               border:1.5px solid ${r.role===v?'var(--black)':'var(--gray-3)'};
+               background:${r.role===v?'var(--black)':'var(--white)'};
+               color:${r.role===v?'var(--white)':'var(--black)'};
+               cursor:pointer;text-transform:capitalize;">
+        ${v}
+      </button>`).join('');
+
     const detailsHTML = `
-      <div class="detail-row"><div class="detail-label">Name</div><div class="detail-value"><strong>${r.name}</strong></div></div>
       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
       <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Role</div><div class="detail-value" style="text-transform:capitalize">${r.role||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Source</div><div class="detail-value">${r.source||'admin'}</div></div>
+      <div class="detail-row">
+        <div class="detail-label">Role</div>
+        <div class="detail-value">
+          <div style="display:flex;gap:6px;" id="role-btns-${r.id}">${roleBtns}</div>
+          <div style="font-size:11px;color:var(--gray-4);margin-top:4px;min-height:16px;" id="role-msg-${r.id}"></div>
+        </div>
+      </div>
       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
       ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`;
 
