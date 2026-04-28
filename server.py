@@ -4048,20 +4048,17 @@ def seed_cycles_2026():
         return cycles
 
     db = get_db()
+    cycles_to_seed = build_cycles()
+    seed_dates = [c['delivery_date_start'] for c in cycles_to_seed]
 
-    # Fix any legacy 'open'/'draft'/'closed' cycles left over from old schema
-    migrated = db.execute(
-        "UPDATE delivery_cycles SET status='upcoming' WHERE status IN ('open','draft','closed')"
+    # Wipe any existing 2026 cycles (regardless of status) and reseed cleanly
+    deleted = db.execute(
+        "DELETE FROM delivery_cycles WHERE delivery_date_start >= '2026-01-01'"
     ).rowcount
     db.commit()
 
-    existing_starts = {r['delivery_date_start'] for r in
-                       db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
-    created = skipped = 0
-    for c in build_cycles():
-        if c['delivery_date_start'] in existing_starts:
-            skipped += 1
-            continue
+    created = 0
+    for c in cycles_to_seed:
         cid = str(uuid.uuid4())
         db.execute(
             '''INSERT INTO delivery_cycles
@@ -4069,14 +4066,13 @@ def seed_cycles_2026():
                 request_open_at, request_close_at, status, notes, created_by, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (cid, c['title'], c['delivery_date_start'], c['delivery_date_end'],
-             c['request_open_at'], c['request_close_at'], c['status'], c['notes'],
+             c['request_open_at'], c['request_close_at'], 'upcoming', c['notes'],
              g.user['user_id'], now())
         )
-        db.commit()
-        # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
         created += 1
-    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}, migrated={migrated}')
-    return jsonify({'ok': True, 'created': created, 'skipped': skipped, 'migrated': migrated})
+    db.commit()
+    log.info(f'seed-cycles-2026: deleted={deleted}, created={created}')
+    return jsonify({'ok': True, 'created': created, 'deleted': deleted})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])

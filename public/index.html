@@ -1371,8 +1371,7 @@ async function seedCycles2026() {
     });
     if (res.ok) {
       const data = await res.json();
-      const migratedMsg = data.migrated > 0 ? ` · Fixed ${data.migrated} legacy cycles` : '';
-      alert(`Done! Created: ${data.created} · Skipped: ${data.skipped}${migratedMsg}`);
+      alert(`Done! Created ${data.created} delivery cycles for 2026.${data.deleted > 0 ? ` (Replaced ${data.deleted} old entries.)` : ''}`);
       renderDashboard();
       return;
     }
