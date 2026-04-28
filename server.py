@@ -1190,13 +1190,27 @@ def dashboard_stats():
                COALESCE(SUM(amount),0) AS total,
                COUNT(*) AS count,
                COALESCE(SUM(CASE WHEN frequency='monthly' THEN amount ELSE 0 END),0) AS recurring,
-               COALESCE(SUM(CASE WHEN frequency<>'monthly' OR frequency IS NULL THEN amount ELSE 0 END),0) AS one_time
+               COALESCE(SUM(CASE WHEN frequency<>'monthly' OR frequency IS NULL THEN amount ELSE 0 END),0) AS one_time,
+               COUNT(DISTINCT CASE WHEN frequency='monthly' THEN donor_name END) AS recurring_donors
         FROM donations
         WHERE date >= date('now','-6 months')
         GROUP BY month
         ORDER BY month ASC
     """).fetchall()
     stats['donations_by_month'] = [dict(r) for r in monthly_rows]
+
+    # Recurring donor growth stats for projection
+    # All-time monthly recurring donor counts to compute avg new donors/month
+    all_recurring = db.execute("""
+        SELECT substr(date,1,7) AS month,
+               COUNT(DISTINCT donor_name) AS recurring_donors,
+               COALESCE(SUM(amount),0) AS recurring_total
+        FROM donations
+        WHERE frequency='monthly'
+        GROUP BY month
+        ORDER BY month ASC
+    """).fetchall()
+    stats['recurring_by_month'] = [dict(r) for r in all_recurring]
 
     # Active cycle stats
     active_cycle = db.execute(
