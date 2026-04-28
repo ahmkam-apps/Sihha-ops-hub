@@ -1128,6 +1128,72 @@ def fix_schema():
         'fixed': not had_treasurer_before and has_treasurer_after,
     })
 
+# ── Public Donate Stats (no auth — safe aggregate data only) ─────────────────
+
+@app.route('/api/donate-stats')
+def public_donate_stats():
+    """Public endpoint: aggregate donation data for the Wix embed."""
+    db = get_db()
+    this_month = datetime.utcnow().strftime('%Y-%m')
+
+    # Monthly totals — last 8 months for chart
+    monthly_rows = db.execute("""
+        SELECT substr(date,1,7) AS month,
+               COALESCE(SUM(amount),0) AS total,
+               COUNT(*) AS count,
+               COUNT(DISTINCT donor_name) AS donors
+        FROM donations
+        WHERE date >= date('now','-8 months') AND amount > 0
+        GROUP BY month
+        ORDER BY month ASC
+    """).fetchall()
+    monthly = [dict(r) for r in monthly_rows]
+
+    # Projection: 3-month run rate + trend
+    proj_rows = db.execute("""
+        SELECT substr(date,1,7) AS month,
+               COUNT(DISTINCT donor_name) AS donors,
+               COALESCE(SUM(amount),0) AS total
+        FROM donations
+        WHERE date >= date('now','-3 months') AND amount > 0
+        GROUP BY month ORDER BY month ASC
+    """).fetchall()
+    proj_rows = [dict(r) for r in proj_rows]
+
+    if proj_rows:
+        totals         = [r['total']  for r in proj_rows]
+        donor_counts   = [r['donors'] for r in proj_rows]
+        avg_monthly    = sum(totals) / len(totals)
+        total_donors   = sum(donor_counts)
+        total_revenue  = sum(totals)
+        avg_gift       = round(total_revenue / total_donors, 2) if total_donors else 0
+        avg_donors     = round(sum(donor_counts) / len(donor_counts), 1)
+        deltas         = [totals[i] - totals[i-1] for i in range(1, len(totals))]
+        monthly_trend  = round(sum(deltas) / len(deltas), 2) if deltas else 0
+    else:
+        avg_monthly = avg_gift = avg_donors = monthly_trend = 0
+
+    # High-level totals
+    total_raised  = db.execute("SELECT COALESCE(SUM(amount),0) FROM donations").fetchone()[0]
+    month_raised  = db.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ?",
+        (f'{this_month}%',)
+    ).fetchone()[0]
+    families_active = db.execute(
+        "SELECT COUNT(*) FROM families WHERE status='active'"
+    ).fetchone()[0]
+
+    return jsonify({
+        'donations_by_month':       monthly,
+        'proj_avg_donors_per_month': avg_donors,
+        'proj_avg_gift':            avg_gift,
+        'proj_avg_monthly':         round(avg_monthly, 2),
+        'proj_monthly_trend':       monthly_trend,
+        'total_raised':             total_raised,
+        'month_raised':             month_raised,
+        'families_active':          families_active,
+    })
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard/stats')

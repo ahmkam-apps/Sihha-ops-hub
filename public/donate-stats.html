@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sihha — Donation Impact</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  @font-face {
+    font-family: 'AreaExtrabold';
+    src: url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2');
+    font-weight: 800;
+  }
+  @font-face {
+    font-family: 'AreaNormal';
+    src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
+    font-weight: 400;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
+    background: transparent;
+    color: #111;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .widget { max-width: 560px; padding-bottom: 8px; }
+
+  /* ── Progress bar (matches Wix page style) ── */
+  .progress-block { margin-bottom: 32px; }
+  .progress-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .progress-raised {
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    color: #111;
+  }
+  .progress-goal {
+    font-size: 14px;
+    color: #111;
+  }
+  .progress-track {
+    width: 100%;
+    height: 10px;
+    background: #d9d9d9;
+  }
+  .progress-fill {
+    height: 100%;
+    background: #111;
+    transition: width 0.8s ease;
+  }
+  .progress-caption {
+    font-size: 12px;
+    color: #888;
+    margin-top: 6px;
+  }
+
+  /* ── Stat badges (matches "25 Lives Impacted" style) ── */
+  .stats { margin-bottom: 32px; }
+  .stat-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .stat-badge {
+    background: #111;
+    color: #fff;
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 20px;
+    font-weight: 800;
+    min-width: 52px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 0 8px;
+  }
+  .stat-label {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    color: #111;
+  }
+
+  /* ── Monthly chart ── */
+  .chart-block { margin-bottom: 32px; }
+  .section-heading {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #888;
+    margin-bottom: 12px;
+    font-weight: 400;
+  }
+  .chart-wrap { position: relative; height: 180px; }
+
+  /* ── Funding calculator ── */
+  .calc-block {}
+  .calc-intro {
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+  .sliders {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  @media (max-width: 440px) { .sliders { grid-template-columns: 1fr; } }
+  .slider-field {}
+  .slider-field label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin-bottom: 4px;
+  }
+  .slider-val {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    margin-bottom: 6px;
+    color: #111;
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: #111;
+    cursor: pointer;
+    height: 2px;
+  }
+
+  /* Result row */
+  .result-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: #e8e8e8;
+    border: 1px solid #e8e8e8;
+    margin-bottom: 20px;
+  }
+  .result-cell {
+    background: #f6f6f6;
+    padding: 16px;
+  }
+  .result-cell.dark {
+    background: #111;
+    color: #fff;
+  }
+  .result-num {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+  .result-lbl {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin-top: 4px;
+  }
+  .result-cell.dark .result-lbl { color: #aaa; }
+
+  /* Donate CTA */
+  .donate-cta {
+    display: block;
+    width: 100%;
+    background: #111;
+    color: #fff;
+    border: none;
+    padding: 15px;
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .donate-cta:hover { background: #333; }
+</style>
+</head>
+<body>
+<div class="widget">
+
+  <!-- Progress bar -->
+  <div class="progress-block">
+    <div class="progress-row">
+      <span class="progress-raised" id="prog-raised">Loading…</span>
+      <span class="progress-goal" id="prog-goal">$1000</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="prog-fill" style="width:0%"></div>
+    </div>
+    <div class="progress-caption" id="prog-caption"></div>
+  </div>
+
+  <!-- Stat badges -->
+  <div class="stats">
+    <div class="stat-row">
+      <div class="stat-badge" id="badge-fam">—</div>
+      <div class="stat-label">Families Receiving Food</div>
+    </div>
+    <div class="stat-row">
+      <div class="stat-badge" id="badge-month">—</div>
+      <div class="stat-label">Raised This Month</div>
+    </div>
+  </div>
+
+  <!-- Monthly trend chart -->
+  <div class="chart-block">
+    <div class="section-heading">Monthly donations</div>
+    <div class="chart-wrap">
+      <canvas id="don-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Funding calculator -->
+  <div class="calc-block">
+    <div class="section-heading">Funding calculator</div>
+    <div class="calc-intro" id="calc-intro">Loading donation data…</div>
+
+    <div class="sliders">
+      <div class="slider-field">
+        <label>Families</label>
+        <div class="slider-val" id="sv-fam">20</div>
+        <input type="range" id="sl-fam" min="5" max="60" value="20" oninput="calcProj()">
+      </div>
+      <div class="slider-field">
+        <label>Cost / family</label>
+        <div class="slider-val" id="sv-cost">$100</div>
+        <input type="range" id="sl-cost" min="50" max="300" step="10" value="100" oninput="calcProj()">
+      </div>
+      <div class="slider-field">
+        <label>Deliveries / mo</label>
+        <div class="slider-val" id="sv-cyc">2</div>
+        <input type="range" id="sl-cyc" min="1" max="4" value="2" oninput="calcProj()">
+      </div>
+    </div>
+
+    <div class="result-grid">
+      <div class="result-cell">
+        <div class="result-num" id="pr-monthly">—</div>
+        <div class="result-lbl">Monthly need</div>
+      </div>
+      <div class="result-cell">
+        <div class="result-num" id="pr-annual">—</div>
+        <div class="result-lbl">Annual need</div>
+      </div>
+      <div class="result-cell">
+        <div class="result-num" id="pr-gap">—</div>
+        <div class="result-lbl">Monthly gap</div>
+      </div>
+      <div class="result-cell dark">
+        <div class="result-num" id="pr-donors">—</div>
+        <div class="result-lbl">Donors needed</div>
+      </div>
+    </div>
+
+    <a class="donate-cta" href="https://www.sihha.org/donate" target="_blank">
+      Donate now
+    </a>
+  </div>
+
+</div>
+
+<script>
+  const API      = 'https://sihha-ops-hub-production.up.railway.app/api/donate-stats';
+  const MONTHLY_GOAL = 1000;
+
+  let _avgGift = 0, _monthlyTrend = 0, _lastTotal = 0;
+
+  const fmt      = n => '$' + Math.round(n).toLocaleString();
+  const fmtShort = n => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : '$' + Math.round(n);
+  const monthLbl = m => new Date(m + '-15').toLocaleString('default', { month: 'short' });
+
+  async function load() {
+    const r = await fetch(API);
+    const d = await r.json();
+
+    // Progress bar (based on this month vs monthly goal)
+    const monthRaised = d.month_raised || 0;
+    const pct = Math.min(100, Math.round((monthRaised / MONTHLY_GOAL) * 100));
+    document.getElementById('prog-raised').textContent = fmt(monthRaised) + ' raised';
+    document.getElementById('prog-goal').textContent   = fmt(MONTHLY_GOAL);
+    document.getElementById('prog-fill').style.width   = pct + '%';
+    document.getElementById('prog-caption').textContent =
+      pct >= 100 ? 'Monthly goal reached!' : `${pct}% of monthly goal`;
+
+    // Stat badges
+    document.getElementById('badge-fam').textContent   = d.families_active || 0;
+    document.getElementById('badge-month').textContent = fmtShort(monthRaised);
+
+    // Globals for calculator
+    _avgGift      = d.proj_avg_gift      || 0;
+    _monthlyTrend = d.proj_monthly_trend || 0;
+
+    // Calc intro
+    const donors = d.proj_avg_donors_per_month || 0;
+    const gift   = d.proj_avg_gift || 0;
+    const trend  = d.proj_monthly_trend || 0;
+    document.getElementById('calc-intro').textContent =
+      `Based on the last 3 months: ${donors} avg donors/month · $${gift} avg donation · ${trend >= 0 ? '+' : ''}$${trend}/month trend.`;
+
+    // Chart
+    const dm     = (d.donations_by_month || []).filter(m => m.total > 0);
+    if (!dm.length) return;
+    _lastTotal = dm[dm.length - 1].total;
+
+    const histLabels = dm.map(m => monthLbl(m.month));
+    const projN      = 3;
+    const projLabels = Array.from({ length: projN }, (_, i) => {
+      const base = new Date(dm[dm.length - 1].month + '-15');
+      base.setMonth(base.getMonth() + i + 1);
+      return base.toLocaleString('default', { month: 'short' });
+    });
+    const allLabels = [...histLabels, ...projLabels];
+
+    // Actual: values then nulls
+    const actualFull = [...dm.map(m => m.total), ...Array(projN).fill(null)];
+
+    // Projected: nulls then trend-extrapolated values, bridged at last actual
+    const projData = Array(histLabels.length).fill(null);
+    projData[histLabels.length - 1] = _lastTotal;
+    for (let i = 0; i < projN; i++) {
+      projData.push(Math.max(0, Math.round(_lastTotal + _monthlyTrend * (i + 1))));
+    }
+
+    // Goal line plugin — monochrome dashed
+    const goalPlugin = {
+      id: 'goalLine',
+      afterDraw({ ctx, chartArea: { left, right, top, bottom }, scales: { y } }) {
+        const yPos = y.getPixelForValue(MONTHLY_GOAL);
+        if (yPos < top || yPos > bottom) return;
+        ctx.save();
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth   = 1;
+        ctx.globalAlpha = 0.3;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle   = '#888';
+        ctx.font        = '10px Helvetica';
+        ctx.textAlign   = 'right';
+        ctx.fillText('$1k goal', right - 4, yPos - 4);
+        ctx.restore();
+      }
+    };
+
+    new Chart(document.getElementById('don-chart'), {
+      type: 'line',
+      plugins: [goalPlugin],
+      data: {
+        labels: allLabels,
+        datasets: [
+          {
+            label: 'Actual',
+            data: actualFull,
+            borderColor: '#111',
+            backgroundColor: 'rgba(17,17,17,0.05)',
+            borderWidth: 2,
+            pointRadius: 3,
+            pointBackgroundColor: '#111',
+            tension: 0.3,
+            fill: true,
+            spanGaps: false,
+          },
+          {
+            label: 'Projected',
+            data: projData,
+            borderColor: '#888',
+            borderWidth: 1.5,
+            borderDash: [5, 4],
+            pointRadius: 2,
+            pointBackgroundColor: '#888',
+            tension: 0.3,
+            fill: false,
+            spanGaps: false,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#111',
+            titleColor: '#fff',
+            bodyColor: '#ccc',
+            callbacks: {
+              label: ctx => ' ' + ctx.dataset.label + ': ' + fmt(ctx.parsed.y)
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid:  { color: '#f0f0f0' },
+            ticks: { font: { size: 11 }, color: '#888' }
+          },
+          y: {
+            beginAtZero: true,
+            grid:  { color: '#f0f0f0' },
+            ticks: { font: { size: 11 }, color: '#888', callback: v => fmtShort(v) }
+          }
+        }
+      }
+    });
+
+    calcProj();
+  }
+
+  function calcProj() {
+    const fam  = parseInt(document.getElementById('sl-fam').value);
+    const cost = parseInt(document.getElementById('sl-cost').value);
+    const cyc  = parseInt(document.getElementById('sl-cyc').value);
+
+    document.getElementById('sv-fam').textContent  = fam;
+    document.getElementById('sv-cost').textContent = '$' + cost;
+    document.getElementById('sv-cyc').textContent  = cyc;
+
+    const need    = fam * cost * cyc;
+    const gap     = Math.max(0, need - _lastTotal);
+    const donors  = _avgGift > 0 ? Math.ceil(gap / _avgGift) : '—';
+
+    document.getElementById('pr-monthly').textContent = fmt(need);
+    document.getElementById('pr-annual').textContent  = fmt(need * 12);
+    document.getElementById('pr-gap').textContent     = fmt(gap);
+    document.getElementById('pr-donors').textContent  = donors;
+  }
+
+  load().catch(console.error);
+</script>
+</body>
+</html>
