@@ -1638,6 +1638,8 @@ async function viewFamily(id) {
         ${row('Phone',         inp('phone',         r.phone, 'tel'),  false)}
         ${row('Address',       inp('address',       r.address),       true)}
         ${row('Dietary Notes', inp('dietary_notes', r.dietary_notes), true)}
+        ${row('WA Phone', inp('wa_phone', r.wa_phone, 'tel'), false)}
+        ${row('WA API Key <span style="font-weight:400;font-size:11px;color:var(--gray-4)">CallMeBot</span>', inp('wa_apikey', r.wa_apikey), false)}
         ${row('Notes',
           `<textarea style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:13px;font-family:var(--font-body);background:transparent;outline:none;resize:vertical;min-height:56px;"
              onfocus="this.style.borderBottomColor='var(--black)'"
@@ -2963,39 +2965,89 @@ async function viewCycleDetail(cycleId) {
      <button class="btn btn-outline" onclick="downloadPDF('/reports/shopping-list/${cycleId}')">⬇ Shopping PDF</button>
      <button class="btn btn-outline" onclick="downloadPDF('/reports/cycle-summary/${cycleId}')">⬇ Summary PDF</button>
      <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
-  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading orders…</p>';
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
+
+    // Tally confirmation statuses
+    const confirmed      = orders.filter(o => o.status === 'confirmed').length;
+    const skipped        = orders.filter(o => o.status === 'skipped').length;
+    const noResponse     = orders.filter(o => o.status === 'pending_confirmation').length;
+    const total          = orders.length;
+
+    const confColor  = confirmed  ? 'color:#1a5e34;background:#e8f5e9' : 'color:var(--gray-4);background:var(--gray-1)';
+    const skipColor  = skipped    ? 'color:#7a6000;background:#fffbec' : 'color:var(--gray-4);background:var(--gray-1)';
+    const nrColor    = noResponse ? 'color:#721c24;background:#f8d7da' : 'color:var(--gray-4);background:var(--gray-1)';
+
+    const confStatusBadge = o => {
+      if (o.status === 'confirmed')           return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ Confirmed</span>`;
+      if (o.status === 'skipped')             return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fffbec;color:#7a6000">✗ Declined</span>`;
+      if (o.status === 'pending_confirmation')return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#f8d7da;color:#721c24">⏳ No Response</span>`;
+      return badge(o.status);
+    };
+
+    const overrideBtns = o => {
+      if (o.status === 'confirmed') return `
+        <button class="btn btn-sm btn-outline" style="font-size:11px;padding:2px 8px" onclick="overrideFoodRequest('${o.id}','skipped','${cycleId}')">✗ Skip</button>`;
+      if (o.status === 'skipped') return `
+        <button class="btn btn-sm" style="font-size:11px;padding:2px 8px;background:#1a5e34;color:#fff" onclick="overrideFoodRequest('${o.id}','confirmed','${cycleId}')">✓ Confirm</button>`;
+      // pending_confirmation — show both
+      return `
+        <button class="btn btn-sm" style="font-size:11px;padding:2px 8px;background:#1a5e34;color:#fff;margin-right:4px" onclick="overrideFoodRequest('${o.id}','confirmed','${cycleId}')">✓ Confirm</button>
+        <button class="btn btn-sm btn-outline" style="font-size:11px;padding:2px 8px" onclick="overrideFoodRequest('${o.id}','skipped','${cycleId}')">✗ Skip</button>`;
+    };
+
     document.getElementById('content').innerHTML = `
-      <div style="margin-bottom:16px;font-size:13px;color:var(--gray-4)">
-        ${orders.length} order${orders.length!==1?'s':''} submitted
-        · Delivery: ${fmtDate(cycle?.delivery_date_start)} – ${fmtDate(cycle?.delivery_date_end)}
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Confirmed</div>
+          <div style="font-size:28px;font-weight:700;${confColor.split(';')[0]}">${confirmed}</div>
+        </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Declined</div>
+          <div style="font-size:28px;font-weight:700;${skipColor.split(';')[0]}">${skipped}</div>
+        </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">No Response</div>
+          <div style="font-size:28px;font-weight:700;${nrColor.split(';')[0]}">${noResponse}</div>
+        </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Total Notified</div>
+          <div style="font-size:28px;font-weight:700">${total}</div>
+        </div>
       </div>
       <div class="table-card">
-        <div class="table-header"><span class="table-title">Families This Delivery</span></div>
+        <div class="table-header"><span class="table-title">Family Responses</span></div>
         <table>
           <thead><tr>
-            <th>Family</th><th>Phone</th><th>Bundle</th><th>Items Selected</th><th>Status</th><th>Submitted</th>
+            <th>Family</th><th>Phone</th><th>Bundle</th><th>Response</th><th>Items</th><th>Override</th>
           </tr></thead>
           <tbody>
             ${orders.length ? orders.map(o => `
-              <tr>
+              <tr id="frow-${o.id}">
                 <td><strong>${o.family_name}</strong></td>
                 <td style="font-size:12px">${o.family_phone||'—'}</td>
-                <td><span class="badge badge-pending">${o.bundle_size}</span></td>
-                <td style="font-size:12px;color:var(--gray-5)">
-                  ${o.selected_items.length ? o.selected_items.map(i=>i.name).join(', ') : '—'}
+                <td style="font-size:12px">${{S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size}</td>
+                <td>${confStatusBadge(o)}</td>
+                <td style="font-size:11px;color:var(--gray-4);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  ${o.status==='confirmed' && o.selected_items.length ? o.selected_items.map(i=>i.name).join(', ') : '—'}
                 </td>
-                <td>${badge(o.status)}</td>
-                <td style="font-size:11px;color:var(--gray-4)">${fmtDate(o.submitted_at)}</td>
+                <td style="white-space:nowrap">${overrideBtns(o)}</td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="6">No orders yet for this cycle</td></tr>'}
+              '<tr class="empty-row"><td colspan="6">No families notified yet — notifications send 7 days before delivery</td></tr>'}
           </tbody>
         </table>
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+async function overrideFoodRequest(requestId, newStatus, cycleId) {
+  try {
+    await PUT('/food-requests/' + requestId, { status: newStatus });
+    viewCycleDetail(cycleId); // refresh
+  } catch(e) { alert('Failed to update: ' + e.message); }
 }
 
 async function viewShoppingList(cycleId) {

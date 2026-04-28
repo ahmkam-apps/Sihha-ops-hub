@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Confirm Your Bundle — SIHAA</title>
+<title>Delivery Opt-In — SIHAA</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -58,7 +58,7 @@
 
 <div class="header">
   <h1>SIHAA Food Charity</h1>
-  <p>Bundle Confirmation</p>
+  <p>Delivery Opt-In</p>
 </div>
 
 <div class="container" id="app">
@@ -141,7 +141,7 @@ function render() {
     <div class="card">
       <div class="card-title">Your Food Bundle</div>
       <p style="font-size:13px;color:#888;margin-bottom:12px;">
-        Uncheck any items you don't need. Everything else will be included.
+        Would you like these items? Uncheck anything you don't need, then confirm below.
       </p>
       ${itemsHTML}
     </div>
@@ -151,8 +151,8 @@ function render() {
       <textarea class="note-field" id="notes" placeholder="Dietary changes, special requests, or anything we should know…">${r.notes || ''}</textarea>
     </div>
 
-    <button class="btn btn-confirm" onclick="confirm()">✓ Confirm My Bundle</button>
-    <button class="btn btn-skip"    onclick="skip()">Skip This Delivery</button>
+    <button class="btn btn-confirm" onclick="confirm()">✓ Yes, I Want This Delivery</button>
+    <button class="btn btn-skip"    onclick="skip()">No Thanks — Skip This Delivery</button>
   `;
 
 }
