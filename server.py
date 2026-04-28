@@ -715,20 +715,26 @@ def bootstrap_db():
             id           TEXT PRIMARY KEY,
             cycle_id     TEXT NOT NULL,
             family_id    TEXT NOT NULL,
-            task_type    TEXT NOT NULL CHECK(task_type IN ('shopping','delivery')),
+            task_type    TEXT NOT NULL,
             task_date    TEXT,
             claimed_by   TEXT,
             claimed_at   TEXT,
             completed_at TEXT,
-            status       TEXT NOT NULL DEFAULT 'open'
+            status       TEXT NOT NULL DEFAULT 'claimed'
                          CHECK(status IN ('open','claimed','complete','cancelled')),
             notes        TEXT,
             created_at   TEXT NOT NULL,
             updated_at   TEXT,
-            UNIQUE(cycle_id, family_id, task_type),
             FOREIGN KEY (cycle_id)   REFERENCES delivery_cycles(id),
             FOREIGN KEY (family_id)  REFERENCES families(id),
             FOREIGN KEY (claimed_by) REFERENCES volunteers(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS volunteer_task_types (
+            slug          TEXT PRIMARY KEY,
+            label         TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            is_active     INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS portal_sessions (
@@ -747,6 +753,53 @@ def bootstrap_db():
             UNIQUE(slot_id, sent_to)
         );
     ''')
+
+    # ── Seed default task types (idempotent) ─────────────────────────────────
+    for _slug, _label, _order in [('shopping', 'Shop', 1), ('delivery', 'Delivery', 2), ('stock', 'Stock', 3)]:
+        conn.execute(
+            "INSERT OR IGNORE INTO volunteer_task_types (slug, label, display_order, is_active) VALUES (?,?,?,1)",
+            (_slug, _label, _order)
+        )
+
+    # ── Migration: rebuild volunteer_slots — remove UNIQUE + CHECK constraints ─
+    _vs_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='volunteer_slots'"
+    ).fetchone()
+    if _vs_ddl and (
+        "UNIQUE(cycle_id, family_id, task_type)" in (_vs_ddl[0] or "") or
+        "CHECK(task_type IN" in (_vs_ddl[0] or "")
+    ):
+        log.info('Migration: rebuilding volunteer_slots — removing UNIQUE + CHECK constraints')
+        try:
+            conn.execute('PRAGMA foreign_keys=OFF')
+            conn.executescript('''
+                ALTER TABLE volunteer_slots RENAME TO _vs_backup;
+                CREATE TABLE volunteer_slots (
+                    id           TEXT PRIMARY KEY,
+                    cycle_id     TEXT NOT NULL,
+                    family_id    TEXT NOT NULL,
+                    task_type    TEXT NOT NULL,
+                    task_date    TEXT,
+                    claimed_by   TEXT,
+                    claimed_at   TEXT,
+                    completed_at TEXT,
+                    status       TEXT NOT NULL DEFAULT 'claimed'
+                                 CHECK(status IN ('open','claimed','complete','cancelled')),
+                    notes        TEXT,
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT,
+                    FOREIGN KEY (cycle_id)   REFERENCES delivery_cycles(id),
+                    FOREIGN KEY (family_id)  REFERENCES families(id),
+                    FOREIGN KEY (claimed_by) REFERENCES volunteers(id)
+                );
+                INSERT INTO volunteer_slots SELECT * FROM _vs_backup;
+                DROP TABLE _vs_backup;
+            ''')
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info('Migration: volunteer_slots rebuilt — multi-volunteer per task now supported')
+        except Exception as _e:
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info(f'Migration: volunteer_slots rebuild skipped ({_e})')
 
     conn.commit()
     conn.close()
@@ -3004,19 +3057,8 @@ def submit_food_order():
             (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
         )
 
-    # ── Auto-generate shopping + delivery slots immediately ───────────────────
-    task_date = cycle['delivery_date_start']
-    for task_type in ('shopping', 'delivery'):
-        try:
-            db.execute(
-                "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
-                (str(uuid.uuid4()), data['cycle_id'], data['family_id'], task_type, task_date, 'open', now())
-            )
-        except sqlite3.IntegrityError:
-            pass  # Slot already exists (UNIQUE constraint on cycle_id, family_id, task_type)
-
     db.commit()
-    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]} — slots auto-created')
+    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]}')
     return jsonify({
         'ok': True,
         'message': 'Your request has been submitted.',
@@ -3571,6 +3613,210 @@ def update_volunteer_slot(sid):
            WHERE vs.id=?""", (sid,)
     ).fetchone()
     return jsonify(dict(row))
+
+# ── Task Types ────────────────────────────────────────────────────────────────
+
+@app.route('/api/task-types')
+def list_task_types():
+    db = get_db()
+    rows = db.execute(
+        "SELECT slug, label, display_order, is_active FROM volunteer_task_types ORDER BY display_order, label"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/task-types', methods=['POST'])
+@require_auth(roles=['admin'])
+def create_task_type():
+    d = request.json or {}
+    label = (d.get('label') or '').strip()
+    if not label:
+        return jsonify({'error': 'label required'}), 422
+    slug = label.lower().replace(' ', '_').replace('-', '_')
+    db = get_db()
+    if db.execute("SELECT slug FROM volunteer_task_types WHERE slug=?", (slug,)).fetchone():
+        return jsonify({'error': 'Task type already exists'}), 409
+    order = db.execute("SELECT COALESCE(MAX(display_order),0)+1 FROM volunteer_task_types").fetchone()[0]
+    db.execute(
+        "INSERT INTO volunteer_task_types (slug, label, display_order, is_active) VALUES (?,?,?,1)",
+        (slug, label, order)
+    )
+    db.commit()
+    return jsonify({'slug': slug, 'label': label, 'display_order': order, 'is_active': 1}), 201
+
+@app.route('/api/task-types/<slug>', methods=['PUT'])
+@require_auth(roles=['admin'])
+def update_task_type(slug):
+    db = get_db()
+    tt = db.execute("SELECT * FROM volunteer_task_types WHERE slug=?", (slug,)).fetchone()
+    if not tt:
+        return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    db.execute(
+        "UPDATE volunteer_task_types SET label=?, display_order=?, is_active=? WHERE slug=?",
+        (d.get('label', tt['label']), d.get('display_order', tt['display_order']),
+         int(d.get('is_active', tt['is_active'])), slug)
+    )
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM volunteer_task_types WHERE slug=?", (slug,)).fetchone()))
+
+# ── Volunteer Slot Admin ───────────────────────────────────────────────────────
+
+@app.route('/api/volunteer-slots', methods=['POST'])
+@require_auth(roles=['admin'])
+def create_volunteer_slot():
+    db = get_db()
+    d = request.json or {}
+    cycle_id   = d.get('cycle_id')
+    family_id  = d.get('family_id')
+    task_type  = d.get('task_type')
+    claimed_by = d.get('claimed_by')
+    if not all([cycle_id, family_id, task_type, claimed_by]):
+        return jsonify({'error': 'cycle_id, family_id, task_type, claimed_by required'}), 422
+    # Prevent duplicate assignment
+    if db.execute(
+        "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND claimed_by=?",
+        (cycle_id, family_id, task_type, claimed_by)
+    ).fetchone():
+        return jsonify({'error': 'Volunteer already assigned to this task'}), 409
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
+    slot_id = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (slot_id, cycle_id, family_id, task_type,
+         cycle['delivery_date_start'] if cycle else None,
+         claimed_by, now(), 'claimed', now())
+    )
+    db.commit()
+    row = db.execute(
+        "SELECT vs.*, v.name as volunteer_name FROM volunteer_slots vs LEFT JOIN volunteers v ON vs.claimed_by=v.id WHERE vs.id=?",
+        (slot_id,)
+    ).fetchone()
+    return jsonify(dict(row)), 201
+
+@app.route('/api/volunteer-slots/<sid>', methods=['DELETE'])
+@require_auth(roles=['admin'])
+def delete_volunteer_slot(sid):
+    db = get_db()
+    if not db.execute("SELECT id FROM volunteer_slots WHERE id=?", (sid,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    db.execute("DELETE FROM volunteer_slots WHERE id=?", (sid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+# ── Portal: Family Sign-up ─────────────────────────────────────────────────────
+
+@app.route('/api/portal/families/<cycle_id>')
+@require_portal_auth()
+def portal_get_families(cycle_id):
+    """Families enrolled in a cycle with the current volunteer's per-task signup status."""
+    db = get_db()
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
+    if not cycle:
+        return jsonify({'error': 'Cycle not found'}), 404
+    vol_id = g.pv['volunteer_id']
+
+    families = db.execute(
+        '''SELECT f.id, f.name, f.family_size, f.family_code, f.address, f.city
+           FROM food_requests fr
+           JOIN families f ON fr.family_id = f.id
+           WHERE fr.cycle_id=? AND f.status='active'
+           ORDER BY f.name''',
+        (cycle_id,)
+    ).fetchall()
+
+    task_types = db.execute(
+        "SELECT slug, label FROM volunteer_task_types WHERE is_active=1 ORDER BY display_order, label"
+    ).fetchall()
+
+    result = []
+    for fam in families:
+        fam_dict = dict(fam)
+        slots = db.execute(
+            "SELECT id, task_type, claimed_by FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND status!='cancelled'",
+            (cycle_id, fam['id'])
+        ).fetchall()
+        my_slots = {}       # {slug: slot_id}
+        vol_counts = {}     # {slug: count}
+        for s in slots:
+            vol_counts[s['task_type']] = vol_counts.get(s['task_type'], 0) + 1
+            if s['claimed_by'] == vol_id:
+                my_slots[s['task_type']] = s['id']
+        fam_dict['my_slots']         = my_slots
+        fam_dict['volunteer_counts'] = vol_counts
+        # Address only for volunteers signed up for delivery
+        if 'delivery' not in my_slots:
+            fam_dict['address'] = None
+            fam_dict['city']    = None
+        result.append(fam_dict)
+
+    return jsonify({
+        'cycle':      dict(cycle),
+        'families':   result,
+        'task_types': [dict(t) for t in task_types]
+    })
+
+@app.route('/api/portal/signup', methods=['POST'])
+@require_portal_auth()
+def portal_signup():
+    """Volunteer signs up for one or more task types for a family in a cycle."""
+    d = request.json or {}
+    cycle_id   = d.get('cycle_id')
+    family_id  = d.get('family_id')
+    task_types = d.get('task_types', [])
+    if not cycle_id or not family_id or not task_types:
+        return jsonify({'error': 'cycle_id, family_id, task_types required'}), 422
+    vol_id = g.pv['volunteer_id']
+    db = get_db()
+    cycle  = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
+    family = db.execute("SELECT * FROM families WHERE id=?", (family_id,)).fetchone()
+    if not cycle:
+        return jsonify({'error': 'Cycle not found'}), 404
+
+    created = []
+    for task_type in task_types:
+        if db.execute(
+            "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND claimed_by=?",
+            (cycle_id, family_id, task_type, vol_id)
+        ).fetchone():
+            continue
+        slot_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (slot_id, cycle_id, family_id, task_type, cycle['delivery_date_start'], vol_id, now(), 'claimed', now())
+        )
+        created.append(task_type)
+    db.commit()
+
+    # WhatsApp confirmation
+    if created:
+        vol = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
+        if vol and vol.get('wa_phone') and vol.get('wa_apikey'):
+            fcode      = family['family_code'] if family else ''
+            task_label = ', '.join(t.capitalize() for t in created)
+            msg = (f"SIHAA Confirmed: {task_label}\n"
+                   f"Family: {fcode} · Size: {family['family_size'] if family else '?'}\n"
+                   f"Delivery: {cycle['delivery_date_start']}\n"
+                   f"JazakAllah Khair!")
+            if 'delivery' in created and family and family.get('address'):
+                msg += f"\nAddress: {family['address']}, {family['city']}"
+            _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
+
+    return jsonify({'ok': True, 'created': created}), 201
+
+@app.route('/api/portal/cancel/<slot_id>', methods=['DELETE'])
+@require_portal_auth()
+def portal_cancel_slot(slot_id):
+    """Volunteer cancels their own slot signup."""
+    vol_id = g.pv['volunteer_id']
+    db = get_db()
+    slot = db.execute(
+        "SELECT * FROM volunteer_slots WHERE id=? AND claimed_by=?", (slot_id, vol_id)
+    ).fetchone()
+    if not slot:
+        return jsonify({'error': 'Not found or not yours'}), 404
+    db.execute("DELETE FROM volunteer_slots WHERE id=?", (slot_id,))
+    db.commit()
+    return jsonify({'ok': True})
 
 # ── WhatsApp Reminders ────────────────────────────────────────────────────────
 

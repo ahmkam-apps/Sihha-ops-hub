@@ -234,20 +234,20 @@
 <div id="app-screen" style="display:none">
   <div class="container">
     <div class="tabs">
-      <div class="tab active" id="tab-open"    onclick="showTab('open')">Open Slots</div>
+      <div class="tab active" id="tab-open"    onclick="showTab('open')">Sign Up</div>
       <div class="tab"        id="tab-mytasks" onclick="showTab('mytasks')">My Tasks</div>
       <div class="tab"        id="tab-history" onclick="showTab('history')">History</div>
     </div>
 
-    <!-- OPEN SLOTS TAB -->
+    <!-- SIGN UP TAB -->
     <div id="pane-open">
       <div class="cycle-select-wrap">
-        <label style="margin:0;white-space:nowrap">Delivery Cycle:</label>
-        <select id="cycle-select" onchange="loadSlots()">
+        <label style="margin:0;white-space:nowrap">Delivery:</label>
+        <select id="cycle-select" onchange="loadFamilies()">
           <option value="">Loading…</option>
         </select>
       </div>
-      <div id="slots-content"><div class="empty">Select a cycle above to see open slots.</div></div>
+      <div id="slots-content"><div class="empty">Select a delivery above to sign up.</div></div>
     </div>
 
     <!-- MY TASKS TAB -->
@@ -372,88 +372,100 @@ async function loadCycles() {
     const sel = document.getElementById('cycle-select');
     if (!cycles.length) {
       sel.innerHTML = '<option>No active cycles</option>';
-      document.getElementById('slots-content').innerHTML = '<div class="empty">No delivery cycles are currently open for volunteer sign-up. Check back soon.</div>';
+      document.getElementById('slots-content').innerHTML =
+        '<div class="empty">No delivery cycles are currently open. Check back soon.</div>';
       return;
     }
     sel.innerHTML = cycles.map(c =>
-      `<option value="${c.id}">${c.title} · Delivery ${fmtDate(c.delivery_date_start)}</option>`
+      `<option value="${c.id}">${c.title} · ${fmtDate(c.delivery_date_start)}</option>`
     ).join('');
-    loadSlots();
+    loadFamilies();
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
   }
 }
 
-// ── Slots ─────────────────────────────────────────────────────────────────────
-async function loadSlots() {
+// ── Family Sign-up ─────────────────────────────────────────────────────────────
+async function loadFamilies() {
   const cycleId = document.getElementById('cycle-select').value;
   if (!cycleId) return;
-  document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading slots…</div>';
+  document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
-    const data = await GET('/portal/slots/' + cycleId);
-    renderSlots(data);
+    const data = await GET('/portal/families/' + cycleId);
+    renderFamilies(data);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
   }
 }
 
-function renderSlots(data) {
-  const { slots, volunteer_id } = data;
-  const shopping = slots.filter(s => s.task_type === 'shopping');
-  const delivery = slots.filter(s => s.task_type === 'delivery');
+function renderFamilies(data) {
+  const { families, task_types, cycle } = data;
 
-  if (!slots.length) {
+  if (!families.length) {
     document.getElementById('slots-content').innerHTML =
-      '<div class="empty">No slots have been generated for this cycle yet. Check back after the cycle closes.</div>';
+      '<div class="empty">No families enrolled in this delivery yet.</div>';
     return;
   }
 
-  const slotCard = (s) => {
-    const isMine = s.claimed_by === volunteer_id;
-    const isOpen = s.status === 'open';
-    const badge  = `<span class="badge badge-${s.status}">${s.status}</span>`;
-    let action = '';
-    if (isOpen) {
-      action = `<button class="btn btn-green btn-sm" onclick="claimSlot('${s.id}')">Claim</button>`;
-    } else if (isMine) {
-      action = `<span style="font-size:12px;color:var(--green);font-weight:600">✓ Yours</span>`;
-    } else {
-      action = `<span style="font-size:12px;color:var(--gray-3)">Taken</span>`;
-    }
-    const addressBox = (isMine && s.task_type === 'delivery' && s.family_address)
-      ? `<div class="address-box">📍 ${s.family_address}</div>` : '';
+  const familyCard = (fam) => {
+    const addressBox = fam.address
+      ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
+
+    const taskBtns = task_types.map(tt => {
+      const mySlotId = fam.my_slots?.[tt.slug];
+      const count    = fam.volunteer_counts?.[tt.slug] || 0;
+      const countBadge = count > 0
+        ? `<span style="font-size:10px;color:var(--gray-4);margin-left:4px;">(${count})</span>` : '';
+
+      if (mySlotId) {
+        return `<button
+          style="background:var(--green);color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+          onclick="cancelSignup('${mySlotId}','${fam.id}')">
+          ✓ ${tt.label} ×${countBadge}
+        </button>`;
+      }
+      return `<button
+        style="background:transparent;color:var(--black);border:1px solid var(--black);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+        onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
+        ${tt.label}${countBadge}
+      </button>`;
+    }).join('');
+
     return `
       <div class="card">
-        <div class="card-row">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
           <div>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
-              <span style="font-family:monospace;font-size:13px;font-weight:700;color:var(--black)">${s.family_code||'—'}</span>
-            </div>
-            <div class="card-meta">Family size: ${s.family_size || '?'} · ${s.task_date ? 'By ' + fmtDate(s.task_date) : ''}</div>
+            <div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--black);margin-bottom:2px;">${fam.family_code || '—'}</div>
+            <div class="card-meta">Family size: ${fam.family_size || '?'}</div>
           </div>
-          <div style="display:flex;align-items:center;gap:10px">${badge}${action}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">${taskBtns}</div>
         </div>
         ${addressBox}
       </div>`;
   };
 
-  document.getElementById('slots-content').innerHTML = `
-    <div class="section-heading">Shopping Slots (${shopping.filter(s=>s.status==='open').length} open)</div>
-    ${shopping.length ? shopping.map(slotCard).join('') : '<div class="empty">No shopping slots yet.</div>'}
-    <div class="section-heading" style="margin-top:24px">Delivery Slots (${delivery.filter(s=>s.status==='open').length} open)</div>
-    ${delivery.length ? delivery.map(slotCard).join('') : '<div class="empty">No delivery slots yet.</div>'}`;
+  document.getElementById('slots-content').innerHTML =
+    `<div class="section-heading">${families.length} families · tap a task to sign up</div>` +
+    families.map(familyCard).join('');
 }
 
-async function claimSlot(slotId) {
+async function signUp(cycleId, familyId, taskType) {
   try {
-    await POST('/portal/claim', { slot_id: slotId });
-    loadSlots();
+    await POST('/portal/signup', { cycle_id: cycleId, family_id: familyId, task_types: [taskType] });
+    loadFamilies();
     loadMyTasks();
-  } catch(e) {
-    alert(e.message);
-  }
+  } catch(e) { alert(e.message); }
+}
+
+async function cancelSignup(slotId, familyId) {
+  if (!confirm('Cancel your sign-up for this task?')) return;
+  try {
+    await api('DELETE', '/portal/cancel/' + slotId);
+    loadFamilies();
+    loadMyTasks();
+  } catch(e) { alert(e.message); }
 }
 
 // ── My Tasks ──────────────────────────────────────────────────────────────────

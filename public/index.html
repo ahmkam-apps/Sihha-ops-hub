@@ -625,6 +625,7 @@ async function api(method, path, body) {
 const GET  = (p)    => api('GET', p);
 const POST = (p, b) => api('POST', p, b);
 const PUT  = (p, b) => api('PUT', p, b);
+const DEL  = (p)    => api('DELETE', p);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 async function doLogin() {
@@ -1543,52 +1544,61 @@ async function famSaveField(famId, field, value) {
   } catch(e) { alert('Failed to save: ' + e.message); }
 }
 
-function slotBox(slot, label, vols, familyId) {
-  if (!slot) {
-    return `<div style="background:var(--gray-1);padding:8px 10px;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">${label}</div>
-      <div style="color:var(--gray-3);font-size:12px;">—</div>
-    </div>`;
-  }
-  if (slot.volunteer_name) {
-    return `<div style="background:var(--gray-1);padding:8px 10px;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">${label}</div>
-      <div style="font-weight:600;color:var(--black);">${slot.volunteer_name}</div>
-    </div>`;
-  }
-  // Unclaimed — show assign dropdown
-  const opts = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
-  return `<div style="background:#fffbe6;border:1px solid #f0c040;padding:8px 10px;">
-    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${label} <span style="color:#c08000;">· Unassigned</span></div>
-    <div style="display:flex;gap:6px;align-items:center;">
-      <select id="sel-${slot.id}" style="flex:1;font-size:12px;border:1px solid var(--gray-3);padding:4px 6px;background:#fff;">
-        <option value="">— Assign —</option>
-        ${opts}
+// slotBox — shows all volunteers assigned to a task type, with add/remove controls
+// allSlots: full slots array for this order; taskType: slug; taskLabel: display label
+function slotBox(allSlots, taskType, taskLabel, vols, familyId, cycleId) {
+  const assigned = (allSlots || []).filter(s => s.task_type === taskType && s.volunteer_name);
+  const addSelId = `add-${taskType}-${familyId}`;
+  const volOpts  = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+
+  const volRows = assigned.map(s =>
+    `<div style="display:flex;align-items:center;justify-content:space-between;padding:1px 0;">
+       <span style="font-size:12px;font-weight:600;color:var(--black);">${s.volunteer_name}</span>
+       <button onclick="removeSlot('${s.id}','${familyId}')"
+         style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:18px;line-height:1;padding:0 2px;margin-left:6px;"
+         title="Remove">×</button>
+     </div>`
+  ).join('');
+
+  return `<div style="background:var(--gray-1);padding:8px 10px;">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${taskLabel}</div>
+    ${assigned.length ? volRows : '<div style="color:var(--gray-3);font-size:12px;margin-bottom:4px;">—</div>'}
+    <div style="display:flex;gap:5px;margin-top:6px;">
+      <select id="${addSelId}" style="flex:1;font-size:12px;border:1px solid var(--gray-3);padding:3px 5px;background:#fff;">
+        <option value="">+ Add…</option>
+        ${volOpts}
       </select>
-      <button class="btn btn-sm" style="font-size:11px;padding:4px 10px;"
-        onclick="assignSlot('${slot.id}','${familyId}')">Save</button>
+      <button class="btn btn-sm" style="font-size:11px;padding:3px 8px;white-space:nowrap;"
+        onclick="addSlot('${cycleId}','${familyId}','${taskType}','${addSelId}')">Add</button>
     </div>
   </div>`;
 }
 
-async function assignSlot(slotId, familyId) {
-  const sel = document.getElementById('sel-' + slotId);
+async function addSlot(cycleId, familyId, taskType, selectId) {
+  const sel = document.getElementById(selectId);
   const volunteerId = sel?.value;
   if (!volunteerId) return;
   try {
-    await PUT('/volunteer-slots/' + slotId, { claimed_by: volunteerId });
-    viewFamily(familyId); // refresh
-  } catch(e) {
-    alert('Failed to assign: ' + e.message);
-  }
+    await POST('/volunteer-slots', { cycle_id: cycleId, family_id: familyId, task_type: taskType, claimed_by: volunteerId });
+    viewFamily(familyId);
+  } catch(e) { alert('Failed to add: ' + e.message); }
+}
+
+async function removeSlot(slotId, familyId) {
+  if (!confirm('Remove this volunteer?')) return;
+  try {
+    await DEL('/volunteer-slots/' + slotId);
+    viewFamily(familyId);
+  } catch(e) { alert('Failed to remove: ' + e.message); }
 }
 
 async function viewFamily(id) {
   try {
-    const [r, hist, vols] = await Promise.all([
+    const [r, hist, vols, taskTypes] = await Promise.all([
       GET('/families/' + id),
       GET('/families/' + id + '/history'),
-      GET('/volunteers?status=active')
+      GET('/volunteers?status=active'),
+      GET('/task-types')
     ]);
 
     const orders = hist.orders || [];
@@ -1643,13 +1653,13 @@ async function viewFamily(id) {
       ${orders.length === 0
         ? '<p style="color:var(--gray-4);font-size:13px;padding:8px 0;">No deliveries yet.</p>'
         : orders.map(o => {
-            const shopper  = o.slots?.find(s => s.task_type === 'shopping');
-            const delivery = o.slots?.find(s => s.task_type === 'delivery');
-            const delivered = !!o.delivered_at;
+            const delivered   = !!o.delivered_at;
             const statusColor = delivered ? '#1a7a3c' : '#888';
             const statusText  = delivered
               ? `✓ Delivered ${fmtDate(o.delivered_at)}`
               : (o.status || 'pending');
+            const activeTT = taskTypes.filter(t => t.is_active);
+            const cols     = Math.min(activeTT.length, 3);
             return `
               <div style="border:1px solid var(--gray-2);margin-bottom:10px;padding:14px;">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
@@ -1660,9 +1670,8 @@ async function viewFamily(id) {
                   <div><span style="color:var(--gray-4);">Bundle:</span> ${o.bundle_size||'—'}</div>
                   <div><span style="color:var(--gray-4);">Items:</span> ${o.selected_items?.length||0}</div>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">
-                  ${slotBox(shopper, 'Shopper', vols, id)}
-                  ${slotBox(delivery, 'Delivered By', vols, id)}
+                <div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:6px;font-size:12px;">
+                  ${activeTT.map(tt => slotBox(o.slots||[], tt.slug, tt.label, vols, id, o.cycle_id)).join('')}
                 </div>
                 ${o.selected_items?.length ? `
                 <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:5px;">
@@ -1698,6 +1707,7 @@ async function renderVolunteers(filter, search) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-outline" onclick="renderTaskTypes()" style="margin-right:8px;">⚙ Task Types</button>
     <button class="btn" onclick="openVolunteerForm()">+ Add Volunteer</button>`;
 
   let url = '/volunteers';
@@ -1756,6 +1766,85 @@ async function renderVolunteers(filter, search) {
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+async function renderTaskTypes() {
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const types = await GET('/task-types');
+    document.getElementById('topbar-actions').innerHTML = `
+      <button class="btn btn-outline" onclick="renderVolunteers()">← Back to Volunteers</button>`;
+    document.getElementById('content').innerHTML = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Volunteer Task Types</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input id="new-tt-label" class="search-input" placeholder="New task type name…" style="width:200px;">
+            <button class="btn btn-sm" onclick="addTaskType()">+ Add</button>
+          </div>
+        </div>
+        <table>
+          <thead><tr><th>Label</th><th>Slug</th><th>Order</th><th>Status</th><th></th></tr></thead>
+          <tbody id="tt-tbody">
+            ${types.map(t => `
+              <tr id="tt-${t.slug}">
+                <td>
+                  <input id="tt-label-${t.slug}" value="${t.label}"
+                    style="border:none;border-bottom:1px solid var(--gray-2);font-size:13px;font-family:var(--font-body);background:transparent;width:120px;outline:none;"
+                    onfocus="this.style.borderBottomColor='var(--black)'"
+                    onblur="this.style.borderBottomColor='var(--gray-2)'">
+                </td>
+                <td style="font-family:monospace;font-size:12px;color:var(--gray-4);">${t.slug}</td>
+                <td>
+                  <input id="tt-order-${t.slug}" type="number" value="${t.display_order}"
+                    style="border:none;border-bottom:1px solid var(--gray-2);font-size:13px;font-family:var(--font-body);background:transparent;width:50px;outline:none;"
+                    onfocus="this.style.borderBottomColor='var(--black)'"
+                    onblur="this.style.borderBottomColor='var(--gray-2)'">
+                </td>
+                <td>${t.is_active
+                  ? '<span style="color:#1a7a3c;font-size:12px;font-weight:600;">● Active</span>'
+                  : '<span style="color:var(--gray-3);font-size:12px;">○ Inactive</span>'}</td>
+                <td style="white-space:nowrap;">
+                  <button class="btn btn-sm" onclick="saveTaskType('${t.slug}')" style="margin-right:4px;">Save</button>
+                  <button class="btn btn-outline btn-sm" onclick="toggleTaskType('${t.slug}',${t.is_active?0:1})">
+                    ${t.is_active ? 'Deactivate' : 'Activate'}
+                  </button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function addTaskType() {
+  const inp = document.getElementById('new-tt-label');
+  const label = inp.value.trim();
+  if (!label) return;
+  try {
+    await POST('/task-types', { label });
+    inp.value = '';
+    renderTaskTypes();
+  } catch(e) { alert(e.message); }
+}
+
+async function saveTaskType(slug) {
+  const label = document.getElementById('tt-label-' + slug)?.value.trim();
+  const order = parseInt(document.getElementById('tt-order-' + slug)?.value) || 0;
+  if (!label) return;
+  try {
+    await PUT('/task-types/' + slug, { label, display_order: order });
+    renderTaskTypes();
+  } catch(e) { alert(e.message); }
+}
+
+async function toggleTaskType(slug, newActive) {
+  try {
+    await PUT('/task-types/' + slug, { is_active: newActive });
+    renderTaskTypes();
+  } catch(e) { alert(e.message); }
 }
 
 async function quickStatusVolunteer(id, status) {
