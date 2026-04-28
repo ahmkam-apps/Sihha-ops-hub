@@ -4048,13 +4048,17 @@ def seed_cycles_2026():
         return cycles
 
     db = get_db()
-    existing_starts = {r['delivery_date_start'] for r in
-                       db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
-    created = skipped = 0
-    for c in build_cycles():
-        if c['delivery_date_start'] in existing_starts:
-            skipped += 1
-            continue
+    cycles_to_seed = build_cycles()
+    seed_dates = [c['delivery_date_start'] for c in cycles_to_seed]
+
+    # Wipe any existing 2026 cycles (regardless of status) and reseed cleanly
+    deleted = db.execute(
+        "DELETE FROM delivery_cycles WHERE delivery_date_start >= '2026-01-01'"
+    ).rowcount
+    db.commit()
+
+    created = 0
+    for c in cycles_to_seed:
         cid = str(uuid.uuid4())
         db.execute(
             '''INSERT INTO delivery_cycles
@@ -4062,14 +4066,13 @@ def seed_cycles_2026():
                 request_open_at, request_close_at, status, notes, created_by, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (cid, c['title'], c['delivery_date_start'], c['delivery_date_end'],
-             c['request_open_at'], c['request_close_at'], c['status'], c['notes'],
+             c['request_open_at'], c['request_close_at'], 'upcoming', c['notes'],
              g.user['user_id'], now())
         )
-        db.commit()
-        # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
         created += 1
-    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}')
-    return jsonify({'ok': True, 'created': created, 'skipped': skipped})
+    db.commit()
+    log.info(f'seed-cycles-2026: deleted={deleted}, created={created}')
+    return jsonify({'ok': True, 'created': created, 'deleted': deleted})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])
@@ -4078,6 +4081,49 @@ def trigger_reminders():
     """Admin manual trigger — also used if Railway Cron is configured."""
     sent, target_date = _send_reminders_job()
     return jsonify({'ok': True, 'reminders_sent': sent, 'target_date': target_date})
+
+
+@app.route('/api/admin/db-debug', methods=['GET'])
+@require_auth(roles=['admin'])
+def db_debug():
+    """Diagnostic: show delivery_cycles schema + all rows."""
+    try:
+        db = get_db()
+        schema_row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
+        ).fetchone()
+        schema_str = schema_row['sql'] if schema_row else None
+
+        cycles_raw = db.execute(
+            "SELECT id, title, delivery_date_start, status FROM delivery_cycles ORDER BY delivery_date_start"
+        ).fetchall()
+        cycles = [{'id': r['id'], 'title': r['title'],
+                   'date': r['delivery_date_start'], 'status': r['status']}
+                  for r in cycles_raw]
+
+        test_error = None
+        try:
+            test_id = '__dbdebug_test__'
+            db.execute(
+                "INSERT INTO delivery_cycles (id,title,delivery_date_start,delivery_date_end,request_open_at,request_close_at,status,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (test_id,'Test','2099-01-01','2099-01-02','','','upcoming','diag','2026-01-01')
+            )
+            db.execute("DELETE FROM delivery_cycles WHERE id=?", (test_id,))
+            db.commit()
+        except Exception as e:
+            test_error = str(e)
+
+        return jsonify({
+            'ok': True,
+            'schema_has_upcoming': 'upcoming' in (schema_str or ''),
+            'schema': schema_str,
+            'cycle_count': len(cycles),
+            'cycles': cycles,
+            'upcoming_insert_test': 'OK' if test_error is None else f'FAILED: {test_error}'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 def _send_family_confirmation_reminders():
     """7 days before delivery: create food_requests for all active families then WhatsApp opt-in link.

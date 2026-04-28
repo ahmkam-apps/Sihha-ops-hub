@@ -87,32 +87,25 @@ def main():
     token = resp['token']
     print(f'Logged in as admin ✓\n')
 
-    # Show ALL existing cycles so we can see what's actually in the DB
+    # Fetch existing cycles to check for duplicates
     _, existing = api('GET', '/api/delivery-cycles', token=token)
-    print(f'Cycles currently in DB ({len(existing)} total):')
-    for e in existing:
-        print(f'  {e["delivery_date_start"]} [{e.get("status","?")}] {e["title"]}')
-
-    # Only skip 2026 dates that already exist and appear in the API response
-    existing_2026 = {c['delivery_date_start'] for c in existing if c['delivery_date_start'] >= '2026-01-01'}
+    existing_starts = {c['delivery_date_start'] for c in existing}
 
     cycles = build_cycles()
     created = skipped = failed = 0
 
-    print(f'\nAttempting to seed {len(cycles)} 2026 cycles...')
     for c in cycles:
-        if c['delivery_date_start'] in existing_2026:
-            print(f'  SKIP  {c["title"]:28}  (already visible in API)')
+        if c['delivery_date_start'] in existing_starts:
+            print(f'  SKIP  {c["title"]:28}  (already exists)')
             skipped += 1
             continue
 
-        c['status'] = 'upcoming'
-        status_code, resp = api('POST', '/api/delivery-cycles', c, token=token)
-        if status_code == 201:
-            print(f'  ✓ OK  {c["title"]:28}')
+        status, resp = api('POST', '/api/delivery-cycles', c, token=token)
+        if status == 201:
+            print(f'  ✓ OK  {c["title"]:28}  orders {c["request_open_at"][:10]} → {c["request_close_at"][:10]}')
             created += 1
         else:
-            print(f'  ✗ ERR {c["title"]:28}  HTTP {status_code}: {resp}')
+            print(f'  ✗ ERR {c["title"]:28}  {status}: {resp}')
             failed += 1
 
     print(f'\nDone. Created: {created}  Skipped: {skipped}  Failed: {failed}')
