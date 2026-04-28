@@ -1343,13 +1343,31 @@ def list_families():
     db = get_db()
     status = request.args.get('status')
     search = (request.args.get('search') or '').strip()
-    q = "SELECT * FROM families WHERE 1=1"
+    q = """
+        SELECT f.*,
+               (SELECT v.name
+                FROM food_requests fr
+                JOIN volunteer_slots vs ON vs.cycle_id = fr.cycle_id
+                                       AND vs.family_id = fr.family_id
+                                       AND vs.task_type = 'delivery'
+                JOIN volunteers v ON vs.claimed_by = v.id
+                WHERE fr.family_id = f.id
+                ORDER BY fr.submitted_at DESC
+                LIMIT 1) AS last_delivery_volunteer,
+               (SELECT dc.delivery_date_start
+                FROM food_requests fr
+                JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+                WHERE fr.family_id = f.id
+                ORDER BY fr.submitted_at DESC
+                LIMIT 1) AS last_delivery_date
+        FROM families f
+        WHERE 1=1"""
     params = []
     if status:
-        q += " AND status=?"; params.append(status)
+        q += " AND f.status=?"; params.append(status)
     if search:
-        q += " AND (name LIKE ? OR phone LIKE ? OR address LIKE ?)"; params += [f'%{search}%']*3
-    q += " ORDER BY created_at DESC"
+        q += " AND (f.name LIKE ? OR f.phone LIKE ? OR f.address LIKE ?)"; params += [f'%{search}%']*3
+    q += " ORDER BY f.created_at DESC"
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
 @app.route('/api/families', methods=['POST'])
@@ -3365,7 +3383,7 @@ def family_history(fid):
 
         # Volunteer slots for this order
         slots = db.execute(
-            '''SELECT vs.task_type, vs.status, vs.completed_at,
+            '''SELECT vs.id, vs.task_type, vs.status, vs.completed_at,
                       v.name as volunteer_name, v.id as volunteer_id
                FROM volunteer_slots vs
                LEFT JOIN volunteers v ON vs.claimed_by = v.id
