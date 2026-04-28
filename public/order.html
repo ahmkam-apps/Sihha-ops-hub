@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIHAA — Food Assistance</title>
+  <meta name="theme-color" content="#111111">
+  <style>
+    @font-face {
+      font-family: 'AreaExtrabold';
+      src: url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2');
+      font-weight: 800; font-style: normal;
+    }
+    @font-face {
+      font-family: 'AreaNormal';
+      src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
+      font-weight: 400; font-style: normal;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --black: #111111;
+      --white: #ffffff;
+      --gray-1: #f6f6f6;
+      --gray-2: #e8e8e8;
+      --gray-3: #cccccc;
+      --gray-4: #888888;
+      --gray-5: #444444;
+      --font-body: 'AreaNormal', Helvetica, Arial, sans-serif;
+      --font-head: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    }
+    body {
+      font-family: var(--font-body);
+      background: var(--white);
+      color: var(--black);
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    header {
+      border-bottom: 1px solid var(--gray-2);
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-family: var(--font-head);
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      text-decoration: none;
+      color: var(--black);
+    }
+    .back-link {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--gray-4);
+      text-decoration: none;
+    }
+    .back-link:hover { color: var(--black); }
+    .page {
+      max-width: 560px;
+      margin: 0 auto;
+      padding: 80px 24px;
+      text-align: center;
+    }
+    .icon { font-size: 48px; margin-bottom: 28px; }
+    .page-title {
+      font-family: var(--font-head);
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      margin-bottom: 16px;
+    }
+    .page-text {
+      font-size: 15px;
+      color: var(--gray-5);
+      line-height: 1.7;
+      margin-bottom: 14px;
+    }
+    .step-list {
+      text-align: left;
+      background: var(--gray-1);
+      border: 1px solid var(--gray-2);
+      padding: 24px 28px;
+      margin: 32px 0;
+      font-size: 14px;
+      line-height: 1.8;
+      color: var(--gray-5);
+    }
+    .step-list li { margin-bottom: 8px; }
+    .step-list li:last-child { margin-bottom: 0; }
+    .step-list strong { color: var(--black); }
+    .cta-link {
+      display: inline-block;
+      background: var(--black);
+      color: var(--white);
+      padding: 14px 32px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-decoration: none;
+      margin-top: 8px;
+    }
+    .cta-link:hover { background: #333; }
+    .secondary-link {
+      display: inline-block;
+      border: 1.5px solid var(--black);
+      color: var(--black);
+      padding: 12px 28px;
+      font-size: 12px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      text-decoration: none;
+      margin-top: 12px;
+    }
+    .secondary-link:hover { background: var(--black); color: var(--white); }
+    .divider { margin: 20px 0; color: var(--gray-3); font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="https://www.sihha.org">sihha</a>
+  <a class="back-link" href="https://www.sihha.org">← Back to sihha.org</a>
+</header>
+
+<div class="page">
+  <div class="icon">📦</div>
+  <h1 class="page-title">How Food Assistance Works</h1>
+  <p class="page-text">Food orders are no longer placed online. Everything is handled automatically through WhatsApp once your family is enrolled.</p>
+
+  <ol class="step-list">
+    <li><strong>Register your household</strong> using the form below — takes about 2 minutes.</li>
+    <li><strong>A coordinator reviews your request</strong> and approves your enrollment, usually within 48 hours.</li>
+    <li><strong>Before each delivery cycle</strong>, you'll receive a WhatsApp message asking you to confirm or skip that delivery.</li>
+    <li><strong>Reply to confirm</strong> and your bundle will be prepared and delivered by a volunteer on the scheduled date.</li>
+  </ol>
+
+  <p class="page-text">Deliveries run bi-weekly on Saturdays and Sundays. No app or account required — just WhatsApp.</p>
+
+  <a class="cta-link" href="/intake">Register Your Household →</a>
+  <div class="divider">or</div>
+  <a class="secondary-link" href="https://www.sihha.org">Return to sihha.org</a>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,11 @@
+data/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store
+*.db
+*.db-wal
+*.db-shm
+venv/
+.venv/
