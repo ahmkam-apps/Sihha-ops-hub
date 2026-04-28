@@ -877,12 +877,12 @@ async function renderDashboard() {
           <div class="stat-value">${s.volunteers_total}</div>
           <div class="stat-sub">${s.volunteers_active} active · ${s.volunteers_pending} pending</div>
         </div>
-        <div class="stat-card" onclick="nav('reimbursements')" style="cursor:pointer;">
+        <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Reimb. Pending</div>
           <div class="stat-value" style="color:${s.reimb_pending_count > 0 ? '#c0392b' : 'inherit'}">${fmtMoney(s.reimb_pending_amount)}</div>
           <div class="stat-sub">${s.reimb_pending_count} request${s.reimb_pending_count !== 1 ? 's' : ''}</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Paid This Month</div>
           <div class="stat-value">${fmtMoney(s.reimb_paid_month)}</div>
           <div class="stat-sub">${fmtMoney(s.reimb_paid_total)} all time</div>
@@ -892,7 +892,7 @@ async function renderDashboard() {
           <div class="stat-value" style="color:#1a8754">${fmtMoney(s.donations_month)}</div>
           <div class="stat-sub">This month · ${fmtMoney(s.donations_total)} total</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Spend This Month</div>
           <div class="stat-value">${fmtMoney(s.spend_this_month)}</div>
           <div class="stat-sub">${fmtMoney(s.spend_total)} all time</div>
