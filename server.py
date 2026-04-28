@@ -1353,6 +1353,14 @@ def list_families():
                   AND vs.claimed_by IS NOT NULL
                 ORDER BY vs.created_at DESC
                 LIMIT 1) AS last_delivery_volunteer,
+               (SELECT v.name
+                FROM volunteer_slots vs
+                JOIN volunteers v ON vs.claimed_by = v.id
+                WHERE vs.family_id = f.id
+                  AND vs.task_type = 'shopping'
+                  AND vs.claimed_by IS NOT NULL
+                ORDER BY vs.created_at DESC
+                LIMIT 1) AS last_shopping_volunteer,
                (SELECT dc.delivery_date_start
                 FROM volunteer_slots vs
                 JOIN delivery_cycles dc ON vs.cycle_id = dc.id

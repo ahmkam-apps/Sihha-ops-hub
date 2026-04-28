@@ -1372,7 +1372,7 @@ async function renderFamilies(filter, search) {
         <table>
           <thead><tr>
             <th>ID</th><th>Name</th><th>Phone</th><th>City</th>
-            <th>Size</th><th>Status</th><th>Last Delivered By</th><th>Added</th><th></th>
+            <th>Size</th><th>Status</th><th>Delivered By</th><th>Shopped By</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -1387,6 +1387,9 @@ async function renderFamilies(filter, search) {
                   ${r.last_delivery_volunteer||'—'}
                   ${r.last_delivery_date?`<div style="font-size:10px;color:var(--gray-4);font-weight:400">${fmtDateShort(r.last_delivery_date)}</div>`:''}
                 </td>
+                <td style="font-size:12px;color:${r.last_shopping_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_shopping_volunteer?'600':'400'}">
+                  ${r.last_shopping_volunteer||'—'}
+                </td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   ${r.status==='pending' ? `
@@ -1397,7 +1400,7 @@ async function renderFamilies(filter, search) {
                   `}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="9">No families found</td></tr>'}
+              '<tr class="empty-row"><td colspan="10">No families found</td></tr>'}
           </tbody>
         </table>
       </div>`;
