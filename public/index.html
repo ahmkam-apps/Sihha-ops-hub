@@ -1020,7 +1020,8 @@ async function renderDashboard() {
 
     const avgNewDonorsPerMonth = s.proj_avg_donors_per_month || 0;
     const avgDonationPerDonor  = s.proj_avg_gift             || 0;
-    const monthlyRecurGrowth   = s.proj_monthly_growth       || 0;
+    const avgMonthly           = s.proj_avg_monthly          || 0;
+    const monthlyTrend         = s.proj_monthly_trend        || 0; // $ change per month
     const currentRecurBase     = lastTotal;
 
     document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsHTML;
@@ -1092,7 +1093,9 @@ async function renderDashboard() {
       const lineHistTotals = activeDm.map(m => m.total || 0);
       const lineLastTotal  = lineHistTotals.length ? lineHistTotals[lineHistTotals.length - 1] : 0;
 
-      // Build 6-month projection from last real data point
+      // Projection: last actual total + observed monthly trend × months ahead
+      // Monthly trend = avg month-over-month $ change from last 3 months
+      // This follows actual momentum rather than compounding donor counts
       const projLabels = [];
       const projVals   = [];
       if (activeDm.length) {
@@ -1100,7 +1103,9 @@ async function renderDashboard() {
         for (let i = 1; i <= 6; i++) {
           const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
           projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
-          projVals.push(Math.round(lineLastTotal + monthlyRecurGrowth * i));
+          // Floor at 0, cap projection growth to be reasonable
+          const projected = Math.max(0, Math.round(lineLastTotal + monthlyTrend * i));
+          projVals.push(projected);
         }
       }
 
@@ -1201,8 +1206,9 @@ async function renderDashboard() {
     // ── Projection calculator ────────────────────────────────────────────────
     window._dashDonationsCurrent  = s.donations_month || 0;
     window._dashAvgDonorGift      = Math.round(avgDonationPerDonor);
-    window._dashAvgNewDonors      = Math.round(avgNewDonorsPerMonth * 10) / 10;
-    window._dashMonthlyRecurGrowth = monthlyRecurGrowth;
+    window._dashAvgNewDonors      = avgNewDonorsPerMonth;
+    window._dashMonthlyTrend      = monthlyTrend;
+    window._dashAvgMonthly        = Math.round(avgMonthly);
     updateDashProjection();
 
   } catch(e) {
@@ -1239,10 +1245,11 @@ function updateDashProjection() {
   const families = parseInt(document.getElementById('proj-fam')?.value  || 5);
   const cost     = parseInt(document.getElementById('proj-cost')?.value || 100);
   const cycles   = parseInt(document.getElementById('proj-cyc')?.value  || 2);
-  const current  = window._dashDonationsCurrent   || 0;
-  const avgGift  = window._dashAvgDonorGift        || 0;
-  const avgNew   = window._dashAvgNewDonors        || 0;
-  const recurGrowth = window._dashMonthlyRecurGrowth || 0;
+  const current      = window._dashDonationsCurrent || 0;
+  const avgGift      = window._dashAvgDonorGift     || 0;
+  const avgNew       = window._dashAvgNewDonors     || 0;
+  const monthlyTrend = window._dashMonthlyTrend     || 0;
+  const avgMonthly   = window._dashAvgMonthly       || 0;
 
   const fv = document.getElementById('proj-fam-val');
   const cv = document.getElementById('proj-cost-val');
@@ -1254,8 +1261,11 @@ function updateDashProjection() {
   // Show projection basis
   const basisEl = document.getElementById('proj-basis-label');
   if (basisEl) {
+    const trendStr = monthlyTrend >= 0
+      ? `+${fmtMoney(monthlyTrend)}/mo trend`
+      : `${fmtMoney(monthlyTrend)}/mo trend`;
     basisEl.textContent = avgNew > 0
-      ? `Based on 3-mo avg: ${avgNew} donor${avgNew !== 1 ? 's' : ''}/mo · ${fmtMoney(avgGift)} avg gift`
+      ? `3-mo avg: ${avgNew} donors · ${fmtMoney(avgGift)} avg gift · ${trendStr}`
       : 'Based on last 3 months of donations';
   }
 
@@ -1264,15 +1274,15 @@ function updateDashProjection() {
   const gap         = Math.max(0, monthlyNeed - current);
   const coverPct    = Math.min(100, Math.round(current / monthlyNeed * 100));
 
-  // Months to close gap at current recurring growth rate
+  // Months to close gap at current trend rate
   let monthsToClose = '—';
-  if (gap > 0 && recurGrowth > 0) {
-    monthsToClose = Math.ceil(gap / recurGrowth) + ' mo';
-  } else if (gap === 0) {
+  if (gap === 0) {
     monthsToClose = 'Now';
+  } else if (monthlyTrend > 0) {
+    monthsToClose = Math.ceil(gap / monthlyTrend) + ' mo';
   }
 
-  // New recurring donors needed to close gap (at avg gift amount)
+  // New donors needed to close gap at avg gift
   const donorsNeeded = (gap > 0 && avgGift > 0) ? Math.ceil(gap / avgGift) : 0;
 
   const gapClass   = gap === 0 ? '#f0faf5' : coverPct >= 60 ? '#fffbec' : '#fff5f5';

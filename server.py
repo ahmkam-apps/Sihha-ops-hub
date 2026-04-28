@@ -1199,27 +1199,40 @@ def dashboard_stats():
     """).fetchall()
     stats['donations_by_month'] = [dict(r) for r in monthly_rows]
 
-    # Projection stats: avg new donors/month and avg gift over last 3 months
+    # Projection stats: last 3 months run rate + trend slope
     proj_rows = db.execute("""
         SELECT substr(date,1,7)           AS month,
                COUNT(DISTINCT donor_name) AS donors,
-               COALESCE(SUM(amount),0)    AS total,
-               COALESCE(AVG(amount),0)    AS avg_gift
+               COALESCE(SUM(amount),0)    AS total
         FROM donations
         WHERE date >= date('now','-3 months')
+          AND amount > 0
         GROUP BY month
         ORDER BY month ASC
     """).fetchall()
     proj_rows = [dict(r) for r in proj_rows]
+
     if proj_rows:
-        avg_donors_3mo = sum(r['donors'] for r in proj_rows) / len(proj_rows)
-        avg_gift_3mo   = sum(r['total']  for r in proj_rows) / sum(r['donors'] for r in proj_rows) if sum(r['donors'] for r in proj_rows) > 0 else 0
+        totals         = [r['total']  for r in proj_rows]
+        donor_counts   = [r['donors'] for r in proj_rows]
+        avg_monthly    = sum(totals) / len(totals)
+        total_donors   = sum(donor_counts)
+        total_revenue  = sum(totals)
+        avg_gift_3mo   = round(total_revenue / total_donors, 2) if total_donors else 0
+        avg_donors_3mo = round(sum(donor_counts) / len(donor_counts), 1)
+        # Monthly trend: average change month-over-month (positive = growing)
+        deltas = [totals[i] - totals[i-1] for i in range(1, len(totals))]
+        monthly_trend  = round(sum(deltas) / len(deltas), 2) if deltas else 0
     else:
-        avg_donors_3mo = 0
+        avg_monthly    = 0
         avg_gift_3mo   = 0
-    stats['proj_avg_donors_per_month'] = round(avg_donors_3mo, 1)
-    stats['proj_avg_gift']             = round(avg_gift_3mo, 2)
-    stats['proj_monthly_growth']       = round(avg_donors_3mo * avg_gift_3mo, 2)
+        avg_donors_3mo = 0
+        monthly_trend  = 0
+
+    stats['proj_avg_donors_per_month'] = avg_donors_3mo
+    stats['proj_avg_gift']             = avg_gift_3mo
+    stats['proj_avg_monthly']          = round(avg_monthly, 2)
+    stats['proj_monthly_trend']        = monthly_trend  # $ change per month
 
     # Active cycle stats
     active_cycle = db.execute(
