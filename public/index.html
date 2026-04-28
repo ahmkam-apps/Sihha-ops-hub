@@ -935,21 +935,47 @@ async function renderDashboard() {
       <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:16px 20px;margin-top:4px;">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:14px;">Donations & Projections</div>
         ${kpiRow}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
-          <div>
-            <div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:.6px;">Monthly trend</div>
-            <div style="position:relative;height:200px;">
-              <canvas id="dash-don-chart"></canvas>
-            </div>
-            <div style="display:flex;gap:14px;margin-top:8px;flex-wrap:wrap;">
-              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#1a8754;"></span>Recurring</span>
-              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#b2dfdb;"></span>One-time</span>
-              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal</span>
-              <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#2e86c1;border-top:2px dashed #2e86c1;background:none;"></span>Projected</span>
-            </div>
+
+        <!-- Chart tabs -->
+        <div style="display:flex;gap:0;border-bottom:1.5px solid #e8e8e8;margin-bottom:16px;">
+          <button id="dtab-bar" onclick="switchDonTab('bar')"
+            style="padding:7px 18px;font-size:12px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2.5px solid #1a3a2a;color:#1a3a2a;margin-bottom:-1.5px;">
+            Monthly breakdown
+          </button>
+          <button id="dtab-line" onclick="switchDonTab('line')"
+            style="padding:7px 18px;font-size:12px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2.5px solid transparent;color:#888;margin-bottom:-1.5px;">
+            Trend & projection
+          </button>
+        </div>
+
+        <!-- Bar chart tab -->
+        <div id="dpane-bar">
+          <div style="position:relative;height:260px;">
+            <canvas id="dash-bar-chart"></canvas>
           </div>
-          <div>
-            <div style="font-size:11px;color:#888;margin-bottom:12px;text-transform:uppercase;letter-spacing:.6px;">Projection calculator</div>
+          <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#1a8754;"></span>Recurring</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#b2dfdb;"></span>One-time</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal ($1,000)</span>
+          </div>
+        </div>
+
+        <!-- Line chart tab -->
+        <div id="dpane-line" style="display:none;">
+          <div style="position:relative;height:260px;">
+            <canvas id="dash-line-chart"></canvas>
+          </div>
+          <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#1a8754;"></span>Actual</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;border-top:2px dashed #2e86c1;"></span>Projected</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal ($1,000)</span>
+          </div>
+        </div>
+
+        <!-- Projection calculator (always visible below charts) -->
+        <div style="margin-top:20px;padding-top:16px;border-top:1.5px solid #f0f0f0;">
+          <div style="font-size:11px;color:#888;margin-bottom:12px;text-transform:uppercase;letter-spacing:.6px;">Projection calculator</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
             <div style="display:flex;flex-direction:column;gap:12px;">
               <div>
                 <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
@@ -957,8 +983,7 @@ async function renderDashboard() {
                   <span style="font-size:13px;font-weight:700;color:#111;" id="proj-fam-val">5</span>
                 </div>
                 <input type="range" min="1" max="30" value="5" step="1" id="proj-fam"
-                  style="width:100%;accent-color:#1a3a2a;"
-                  oninput="updateDashProjection()">
+                  style="width:100%;accent-color:#1a3a2a;" oninput="updateDashProjection()">
               </div>
               <div>
                 <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
@@ -966,8 +991,7 @@ async function renderDashboard() {
                   <span style="font-size:13px;font-weight:700;color:#111;" id="proj-cost-val">$100</span>
                 </div>
                 <input type="range" min="25" max="300" value="100" step="25" id="proj-cost"
-                  style="width:100%;accent-color:#1a3a2a;"
-                  oninput="updateDashProjection()">
+                  style="width:100%;accent-color:#1a3a2a;" oninput="updateDashProjection()">
               </div>
               <div>
                 <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
@@ -975,114 +999,129 @@ async function renderDashboard() {
                   <span style="font-size:13px;font-weight:700;color:#111;" id="proj-cyc-val">2</span>
                 </div>
                 <input type="range" min="1" max="4" value="2" step="1" id="proj-cyc"
-                  style="width:100%;accent-color:#1a3a2a;"
-                  oninput="updateDashProjection()">
+                  style="width:100%;accent-color:#1a3a2a;" oninput="updateDashProjection()">
               </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="proj-results"></div>
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="proj-results"></div>
           </div>
         </div>
       </div>`;
 
     document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsHTML;
 
-    // ── Draw Chart.js donation chart ─────────────────────────────────────────
+    // ── Draw charts ──────────────────────────────────────────────────────────
     if (typeof Chart !== 'undefined') {
-      const canvas = document.getElementById('dash-don-chart');
-      if (canvas) {
-        const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches;
-        const gridCol = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)';
-        const tickCol = isDark ? '#999' : '#888';
+      const isDark  = window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches;
+      const gridCol = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)';
+      const tickCol = isDark ? '#999' : '#888';
 
-        const histLabels   = dm.map(m => mLabel(m.month));
-        const histRecur    = dm.map(m => m.recurring || 0);
-        const histOneTime  = dm.map(m => m.one_time   || 0);
+      const histLabels  = dm.map(m => mLabel(m.month));
+      const histRecur   = dm.map(m => m.recurring || 0);
+      const histOneTime = dm.map(m => m.one_time   || 0);
+      const histTotals  = dm.map(m => m.total      || 0);
+      const lastTotal   = histTotals.length ? histTotals[histTotals.length - 1] : 0;
+      const maxY        = Math.max(DONATION_GOAL * 1.25, ...histTotals);
+      const yMax        = Math.ceil(maxY / 200) * 200;
 
-        // Build a simple linear projection for next 6 months
-        const lastTotal = dm.length ? (dm[dm.length-1].total || 0) : 0;
-        const projLabels = [];
-        const projVals   = [];
-        if (dm.length) {
-          const lastDate = new Date(dm[dm.length-1].month + '-01');
-          const step = (DONATION_GOAL - lastTotal) / 6;
-          for (let i = 1; i <= 6; i++) {
-            const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
-            projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
-            projVals.push(Math.round(Math.min(DONATION_GOAL, lastTotal + step * i)));
-          }
+      const goalLinePlugin = {
+        id: 'goalLine',
+        afterDraw(chart) {
+          const {ctx, chartArea:{left,right}, scales:{y}} = chart;
+          const yPos = y.getPixelForValue(DONATION_GOAL);
+          ctx.save();
+          ctx.beginPath(); ctx.setLineDash([6,4]);
+          ctx.strokeStyle='#e0a800'; ctx.lineWidth=2;
+          ctx.moveTo(left,yPos); ctx.lineTo(right,yPos); ctx.stroke();
+          ctx.setLineDash([]);
+          const lbl = 'Goal ' + fmtMoney(DONATION_GOAL);
+          const lw  = ctx.measureText(lbl).width + 12;
+          ctx.fillStyle = isDark ? '#2a2200' : '#fffbec';
+          ctx.fillRect(right - lw, yPos - 10, lw, 18);
+          ctx.fillStyle = '#b8860b'; ctx.font = 'bold 10px sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText(lbl, right - 4, yPos + 4);
+          ctx.restore();
         }
+      };
 
-        const allLabels   = [...histLabels, ...projLabels];
-        const recurData   = [...histRecur,  ...Array(projLabels.length).fill(null)];
-        const oneTimeData = [...histOneTime,...Array(projLabels.length).fill(null)];
-        const projLineData= [...Array(histLabels.length).fill(null), ...projVals];
-        if (histLabels.length) projLineData[histLabels.length - 1] = lastTotal;
+      const yScaleOpts = {
+        min: 0, max: yMax,
+        grid: { color: gridCol },
+        border: { display: false },
+        ticks: { color: tickCol, font: { size: 11 }, stepSize: 200, callback: v => '$' + v.toLocaleString() }
+      };
 
-        const maxY = Math.max(DONATION_GOAL * 1.2, ...dm.map(m => m.total || 0));
-
-        if (window._dashDonChart) { window._dashDonChart.destroy(); }
-        window._dashDonChart = new Chart(canvas.getContext('2d'), {
+      // ── Bar chart (tab 1) ─────────────────────────────────────────────────
+      if (window._dashBarChart) { window._dashBarChart.destroy(); }
+      const barCanvas = document.getElementById('dash-bar-chart');
+      if (barCanvas) {
+        window._dashBarChart = new Chart(barCanvas.getContext('2d'), {
+          type: 'bar',
           data: {
-            labels: allLabels,
+            labels: histLabels,
+            datasets: [
+              { label:'Recurring', data:histRecur,   backgroundColor:'#1a8754', stack:'don', barThickness:28, borderRadius:{topLeft:3,topRight:3} },
+              { label:'One-time',  data:histOneTime, backgroundColor:'#b2dfdb', stack:'don', barThickness:28, borderRadius:{topLeft:3,topRight:3} }
+            ]
+          },
+          options: {
+            responsive:true, maintainAspectRatio:false,
+            interaction:{ mode:'index', intersect:false },
+            plugins:{ legend:{display:false}, tooltip:{ callbacks:{ footer: items => 'Total: '+fmtMoney(items.reduce((s,i)=>s+i.parsed.y,0)) } } },
+            scales:{ x:{ stacked:true, grid:{display:false}, ticks:{color:tickCol,font:{size:11}} }, y:{ stacked:true, ...yScaleOpts } }
+          },
+          plugins: [goalLinePlugin]
+        });
+      }
+
+      // ── Line chart (tab 2) ────────────────────────────────────────────────
+      const projLabels = [];
+      const projVals   = [];
+      if (dm.length) {
+        const lastDate = new Date(dm[dm.length-1].month + '-01');
+        const step = (DONATION_GOAL - lastTotal) / 6;
+        for (let i = 1; i <= 6; i++) {
+          const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
+          projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
+          projVals.push(Math.round(Math.min(DONATION_GOAL * 1.05, lastTotal + step * i)));
+        }
+      }
+      const lineLabels  = [...histLabels, ...projLabels];
+      const actualLine  = [...histTotals, ...Array(projLabels.length).fill(null)];
+      const projLine    = [...Array(histLabels.length).fill(null), ...projVals];
+      if (histLabels.length) projLine[histLabels.length - 1] = lastTotal;
+
+      if (window._dashLineChart) { window._dashLineChart.destroy(); }
+      const lineCanvas = document.getElementById('dash-line-chart');
+      if (lineCanvas) {
+        window._dashLineChart = new Chart(lineCanvas.getContext('2d'), {
+          type: 'line',
+          data: {
+            labels: lineLabels,
             datasets: [
               {
-                type: 'bar', label: 'Recurring',
-                data: recurData, backgroundColor: '#1a8754',
-                stack: 'don', barThickness: 22,
-                borderRadius: {topLeft:3,topRight:3}, order: 2,
+                label: 'Actual', data: actualLine,
+                borderColor: '#1a8754', borderWidth: 2.5,
+                backgroundColor: 'rgba(26,135,84,0.08)', fill: true,
+                pointBackgroundColor: '#1a8754', pointRadius: 4,
+                tension: 0.35,
               },
               {
-                type: 'bar', label: 'One-time',
-                data: oneTimeData, backgroundColor: '#b2dfdb',
-                stack: 'don', barThickness: 22,
-                borderRadius: {topLeft:3,topRight:3}, order: 2,
-              },
-              {
-                type: 'line', label: 'Projected',
-                data: projLineData,
+                label: 'Projected', data: projLine,
                 borderColor: '#2e86c1', borderDash: [5,4], borderWidth: 2,
                 pointBackgroundColor: '#2e86c1',
                 pointRadius: ctx => ctx.dataIndex >= histLabels.length ? 4 : 0,
-                tension: 0.35, fill: false, order: 1,
+                tension: 0.35, fill: false,
               }
             ]
           },
           options: {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode:'index', intersect:false },
-            plugins: {
-              legend: { display: false },
-              tooltip: { callbacks: { label: ctx => ctx.raw===null?null: ctx.dataset.label+': '+fmtMoney(ctx.raw) } }
-            },
-            scales: {
-              x: { grid:{display:false}, ticks:{color:tickCol,font:{size:11}} },
-              y: {
-                min: 0, max: Math.ceil(maxY/200)*200,
-                grid: { color: gridCol },
-                border: { display: false },
-                ticks: { color:tickCol, font:{size:11}, stepSize:200, callback: v => '$'+v.toLocaleString() }
-              }
-            }
+            plugins: { legend:{display:false}, tooltip:{ callbacks:{ label: ctx => ctx.raw===null?null: ctx.dataset.label+': '+fmtMoney(ctx.raw) } } },
+            scales: { x:{ grid:{display:false}, ticks:{color:tickCol,font:{size:11}} }, y:{ ...yScaleOpts } }
           },
-          plugins: [{
-            id: 'goalLine',
-            afterDraw(chart) {
-              const {ctx, chartArea:{left,right}, scales:{y}} = chart;
-              const yPos = y.getPixelForValue(DONATION_GOAL);
-              ctx.save();
-              ctx.beginPath(); ctx.setLineDash([6,4]);
-              ctx.strokeStyle='#e0a800'; ctx.lineWidth=2;
-              ctx.moveTo(left,yPos); ctx.lineTo(right,yPos); ctx.stroke();
-              ctx.setLineDash([]);
-              const lbl = 'Goal '+fmtMoney(DONATION_GOAL);
-              const w = ctx.measureText(lbl).width + 12;
-              ctx.fillStyle = isDark?'#2a2200':'#fffbec';
-              ctx.fillRect(right-w, yPos-10, w, 18);
-              ctx.fillStyle='#b8860b'; ctx.font='bold 10px sans-serif';
-              ctx.textAlign='right'; ctx.fillText(lbl, right-4, yPos+4);
-              ctx.restore();
-            }
-          }]
+          plugins: [goalLinePlugin]
         });
       }
     }
@@ -1093,6 +1132,31 @@ async function renderDashboard() {
 
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+function switchDonTab(tab) {
+  const bar  = document.getElementById('dpane-bar');
+  const line = document.getElementById('dpane-line');
+  const tbBar  = document.getElementById('dtab-bar');
+  const tbLine = document.getElementById('dtab-line');
+  if (!bar || !line) return;
+
+  const activeStyle   = 'padding:7px 18px;font-size:12px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2.5px solid #1a3a2a;color:#1a3a2a;margin-bottom:-1.5px;';
+  const inactiveStyle = 'padding:7px 18px;font-size:12px;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2.5px solid transparent;color:#888;margin-bottom:-1.5px;';
+
+  if (tab === 'bar') {
+    bar.style.display  = 'block';
+    line.style.display = 'none';
+    if (tbBar)  tbBar.style.cssText  = activeStyle;
+    if (tbLine) tbLine.style.cssText = inactiveStyle;
+    if (window._dashBarChart)  window._dashBarChart.resize();
+  } else {
+    bar.style.display  = 'none';
+    line.style.display = 'block';
+    if (tbBar)  tbBar.style.cssText  = inactiveStyle;
+    if (tbLine) tbLine.style.cssText = activeStyle;
+    if (window._dashLineChart) window._dashLineChart.resize();
   }
 }
 
