@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sihha — Donation Stats</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   @font-face {
     font-family: 'AreaExtrabold';
@@ -29,11 +30,9 @@
   .widget { max-width: 560px; }
 
   /* ── Total raised ── */
-  .total-block {
-    margin-bottom: 28px;
-  }
+  .total-block { margin-bottom: 28px; }
   .total-label {
-    font-size: 12px;
+    font-size: 11px;
     color: #888;
     text-transform: uppercase;
     letter-spacing: 1.5px;
@@ -45,59 +44,40 @@
     font-weight: 800;
     letter-spacing: -0.04em;
     line-height: 1;
-    color: #111;
   }
 
   /* ── Progress bar ── */
-  .progress-block {
-    margin-bottom: 28px;
-  }
+  .progress-block { margin-bottom: 28px; }
   .progress-row {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     margin-bottom: 8px;
   }
-  .progress-raised {
-    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
-    font-size: 15px;
-    color: #111;
-  }
-  .progress-goal {
-    font-size: 14px;
-    color: #888;
-  }
-  .progress-track {
-    width: 100%;
-    height: 8px;
-    background: #e0e0e0;
-  }
-  .progress-fill {
-    height: 100%;
-    background: #111;
-    transition: width 1s ease;
-    max-width: 100%;
-  }
+  .progress-raised { font-size: 15px; color: #111; }
+  .progress-goal   { font-size: 13px; color: #888; }
+  .progress-track  { width: 100%; height: 8px; background: #e0e0e0; }
+  .progress-fill   { height: 100%; background: #111; transition: width 1s ease; max-width: 100%; }
 
-  /* ── Two-stat row ── */
-  .stat-row {
+  /* ── Stat grid ── */
+  .stat-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1px;
     background: #e8e8e8;
-    margin-bottom: 1px;
+    margin-bottom: 24px;
   }
   .stat-cell {
     background: #f6f6f6;
-    padding: 18px 16px;
+    padding: 16px;
   }
+  .stat-cell.dark { background: #111; color: #fff; }
   .stat-num {
     font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
-    font-size: 26px;
+    font-size: 24px;
     font-weight: 800;
     letter-spacing: -0.03em;
     line-height: 1;
-    color: #111;
   }
   .stat-lbl {
     font-size: 10px;
@@ -106,55 +86,50 @@
     color: #888;
     margin-top: 4px;
   }
+  .stat-cell.dark .stat-lbl { color: #aaa; }
 
-  /* ── CTA strip ── */
-  .cta-strip {
-    background: #111;
-    color: #fff;
-    padding: 18px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 0;
-  }
-  .cta-message {
-    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
-    font-size: 15px;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    line-height: 1.2;
-  }
-  .cta-message span {
-    font-size: 22px;
-    display: block;
-    letter-spacing: -0.03em;
-  }
-  .cta-btn {
-    flex-shrink: 0;
-    background: #fff;
-    color: #111;
-    text-decoration: none;
-    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
-    font-size: 12px;
-    letter-spacing: 1px;
+  /* ── Chart ── */
+  .chart-block { margin-bottom: 0; }
+  .chart-label {
+    font-size: 11px;
+    color: #888;
     text-transform: uppercase;
-    padding: 10px 20px;
-    white-space: nowrap;
+    letter-spacing: 1.5px;
+    margin-bottom: 10px;
   }
-  .cta-btn:hover { background: #e8e8e8; }
+  .chart-legend {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 10px;
+  }
+  .chart-legend span { display: flex; align-items: center; gap: 6px; }
+  .leg-line {
+    display: inline-block;
+    width: 16px;
+    height: 2px;
+    background: #111;
+  }
+  .leg-dash {
+    display: inline-block;
+    width: 16px;
+    height: 0;
+    border-top: 2px dashed #999;
+  }
+  .chart-wrap { position: relative; height: 200px; }
 </style>
 </head>
 <body>
 <div class="widget">
 
-  <!-- Total raised all-time -->
+  <!-- Total raised -->
   <div class="total-block">
-    <div class="total-label">Total raised</div>
+    <div class="total-label">Total raised all-time</div>
     <div class="total-amount" id="total-raised">—</div>
   </div>
 
-  <!-- This month progress -->
+  <!-- Monthly progress bar -->
   <div class="progress-block">
     <div class="progress-row">
       <span class="progress-raised" id="month-raised">—</span>
@@ -165,8 +140,8 @@
     </div>
   </div>
 
-  <!-- Donors this month + avg gift -->
-  <div class="stat-row">
+  <!-- Stats: donors / avg gift / gap / donors needed -->
+  <div class="stat-grid">
     <div class="stat-cell">
       <div class="stat-num" id="donors-month">—</div>
       <div class="stat-lbl">Donors this month</div>
@@ -175,13 +150,25 @@
       <div class="stat-num" id="avg-gift">—</div>
       <div class="stat-lbl">Average gift</div>
     </div>
+    <div class="stat-cell">
+      <div class="stat-num" id="monthly-gap">—</div>
+      <div class="stat-lbl">Monthly gap</div>
+    </div>
+    <div class="stat-cell dark">
+      <div class="stat-num" id="donors-needed">—</div>
+      <div class="stat-lbl">Donors needed</div>
+    </div>
   </div>
 
-  <!-- X donors needed CTA -->
-  <div class="cta-strip">
-    <div class="cta-message">
-      <span id="donors-needed">—</span>
-      more donors needed to hit this month's goal
+  <!-- Projection chart -->
+  <div class="chart-block">
+    <div class="chart-label">Monthly donations &amp; projection</div>
+    <div class="chart-legend">
+      <span><i class="leg-line"></i> Actual</span>
+      <span><i class="leg-dash"></i> Projected</span>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="don-chart"></canvas>
     </div>
   </div>
 
@@ -191,42 +178,137 @@
   const API  = 'https://sihha-ops-hub-production.up.railway.app/api/donate-stats';
   const GOAL = 1000;
 
-  const fmt = n => '$' + parseFloat(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmt      = n => '$' + Math.round(n).toLocaleString();
+  const fmtShort = n => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : '$' + Math.round(n);
+  const monthLbl = m => new Date(m + '-15').toLocaleString('default', { month: 'short' });
 
   async function load() {
     try {
       const r = await fetch(API);
       const d = await r.json();
 
-      // Total raised all-time
+      // Total raised
       document.getElementById('total-raised').textContent = fmt(d.total_raised || 0);
 
-      // This month progress
+      // Monthly progress
       const monthRaised = d.month_raised || 0;
       const pct = Math.min(100, (monthRaised / GOAL) * 100);
       document.getElementById('month-raised').textContent = fmt(monthRaised) + ' raised this month';
       document.getElementById('prog-fill').style.width = pct + '%';
 
-      // Donors this month + avg gift
-      const dm = (d.donations_by_month || []);
+      // Donors this month
+      const dm = d.donations_by_month || [];
       const thisMonth = new Date().toISOString().slice(0, 7);
       const currentMonth = dm.find(m => m.month === thisMonth);
-      const donorsThisMonth = currentMonth ? currentMonth.donors : 0;
-      document.getElementById('donors-month').textContent = donorsThisMonth;
+      document.getElementById('donors-month').textContent = currentMonth ? currentMonth.donors : 0;
+
+      // Avg gift
       document.getElementById('avg-gift').textContent = d.proj_avg_gift ? fmt(d.proj_avg_gift) : '—';
 
-      // Donors needed to hit goal
+      // Monthly gap
       const gap = Math.max(0, GOAL - monthRaised);
+      document.getElementById('monthly-gap').textContent = fmt(gap);
+
+      // Donors needed
       const avgGift = d.proj_avg_gift || 0;
-      const needed = avgGift > 0 ? Math.ceil(gap / avgGift) : '—';
-      const ctaEl = document.getElementById('donors-needed');
-      if (gap <= 0) {
-        ctaEl.textContent = '🎉 Goal reached!';
-        ctaEl.closest('.cta-strip').querySelector('.cta-message').innerHTML =
-          '<span>Goal reached!</span>Thank you — keep the momentum going';
-      } else {
-        ctaEl.textContent = needed;
+      const needed  = avgGift > 0 ? Math.ceil(gap / avgGift) : '—';
+      document.getElementById('donors-needed').textContent = gap <= 0 ? '✓ Done' : needed;
+
+      // Chart
+      const active = dm.filter(m => m.total > 0);
+      if (!active.length) return;
+
+      const lastTotal      = active[active.length - 1].total;
+      const monthlyTrend   = d.proj_monthly_trend || 0;
+      const histLabels     = active.map(m => monthLbl(m.month));
+      const projN          = 3;
+      const projLabels     = Array.from({ length: projN }, (_, i) => {
+        const base = new Date(active[active.length - 1].month + '-15');
+        base.setMonth(base.getMonth() + i + 1);
+        return base.toLocaleString('default', { month: 'short' });
+      });
+
+      const actualFull = [...active.map(m => m.total), ...Array(projN).fill(null)];
+      const projData   = Array(histLabels.length).fill(null);
+      projData[histLabels.length - 1] = lastTotal;
+      for (let i = 0; i < projN; i++) {
+        projData.push(Math.max(0, Math.round(lastTotal + monthlyTrend * (i + 1))));
       }
+
+      const goalPlugin = {
+        id: 'goalLine',
+        afterDraw({ ctx, chartArea: { left, right, top, bottom }, scales: { y } }) {
+          const yPos = y.getPixelForValue(GOAL);
+          if (yPos < top || yPos > bottom) return;
+          ctx.save();
+          ctx.strokeStyle = '#bbb';
+          ctx.lineWidth   = 1;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath(); ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+          ctx.fillStyle = '#999';
+          ctx.font      = '10px Helvetica';
+          ctx.textAlign = 'right';
+          ctx.fillText('$1k goal', right - 4, yPos - 4);
+          ctx.restore();
+        }
+      };
+
+      new Chart(document.getElementById('don-chart'), {
+        type: 'line',
+        plugins: [goalPlugin],
+        data: {
+          labels: [...histLabels, ...projLabels],
+          datasets: [
+            {
+              label: 'Actual',
+              data: actualFull,
+              borderColor: '#111',
+              backgroundColor: 'rgba(17,17,17,0.05)',
+              borderWidth: 2,
+              pointRadius: 3,
+              pointBackgroundColor: '#111',
+              tension: 0.3,
+              fill: true,
+              spanGaps: false,
+            },
+            {
+              label: 'Projected',
+              data: projData,
+              borderColor: '#999',
+              borderWidth: 1.5,
+              borderDash: [5, 4],
+              pointRadius: 2,
+              pointBackgroundColor: '#999',
+              tension: 0.3,
+              fill: false,
+              spanGaps: false,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#111',
+              titleColor: '#fff',
+              bodyColor: '#ccc',
+              callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + fmt(ctx.parsed.y) }
+            }
+          },
+          scales: {
+            x: { grid: { color: '#f0f0f0' }, ticks: { font: { size: 11 }, color: '#888' } },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f0f0f0' },
+              ticks: { font: { size: 11 }, color: '#888', callback: v => fmtShort(v) }
+            }
+          }
+        }
+      });
+
     } catch(e) {
       console.error('Failed to load donation stats', e);
     }
