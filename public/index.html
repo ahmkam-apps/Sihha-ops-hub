@@ -1529,11 +1529,52 @@ async function saveFamily() {
   } catch(e) { showErr(e.message); }
 }
 
+function slotBox(slot, label, vols, familyId) {
+  if (!slot) {
+    return `<div style="background:var(--gray-1);padding:8px 10px;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">${label}</div>
+      <div style="color:var(--gray-3);font-size:12px;">—</div>
+    </div>`;
+  }
+  if (slot.volunteer_name) {
+    return `<div style="background:var(--gray-1);padding:8px 10px;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:2px;">${label}</div>
+      <div style="font-weight:600;color:var(--black);">${slot.volunteer_name}</div>
+    </div>`;
+  }
+  // Unclaimed — show assign dropdown
+  const opts = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+  return `<div style="background:#fffbe6;border:1px solid #f0c040;padding:8px 10px;">
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${label} <span style="color:#c08000;">· Unassigned</span></div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="sel-${slot.id}" style="flex:1;font-size:12px;border:1px solid var(--gray-3);padding:4px 6px;background:#fff;">
+        <option value="">— Assign —</option>
+        ${opts}
+      </select>
+      <button class="btn btn-sm" style="font-size:11px;padding:4px 10px;"
+        onclick="assignSlot('${slot.id}','${familyId}')">Save</button>
+    </div>
+  </div>`;
+}
+
+async function assignSlot(slotId, familyId) {
+  const sel = document.getElementById('sel-' + slotId);
+  const volunteerId = sel?.value;
+  if (!volunteerId) return;
+  try {
+    await PUT('/volunteer-slots/' + slotId, { claimed_by: volunteerId });
+    viewFamily(familyId); // refresh
+  } catch(e) {
+    alert('Failed to assign: ' + e.message);
+  }
+}
+
 async function viewFamily(id) {
   try {
-    const [r, hist] = await Promise.all([
+    const [r, hist, vols] = await Promise.all([
       GET('/families/' + id),
-      GET('/families/' + id + '/history')
+      GET('/families/' + id + '/history'),
+      GET('/volunteers?status=active')
     ]);
 
     const orders = hist.orders || [];
@@ -1594,11 +1635,13 @@ async function viewFamily(id) {
                   <div style="font-size:13px;font-weight:700;">${o.cycle_title}</div>
                   <div style="font-size:12px;font-weight:600;color:${statusColor};">${statusText}</div>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;color:var(--gray-5);">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;color:var(--gray-5);margin-bottom:8px;">
                   <div><span style="color:var(--gray-4);">Bundle:</span> ${o.bundle_size||'—'}</div>
                   <div><span style="color:var(--gray-4);">Items:</span> ${o.selected_items?.length||0}</div>
-                  <div><span style="color:var(--gray-4);">Shopper:</span> ${shopper?.volunteer_name || (shopper ? 'Unclaimed' : '—')}</div>
-                  <div><span style="color:var(--gray-4);">Driver:</span> ${delivery?.volunteer_name || (delivery ? 'Unclaimed' : '—')}</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">
+                  ${slotBox(shopper, 'Shopper', vols, id)}
+                  ${slotBox(delivery, 'Delivered By', vols, id)}
                 </div>
                 ${o.selected_items?.length ? `
                 <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:5px;">

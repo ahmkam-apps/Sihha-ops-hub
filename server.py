@@ -3520,13 +3520,30 @@ def update_volunteer_slot(sid):
     if not slot:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+
+    # Support assigning / unassigning a volunteer
+    claimed_by = d.get('claimed_by', slot['claimed_by'])
+    # If a volunteer is being assigned, auto-set status to claimed
+    if 'claimed_by' in d:
+        default_status = 'claimed' if d['claimed_by'] else 'open'
+    else:
+        default_status = slot['status']
+
     db.execute(
-        "UPDATE volunteer_slots SET status=?, notes=?, task_date=?, updated_at=? WHERE id=?",
-        (d.get('status', slot['status']), d.get('notes', slot['notes']),
-         d.get('task_date', slot['task_date']), now(), sid)
+        """UPDATE volunteer_slots
+           SET status=?, notes=?, task_date=?, claimed_by=?, updated_at=?
+           WHERE id=?""",
+        (d.get('status', default_status), d.get('notes', slot['notes']),
+         d.get('task_date', slot['task_date']), claimed_by, now(), sid)
     )
     db.commit()
-    return jsonify(dict(db.execute("SELECT * FROM volunteer_slots WHERE id=?", (sid,)).fetchone()))
+    row = db.execute(
+        """SELECT vs.*, v.name as volunteer_name
+           FROM volunteer_slots vs
+           LEFT JOIN volunteers v ON vs.claimed_by = v.id
+           WHERE vs.id=?""", (sid,)
+    ).fetchone()
+    return jsonify(dict(row))
 
 # ── WhatsApp Reminders ────────────────────────────────────────────────────────
 
