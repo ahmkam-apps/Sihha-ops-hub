@@ -2781,7 +2781,7 @@ def public_intake():
         (fid, data['name'], data['phone'], data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
-         'active', 'intake_form', family_code, now())
+         'pending', 'intake_form', family_code, now())
     )
     db.commit()
     log.info(f'New intake: {data["name"]} ({data["phone"]})')
@@ -3740,6 +3740,7 @@ def portal_get_families(cycle_id):
            FROM food_requests fr
            JOIN families f ON fr.family_id = f.id
            WHERE fr.cycle_id=? AND f.status='active'
+             AND fr.status IN ('confirmed','auto_confirmed')
            ORDER BY f.name''',
         (cycle_id,)
     ).fetchall()

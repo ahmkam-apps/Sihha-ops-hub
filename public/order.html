@@ -3,14 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SIHAA — Food Request</title>
-  <link rel="manifest" href="/manifest-family.json">
+  <title>SIHAA — Food Assistance</title>
   <meta name="theme-color" content="#111111">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="SIHAA">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <style>
     @font-face {
       font-family: 'AreaExtrabold';
@@ -22,11 +16,10 @@
       src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
       font-weight: 400; font-style: normal;
     }
-
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --black: #111111;
       --white: #ffffff;
-      --green: #1a3a2a;
       --gray-1: #f6f6f6;
       --gray-2: #e8e8e8;
       --gray-3: #cccccc;
@@ -35,723 +28,123 @@
       --font-body: 'AreaNormal', Helvetica, Arial, sans-serif;
       --font-head: 'AreaExtrabold', Helvetica, Arial, sans-serif;
     }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       font-family: var(--font-body);
       background: var(--white);
       color: var(--black);
-      min-height: 100vh;
       font-size: 15px;
       line-height: 1.6;
+      min-height: 100vh;
     }
-
-    /* ── Header ── */
-    .header {
-      background: var(--black);
-      color: var(--white);
-      padding: 20px 24px;
-      text-align: center;
-      border-bottom: none;
-    }
-    .header h1 {
-      font-family: var(--font-head);
-      font-size: 22px;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-    }
-    .header p { font-size: 13px; opacity: 0.6; margin-top: 4px; letter-spacing: 0.04em; }
-
-    /* ── Card ── */
-    .card {
-      background: var(--white);
-      border: 1px solid var(--gray-2);
-      padding: 28px 24px;
-      max-width: 540px;
-      margin: 28px auto;
-    }
-
-    /* ── Phase headings ── */
-    .phase-title {
-      font-family: var(--font-head);
-      font-size: 20px;
-      font-weight: 800;
-      color: var(--black);
-      letter-spacing: -0.03em;
-      margin-bottom: 6px;
-    }
-    .phase-sub {
-      font-size: 14px;
-      color: var(--gray-4);
-      margin-bottom: 22px;
-      line-height: 1.5;
-    }
-
-    /* ── Input ── */
-    label {
-      display: block;
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--gray-5);
-      margin-bottom: 6px;
-    }
-    input[type="tel"] {
-      width: 100%;
-      padding: 12px 14px;
-      border: 1.5px solid var(--gray-2);
-      font-family: var(--font-body);
-      font-size: 16px;
-      background: var(--white);
-      outline: none;
-      -webkit-appearance: none;
-      transition: border-color 0.15s;
-    }
-    input[type="tel"]:focus { border-color: var(--black); }
-
-    /* ── Buttons ── */
-    .btn {
-      display: block;
-      width: 100%;
-      padding: 14px;
-      border: none;
-      font-family: var(--font-body);
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      cursor: pointer;
-      margin-top: 16px;
-      transition: background 0.15s, opacity 0.15s;
-    }
-    .btn-primary   { background: var(--black); color: var(--white); }
-    .btn-primary:hover   { background: #333; }
-    .btn-secondary { background: var(--gray-1); color: var(--black); border: 1px solid var(--gray-2); }
-    .btn-secondary:hover { background: var(--gray-2); }
-    .btn:disabled  { opacity: 0.4; cursor: not-allowed; }
-
-    /* ── Alert banners ── */
-    .alert {
-      padding: 12px 16px;
-      font-size: 13px;
-      margin-bottom: 18px;
-      line-height: 1.5;
-      border-left: 3px solid;
-    }
-    .alert-info    { background: #f0f6ff; color: #1a4a7a; border-color: #4a90d9; }
-    .alert-success { background: #f0faf4; color: #1a5e32; border-color: #2ecc71; }
-    .alert-warn    { background: #fffbf0; color: #7a5c00; border-color: #f5a623; }
-    .alert-error   { background: #fff0f0; color: #7a1a1a; border-color: #e74c3c; }
-
-    /* ── Greeting bar ── */
-    .greeting {
-      background: var(--gray-1);
-      border: 1px solid var(--gray-2);
-      padding: 14px 16px;
-      margin-bottom: 22px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .greeting-icon { font-size: 22px; }
-    .greeting-name {
-      font-family: var(--font-head);
-      font-weight: 800;
-      font-size: 16px;
-      color: var(--black);
-      letter-spacing: -0.02em;
-    }
-    .greeting-meta { font-size: 13px; color: var(--gray-4); margin-top: 2px; }
-
-    /* ── Cycle info ── */
-    .cycle-box {
-      border: 1px solid var(--gray-2);
-      padding: 14px 16px;
-      margin-bottom: 22px;
-      font-size: 14px;
-      background: var(--gray-1);
-    }
-    .cycle-box strong { font-family: var(--font-head); color: var(--black); letter-spacing: -0.02em; }
-    .cycle-row { display: flex; justify-content: space-between; margin-top: 6px; }
-    .cycle-row span { color: var(--gray-4); font-size: 13px; }
-    .cycle-row b { color: var(--black); }
-
-    /* ── Category & items ── */
-    .category-block { margin-bottom: 24px; }
-    .category-label {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--gray-4);
-      margin-bottom: 10px;
-      padding-bottom: 6px;
+    header {
       border-bottom: 1px solid var(--gray-2);
-    }
-
-    .item-row {
+      padding: 20px 32px;
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 11px 0;
-      border-bottom: 1px solid var(--gray-1);
-      cursor: pointer;
-    }
-    .item-row:last-child { border-bottom: none; }
-    .item-row:hover { background: var(--gray-1); margin: 0 -4px; padding-left: 4px; padding-right: 4px; }
-
-    .item-check {
-      width: 20px;
-      height: 20px;
-      border: 1.5px solid var(--gray-3);
-      background: var(--white);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      transition: all 0.12s;
-    }
-    .item-row.selected .item-check {
-      background: var(--black);
-      border-color: var(--black);
-    }
-    .item-row.selected .item-check::after {
-      content: '✓';
-      color: var(--white);
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .item-info { flex: 1; }
-    .item-name { font-size: 14px; font-weight: 500; color: var(--black); }
-    .item-unit { font-size: 12px; color: var(--gray-4); margin-top: 1px; }
-
-    /* ── Select all ── */
-    .select-all-row {
-      display: flex;
-      justify-content: flex-end;
-      margin-bottom: 8px;
-    }
-    .select-all-btn {
-      background: none;
-      border: none;
-      color: var(--black);
-      font-family: var(--font-body);
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      cursor: pointer;
-      text-decoration: underline;
-      padding: 0;
-    }
-
-    /* ── Summary bar ── */
-    .summary-bar {
-      background: var(--gray-1);
-      border: 1px solid var(--gray-2);
-      padding: 12px 16px;
-      margin: 20px 0;
-      font-size: 14px;
-      display: flex;
       justify-content: space-between;
-      align-items: center;
     }
-    .summary-bar span { color: var(--gray-5); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
-    .summary-bar .count {
+    .logo {
       font-family: var(--font-head);
-      font-weight: 800;
-      color: var(--black);
       font-size: 20px;
-      letter-spacing: -0.03em;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      text-decoration: none;
+      color: var(--black);
     }
-
-    /* ── Divider ── */
-    .divider { border: none; border-top: 1px solid var(--gray-2); margin: 20px 0; }
-
-    /* ── Spinner ── */
-    .spinner {
-      display: inline-block;
-      width: 16px; height: 16px;
-      border: 2px solid rgba(255,255,255,0.35);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.6s linear infinite;
-      vertical-align: middle;
-      margin-right: 6px;
+    .back-link {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--gray-4);
+      text-decoration: none;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Success screen ── */
-    .success-icon {
+    .back-link:hover { color: var(--black); }
+    .page {
+      max-width: 560px;
+      margin: 0 auto;
+      padding: 80px 24px;
       text-align: center;
-      font-size: 48px;
-      margin: 12px 0 16px;
     }
-    .success-msg {
-      text-align: center;
+    .icon { font-size: 48px; margin-bottom: 28px; }
+    .page-title {
       font-family: var(--font-head);
-      font-size: 24px;
+      font-size: 28px;
       font-weight: 800;
       letter-spacing: -0.04em;
-      color: var(--black);
-      margin-bottom: 8px;
+      margin-bottom: 16px;
     }
-    .success-sub {
-      text-align: center;
-      font-size: 14px;
-      color: var(--gray-4);
-      line-height: 1.6;
-    }
-    .success-detail {
-      margin-top: 20px;
-      background: var(--gray-1);
-      border: 1px solid var(--gray-2);
-      padding: 16px;
-      font-size: 14px;
+    .page-text {
+      font-size: 15px;
       color: var(--gray-5);
       line-height: 1.7;
+      margin-bottom: 14px;
     }
-
-    /* ── Register link ── */
-    .register-link {
-      text-align: center;
-      margin-top: 20px;
+    .step-list {
+      text-align: left;
+      background: var(--gray-1);
+      border: 1px solid var(--gray-2);
+      padding: 24px 28px;
+      margin: 32px 0;
       font-size: 14px;
-      color: var(--gray-4);
+      line-height: 1.8;
+      color: var(--gray-5);
     }
-    .register-link a { color: var(--black); font-weight: 700; text-decoration: none; }
-    .register-link a:hover { text-decoration: underline; }
-
-    /* ── Footer ── */
-    .footer {
-      text-align: center;
-      padding: 32px 24px;
-      font-size: 12px;
-      color: var(--gray-3);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    /* ── Sticky submit bar (mobile) ── */
-    .sticky-submit {
-      display: none;
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
+    .step-list li { margin-bottom: 8px; }
+    .step-list li:last-child { margin-bottom: 0; }
+    .step-list strong { color: var(--black); }
+    .cta-link {
+      display: inline-block;
       background: var(--black);
       color: var(--white);
-      padding: 12px 20px;
-      align-items: center;
-      justify-content: space-between;
-      z-index: 200;
-      gap: 16px;
+      padding: 14px 32px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-decoration: none;
+      margin-top: 8px;
     }
-    .sticky-submit.visible { display: flex; }
-    .sticky-count {
-      font-family: var(--font-head);
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      white-space: nowrap;
-    }
-    .sticky-count span { font-size: 12px; font-weight: 400; opacity: 0.65; margin-left: 4px; }
-    .sticky-btn {
-      background: var(--white);
+    .cta-link:hover { background: #333; }
+    .secondary-link {
+      display: inline-block;
+      border: 1.5px solid var(--black);
       color: var(--black);
-      border: none;
-      padding: 12px 24px;
-      font-family: var(--font-body);
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-      cursor: pointer;
-      white-space: nowrap;
-      flex-shrink: 0;
+      padding: 12px 28px;
+      font-size: 12px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      text-decoration: none;
+      margin-top: 12px;
     }
-    .sticky-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    /* ── Responsive ── */
-    @media (max-width: 560px) {
-      .card { margin: 0; border-left: none; border-right: none; padding: 22px 16px; }
-      #step-order { padding-bottom: 80px; } /* room for sticky bar */
-    }
-    @media (min-width: 561px) {
-      .sticky-submit { display: none !important; }
-    }
+    .secondary-link:hover { background: var(--black); color: var(--white); }
+    .divider { margin: 20px 0; color: var(--gray-3); font-size: 13px; }
   </style>
 </head>
 <body>
 
-<div class="header">
-  <h1>SIHAA</h1>
-  <p>Food Assistance Program · Rochester, NY</p>
+<header>
+  <a class="logo" href="https://www.sihha.org">sihha</a>
+  <a class="back-link" href="https://www.sihha.org">← Back to sihha.org</a>
+</header>
+
+<div class="page">
+  <div class="icon">📦</div>
+  <h1 class="page-title">How Food Assistance Works</h1>
+  <p class="page-text">Food orders are no longer placed online. Everything is handled automatically through WhatsApp once your family is enrolled.</p>
+
+  <ol class="step-list">
+    <li><strong>Register your household</strong> using the form below — takes about 2 minutes.</li>
+    <li><strong>A coordinator reviews your request</strong> and approves your enrollment, usually within 48 hours.</li>
+    <li><strong>Before each delivery cycle</strong>, you'll receive a WhatsApp message asking you to confirm or skip that delivery.</li>
+    <li><strong>Reply to confirm</strong> and your bundle will be prepared and delivered by a volunteer on the scheduled date.</li>
+  </ol>
+
+  <p class="page-text">Deliveries run bi-weekly on Saturdays and Sundays. No app or account required — just WhatsApp.</p>
+
+  <a class="cta-link" href="/intake">Register Your Household →</a>
+  <div class="divider">or</div>
+  <a class="secondary-link" href="https://www.sihha.org">Return to sihha.org</a>
 </div>
 
-<!-- ══ STEP 1: Phone check ═══════════════════════════════════════════════════ -->
-<div class="card" id="step-phone">
-  <div class="phase-title">Submit the Request</div>
-  <div class="phase-sub">Enter the phone number you registered with to get started.</div>
-
-  <label for="phone-input">Phone Number</label>
-  <input type="tel" id="phone-input" placeholder="e.g. 585-555-0100"
-         inputmode="tel" autocomplete="tel">
-
-  <div id="phone-error" class="alert alert-error" style="display:none;margin-top:14px;"></div>
-
-  <button class="btn btn-primary" id="check-btn" onclick="checkPhone()">Continue</button>
-
-  <div class="register-link" style="margin-top:20px;">
-    Not registered yet? <a href="/intake">Apply for assistance →</a>
-  </div>
-</div>
-
-<!-- ══ STEP 2: Item selection ════════════════════════════════════════════════ -->
-<div class="card" id="step-order" style="display:none;">
-
-  <div class="greeting" id="greeting-bar">
-    <div class="greeting-icon">👋</div>
-    <div>
-      <div class="greeting-name" id="greeting-name"></div>
-      <div class="greeting-meta" id="greeting-meta"></div>
-    </div>
-  </div>
-
-  <div id="last-order-banner" style="display:none;background:#f0f7f4;border:1px solid #c3e0d0;
-    padding:9px 14px;font-size:13px;color:#1a3a2a;margin-bottom:14px;border-radius:6px;"></div>
-
-  <div class="cycle-box" id="cycle-info"></div>
-
-  <div class="phase-title">Select Your Items</div>
-  <div class="phase-sub" id="order-sub">Choose the items you need for this delivery. All items are optional — only select what your family needs.</div>
-
-  <div id="order-error" class="alert alert-error" style="display:none;margin-top:0;margin-bottom:16px;"></div>
-
-  <div class="select-all-row">
-    <button class="select-all-btn" id="select-all-btn" onclick="toggleSelectAll()">Select all</button>
-  </div>
-
-  <div id="items-container"></div>
-
-  <div class="summary-bar">
-    <span>Items selected</span>
-    <span class="count" id="selected-count">0</span>
-  </div>
-
-  <button class="btn btn-primary" id="submit-btn" onclick="submitOrder()">Submit Request</button>
-  <button class="btn btn-secondary" style="margin-top:10px;" onclick="goBack()">← Change phone number</button>
-</div>
-
-<!-- ══ STEP 3: Already submitted ─────────────────────────────────────────── -->
-<div class="card" id="step-already" style="display:none;">
-  <div class="success-icon">📋</div>
-  <div class="success-msg">Already Submitted</div>
-  <div class="success-sub">You've already placed a request for this delivery cycle.</div>
-  <div class="success-detail" id="already-detail"></div>
-  <button class="btn btn-secondary" style="margin-top:20px;" onclick="goBack()">← Go back</button>
-</div>
-
-<!-- ══ STEP 4: No open cycle ──────────────────────────────────────────────── -->
-<div class="card" id="step-closed" style="display:none;">
-  <div class="success-icon">⏳</div>
-  <div class="success-msg">No Open Cycle</div>
-  <div class="success-sub" id="closed-msg">There are no open delivery cycles at this time. Please check back soon.</div>
-  <button class="btn btn-secondary" style="margin-top:20px;" onclick="goBack()">← Go back</button>
-</div>
-
-<!-- ══ STEP 5: Confirmed ──────────────────────────────────────────────────── -->
-<div class="card" id="step-confirmed" style="display:none;">
-  <div class="success-icon">✅</div>
-  <div class="success-msg">Request Submitted!</div>
-  <div class="success-sub">JazakAllah Khair. Your food request has been received.</div>
-  <div class="success-detail" id="confirmed-detail"></div>
-  <div style="margin-top:20px;padding-top:16px;border-top:1px solid #eee;font-size:14px;color:#555;line-height:1.7;">
-    <strong style="color:#1a3a2a;">What happens next?</strong><br>
-    A SIHAA volunteer will shop for your items and arrange delivery within the window shown above.
-    You do not need to do anything else — a volunteer will be in touch.<br><br>
-    <a href="https://www.sihha.org" style="color:#111;font-weight:700;letter-spacing:0.02em;">Return to sihha.org →</a>
-  </div>
-</div>
-
-<!-- ══ Sticky mobile submit bar ════════════════════════════════════════════════ -->
-<div class="sticky-submit" id="sticky-bar">
-  <div class="sticky-count" id="sticky-count">0 <span>items selected</span></div>
-  <button class="sticky-btn" id="sticky-submit-btn" onclick="submitOrder()">Submit →</button>
-</div>
-
-<div class="footer">SIHAA Food Charity · Rochester, NY · <a href="https://www.sihha.org" style="color:inherit;text-decoration:none;">sihha.org</a></div>
-
-<script>
-  // ── State ──────────────────────────────────────────────────────────────────
-  let _state = {
-    familyId: null,
-    cycleId: null,
-    cycleTitle: '',
-    deliveryStart: '',
-    deliveryEnd: '',
-    closeAt: '',
-    bundleSize: '',
-    items: [],        // [{id, name, unit, category_name, quantity}]
-    selected: new Set()
-  };
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
-  // ── Service worker ─────────────────────────────────────────────────────────
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  }
-
-  function show(id) {
-    ['step-phone','step-order','step-already','step-closed','step-confirmed']
-      .forEach(s => document.getElementById(s).style.display = s === id ? '' : 'none');
-    // Show sticky bar only during item selection on mobile
-    const bar = document.getElementById('sticky-bar');
-    if (bar) bar.classList.toggle('visible', id === 'step-order');
-  }
-
-  function fmtDate(iso) {
-    if (!iso) return '';
-    const d = new Date(iso.includes('T') ? iso : iso + 'T12:00:00');
-    return d.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
-  }
-
-  function setBtn(id, loading, text) {
-    const b = document.getElementById(id);
-    b.disabled = loading;
-    b.innerHTML = loading ? `<span class="spinner"></span> ${text}` : text;
-  }
-
-  // ── Step 1: Phone check ────────────────────────────────────────────────────
-  document.getElementById('phone-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') checkPhone();
-  });
-
-  async function checkPhone() {
-    const phone = document.getElementById('phone-input').value.trim();
-    if (!phone) {
-      showPhoneError('Please enter your phone number.');
-      return;
-    }
-    document.getElementById('phone-error').style.display = 'none';
-    setBtn('check-btn', true, 'Checking…');
-
-    try {
-      const res = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
-      const data = await res.json();
-
-      if (!data.registered) {
-        showPhoneError(data.message || 'Phone number not found. Please register first.');
-        setBtn('check-btn', false, 'Continue');
-        return;
-      }
-
-      if (!data.open_cycle) {
-        document.getElementById('closed-msg').textContent = data.message || 'No open cycles at this time.';
-        show('step-closed');
-        return;
-      }
-
-      if (data.already_submitted) {
-        document.getElementById('already-detail').innerHTML =
-          `<strong>Delivery window:</strong> ${fmtDate(data.delivery_start)} – ${fmtDate(data.delivery_end)}<br>
-           Your request is in progress. A volunteer will contact you about delivery.`;
-        show('step-already');
-        return;
-      }
-
-      // Ready to order
-      _state.familyId     = data.family_id;
-      _state.familyCode   = data.family_code || '';
-      _state.cycleId      = data.cycle_id;
-      _state.cycleTitle   = data.cycle_title;
-      _state.deliveryStart = data.delivery_start;
-      _state.deliveryEnd   = data.delivery_end;
-      _state.closeAt       = data.request_close_at;
-      _state.bundleSize    = data.bundle_size;
-      _state.items         = data.food_items || [];
-      _state.selected      = new Set(_state.items.map(i => i.id)); // all selected by default
-
-      buildOrderScreen(data);
-      show('step-order');
-
-    } catch(e) {
-      showPhoneError('Connection error. Please try again.');
-      setBtn('check-btn', false, 'Continue');
-    }
-  }
-
-  function showPhoneError(msg) {
-    const el = document.getElementById('phone-error');
-    el.textContent = msg;
-    el.style.display = '';
-  }
-
-  // ── Step 2: Build order screen ─────────────────────────────────────────────
-  function buildOrderScreen(data) {
-    // Greeting
-    document.getElementById('greeting-name').textContent = 'As-salamu alaykum, ' + data.family_name;
-    const bLabel = {S:'Small', M:'Medium', L:'Large'}[data.bundle_size] || data.bundle_size;
-    document.getElementById('greeting-meta').textContent = `Bundle size: ${bLabel}`;
-
-    // Last order context banner
-    const lastOrderEl = document.getElementById('last-order-banner');
-    if (lastOrderEl) {
-      const lo = data.last_order;
-      if (lo) {
-        const statusIcon = lo.status === 'delivered' ? '✓' : '⏳';
-        const statusText = lo.status === 'delivered'
-          ? `Delivered ${lo.delivered_at ? fmtDate(lo.delivered_at) : ''}`
-          : lo.status.charAt(0).toUpperCase() + lo.status.slice(1);
-        lastOrderEl.innerHTML =
-          `${statusIcon} Last order: <strong>${lo.cycle_title}</strong> — ${statusText}`;
-        lastOrderEl.style.display = '';
-      } else {
-        lastOrderEl.style.display = 'none';
-      }
-    }
-
-    // Cycle info
-    document.getElementById('cycle-info').innerHTML = `
-      <strong>${data.cycle_title}</strong>
-      <div class="cycle-row">
-        <span>Delivery window</span>
-        <b>${fmtDate(data.delivery_start)} – ${fmtDate(data.delivery_end)}</b>
-      </div>
-      <div class="cycle-row">
-        <span>Request deadline</span>
-        <b>${fmtDate(data.request_close_at)}</b>
-      </div>`;
-
-    // Group items by category
-    const cats = {};
-    for (const item of _state.items) {
-      if (!cats[item.category_name]) cats[item.category_name] = [];
-      cats[item.category_name].push(item);
-    }
-
-    const container = document.getElementById('items-container');
-    container.innerHTML = '';
-
-    for (const [catName, items] of Object.entries(cats)) {
-      const block = document.createElement('div');
-      block.className = 'category-block';
-      block.innerHTML = `<div class="category-label">${catName}</div>`;
-
-      for (const item of items) {
-        const row = document.createElement('div');
-        row.className = 'item-row selected';
-        row.dataset.id = item.id;
-        row.onclick = () => toggleItem(item.id, row);
-        row.innerHTML = `
-          <div class="item-check"></div>
-          <div class="item-info">
-            <div class="item-name">${item.name}</div>
-            <div class="item-unit">${item.unit}</div>
-          </div>`;
-        block.appendChild(row);
-      }
-      container.appendChild(block);
-    }
-
-    updateCount();
-  }
-
-  // ── Item toggle ────────────────────────────────────────────────────────────
-  function toggleItem(id, row) {
-    if (_state.selected.has(id)) {
-      _state.selected.delete(id);
-      row.classList.remove('selected');
-    } else {
-      _state.selected.add(id);
-      row.classList.add('selected');
-    }
-    updateCount();
-    updateSelectAllBtn();
-  }
-
-  function toggleSelectAll() {
-    const allSelected = _state.selected.size === _state.items.length;
-    document.querySelectorAll('.item-row').forEach(row => {
-      const id = row.dataset.id;
-      if (allSelected) {
-        _state.selected.delete(id);
-        row.classList.remove('selected');
-      } else {
-        _state.selected.add(id);
-        row.classList.add('selected');
-      }
-    });
-    updateCount();
-    updateSelectAllBtn();
-  }
-
-  function updateCount() {
-    const n = _state.selected.size;
-    document.getElementById('selected-count').textContent = n;
-    // Keep sticky bar in sync
-    const sc = document.getElementById('sticky-count');
-    if (sc) sc.innerHTML = `${n} <span>item${n !== 1 ? 's' : ''} selected</span>`;
-  }
-
-  function updateSelectAllBtn() {
-    const allSelected = _state.selected.size === _state.items.length;
-    document.getElementById('select-all-btn').textContent = allSelected ? 'Deselect all' : 'Select all';
-  }
-
-  // ── Step 2 → Step 1 ────────────────────────────────────────────────────────
-  function goBack() {
-    document.getElementById('phone-error').style.display = 'none';
-    setBtn('check-btn', false, 'Continue');
-    show('step-phone');
-    document.getElementById('phone-input').focus();
-  }
-
-  // ── Step 3: Submit ─────────────────────────────────────────────────────────
-  async function submitOrder() {
-    document.getElementById('order-error').style.display = 'none';
-    setBtn('submit-btn', true, 'Submitting…');
-    const sb = document.getElementById('sticky-submit-btn');
-    if (sb) { sb.disabled = true; sb.textContent = '…'; }
-
-    try {
-      const res = await fetch('/api/food-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          family_id: _state.familyId,
-          cycle_id:  _state.cycleId,
-          selected_items: [..._state.selected]
-        })
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        const err = document.getElementById('order-error');
-        err.textContent = data.error || 'Something went wrong. Please try again.';
-        err.style.display = '';
-        setBtn('submit-btn', false, 'Submit Request');
-        return;
-      }
-
-      // Success
-      const sel = _state.selected.size;
-      const total = _state.items.length;
-      document.getElementById('confirmed-detail').innerHTML =
-        `${_state.familyCode ? `<div style="font-family:monospace;font-size:22px;font-weight:700;letter-spacing:2px;color:#1a3a2a;margin-bottom:12px;">🪪 ${_state.familyCode}</div>` : ''}
-         <strong>Delivery:</strong> ${fmtDate(_state.deliveryStart)} – ${fmtDate(_state.deliveryEnd)}<br>
-         <strong>Items requested:</strong> ${sel} of ${total}<br><br>
-         Save your Family ID above — you can use it to reference your account with a coordinator.`;
-      show('step-confirmed');
-
-    } catch(e) {
-      const err = document.getElementById('order-error');
-      err.textContent = 'Connection error. Please try again.';
-      err.style.display = '';
-      setBtn('submit-btn', false, 'Submit Request');
-      const sb2 = document.getElementById('sticky-submit-btn');
-      if (sb2) { sb2.disabled = false; sb2.textContent = 'Submit →'; }
-    }
-  }
-</script>
 </body>
 </html>

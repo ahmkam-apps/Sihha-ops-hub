@@ -1483,8 +1483,8 @@ function familyFormHTML(r) {
         <label>Income Range</label>
         <select id="f-income">
           <option value="">— Select —</option>
-          ${['Under $25,000','$25,000-$40,000','$40,000-60,000','$60,000+','Prefer not to answer'].map(v =>
-            `<option value="${v}" ${r.income_range===v?'selected':''}>${v}</option>`).join('')}
+          ${[['<20k','Under $20,000'],['20-40k','$20,000–$40,000'],['40-60k','$40,000–$60,000'],['>60k','Over $60,000']].map(([v,l]) =>
+            `<option value="${v}" ${r.income_range===v?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
     </div>
