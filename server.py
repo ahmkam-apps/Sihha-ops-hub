@@ -54,10 +54,6 @@ def _bundle_letter(family_size):
     elif size <= 5: return 'M'
     else:           return 'L'
 
-def _normalize_phone(phone):
-    """Strip all non-digit characters. '555-123-4567' → '5551234567'."""
-    return ''.join(c for c in (phone or '') if c.isdigit())
-
 def _make_family_code(phone, family_size, db_conn=None, exclude_id=None):
     """Generate unique human-readable family reference.
     Format: last 6 digits of phone + '-' + bundle size letter.
@@ -602,39 +598,6 @@ def bootstrap_db():
             # Another worker already ran this migration — safe to skip
             log.info(f'Migration: reimbursements table already upgraded or in progress — skipping ({_e})')
 
-    # ── Phase 6 migrations: phone normalisation + bundle size request ─────────────
-
-    # Add pending_bundle_size to families (coordinator must approve before it takes effect)
-    try:
-        conn.execute('ALTER TABLE families ADD COLUMN pending_bundle_size TEXT')
-        log.info('Migration: added pending_bundle_size to families')
-    except sqlite3.OperationalError:
-        pass
-
-    # Normalise all existing phone numbers — strip hyphens/spaces/parens to digits only
-    rows = conn.execute("SELECT id, phone FROM families WHERE phone IS NOT NULL").fetchall()
-    updated = 0
-    for row in rows:
-        normalized = ''.join(c for c in row[1] if c.isdigit())
-        if normalized != row[1]:
-            conn.execute("UPDATE families SET phone=? WHERE id=?", (normalized, row[0]))
-            updated += 1
-    if updated:
-        conn.commit()
-        log.info(f'Migration: normalised {updated} family phone numbers')
-
-    # Same for volunteers
-    vrows = conn.execute("SELECT id, phone FROM volunteers WHERE phone IS NOT NULL").fetchall()
-    vupdated = 0
-    for row in vrows:
-        normalized = ''.join(c for c in row[1] if c.isdigit())
-        if normalized != row[1]:
-            conn.execute("UPDATE volunteers SET phone=? WHERE id=?", (normalized, row[0]))
-            vupdated += 1
-    if vupdated:
-        conn.commit()
-        log.info(f'Migration: normalised {vupdated} volunteer phone numbers')
-
     # ── Phase 5 migrations: family WhatsApp + food_request confirmation ──────────
 
     # Add wa_phone / wa_apikey to families (for confirmation messages)
@@ -658,13 +621,11 @@ def bootstrap_db():
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
     ).fetchone()
     if cycles_sql and 'upcoming' not in cycles_sql[0]:
-        log.info('Migration: upgrading delivery_cycles CHECK to include upcoming status')
+        log.info('Migration: upgrading delivery_cycles for upcoming status')
         try:
             conn.execute('PRAGMA foreign_keys=OFF')
-            # Clean up any leftover _new table from a previous failed attempt
-            conn.execute('DROP TABLE IF EXISTS delivery_cycles_new')
-            conn.execute('''
-                CREATE TABLE delivery_cycles_new (
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS delivery_cycles_new (
                     id                  TEXT PRIMARY KEY,
                     title               TEXT NOT NULL,
                     delivery_date_start TEXT NOT NULL,
@@ -677,25 +638,19 @@ def bootstrap_db():
                     created_by          TEXT,
                     created_at          TEXT NOT NULL,
                     updated_at          TEXT
-                )''')
-            # Explicit column list so old rows (without updated_at) copy correctly
-            conn.execute('''
-                INSERT INTO delivery_cycles_new
-                    (id, title, delivery_date_start, delivery_date_end,
-                     request_open_at, request_close_at, status, notes, created_by, created_at)
-                SELECT id, title, delivery_date_start, delivery_date_end,
-                       COALESCE(request_open_at,''), COALESCE(request_close_at,''),
-                       status, notes, created_by, created_at
-                FROM delivery_cycles''')
-            conn.execute('DROP TABLE delivery_cycles')
-            conn.execute('ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles')
-            conn.execute("UPDATE delivery_cycles SET status='upcoming' WHERE status IN ('draft','open','closed')")
-            conn.commit()
+                );
+                INSERT OR IGNORE INTO delivery_cycles_new
+                    SELECT * FROM delivery_cycles;
+                DROP TABLE IF EXISTS delivery_cycles;
+                ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles;
+                UPDATE delivery_cycles SET status='upcoming'
+                    WHERE status IN ('draft','open','closed');
+            ''')
             conn.execute('PRAGMA foreign_keys=ON')
-            log.info('Migration: delivery_cycles upgraded — upcoming status added')
+            log.info('Migration: delivery_cycles upgraded — upcoming status added, old draft/open/closed migrated')
         except Exception as _e:
             conn.execute('PRAGMA foreign_keys=ON')
-            log.info(f'Migration: delivery_cycles upgrade failed — {_e}')
+            log.info(f'Migration: delivery_cycles already upgraded — skipping ({_e})')
 
     # Upgrade food_requests status CHECK to include confirmation statuses
     freq_sql = conn.execute(
@@ -1466,15 +1421,7 @@ def list_families():
                   AND vs.task_type = 'delivery'
                   AND vs.claimed_by IS NOT NULL
                 ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_delivery_date,
-               (SELECT dc.delivery_date_start
-                FROM volunteer_slots vs
-                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
-                WHERE vs.family_id = f.id
-                  AND vs.task_type = 'shopping'
-                  AND vs.claimed_by IS NOT NULL
-                ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_shopping_date
+                LIMIT 1) AS last_delivery_date
         FROM families f
         WHERE 1=1"""
     params = []
@@ -1491,16 +1438,15 @@ def create_family():
     data = request.json or {}
     if not data.get('name'):
         return jsonify({'error': 'Name is required'}), 422
-    phone = _normalize_phone(data.get('phone'))
     fid = str(uuid.uuid4())
     db = get_db()
-    family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
+    family_code = _make_family_code(data.get('phone'), data.get('family_size'), db_conn=db)
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
             dietary_notes,frequency,income_range,status,notes,source,family_code,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (fid, data['name'], phone, data.get('address'), data.get('city'),
+        (fid, data['name'], data.get('phone'), data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
          data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'),
@@ -1523,94 +1469,24 @@ def update_family(fid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
-    new_phone = _normalize_phone(d.get('phone', row['phone']))
+    new_phone = d.get('phone', row['phone'])
     new_size  = d.get('family_size', row['family_size'])
     new_code  = _make_family_code(new_phone, new_size, db_conn=db, exclude_id=fid)
     db.execute(
         '''UPDATE families SET name=?,phone=?,address=?,city=?,family_size=?,children_count=?,
-           dietary_notes=?,frequency=?,income_range=?,status=?,bundle_size=?,notes=?,family_code=?,
+           dietary_notes=?,frequency=?,income_range=?,status=?,notes=?,family_code=?,
            wa_phone=?,wa_apikey=?,updated_at=? WHERE id=?''',
         (d.get('name', row['name']), new_phone,
          d.get('address', row['address']), d.get('city', row['city']),
          new_size, d.get('children_count', row['children_count']),
          d.get('dietary_notes', row['dietary_notes']), d.get('frequency', row['frequency']),
          d.get('income_range', row['income_range']), d.get('status', row['status']),
-         d.get('bundle_size', row['bundle_size']),
          d.get('notes', row['notes']), new_code,
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          now(), fid)
     )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()))
-
-# ── Bundle size change request (family self-serve, coordinator must approve) ──
-
-@app.route('/api/families/<fid>/request-bundle-change', methods=['POST'])
-def request_bundle_change(fid):
-    """Family portal: request a bundle size change. Stored as pending until coordinator approves."""
-    data = request.json or {}
-    new_size = (data.get('bundle_size') or '').upper().strip()
-    if new_size not in ('S', 'M', 'L'):
-        return jsonify({'error': 'Bundle size must be S, M, or L'}), 422
-    db = get_db()
-    family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
-    if not family:
-        return jsonify({'error': 'Family not found'}), 404
-    if family['bundle_size'] == new_size:
-        return jsonify({'error': 'That is already your current bundle size'}), 409
-    if family['pending_bundle_size'] == new_size:
-        return jsonify({'ok': True, 'message': 'Your request is already pending coordinator approval.'}), 200
-    db.execute(
-        "UPDATE families SET pending_bundle_size=?, updated_at=? WHERE id=?",
-        (new_size, now(), fid)
-    )
-    db.commit()
-    # Notify coordinator
-    coord = db.execute(
-        "SELECT name, wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
-    ).fetchone()
-    if coord and coord['wa_phone'] and coord['wa_apikey']:
-        sizes = {'S': 'Small', 'M': 'Medium', 'L': 'Large'}
-        msg = (f"Bundle size change request:\n"
-               f"Family: {family['name']} ({family['family_code']})\n"
-               f"Current: {sizes.get(family['bundle_size'] or 'M', family['bundle_size'])}\n"
-               f"Requested: {sizes.get(new_size, new_size)}\n"
-               f"Please log in to approve or deny.")
-        _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
-    log.info(f'Bundle change request: family {fid} → {new_size}')
-    return jsonify({'ok': True, 'message': 'Your request has been sent. The coordinator will review it and let you know.'}), 200
-
-
-@app.route('/api/families/<fid>/approve-bundle-change', methods=['POST'])
-@require_auth(roles=['admin'])
-def approve_bundle_change(fid):
-    """Admin: approve or deny a pending bundle size change request."""
-    data = request.json or {}
-    action = data.get('action')  # 'approve' or 'deny'
-    if action not in ('approve', 'deny'):
-        return jsonify({'error': 'action must be approve or deny'}), 422
-    db = get_db()
-    family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
-    if not family:
-        return jsonify({'error': 'Not found'}), 404
-    if not family['pending_bundle_size']:
-        return jsonify({'error': 'No pending bundle size request for this family'}), 409
-    if action == 'approve':
-        db.execute(
-            "UPDATE families SET bundle_size=?, pending_bundle_size=NULL, updated_at=? WHERE id=?",
-            (family['pending_bundle_size'], now(), fid)
-        )
-        msg = f"Approved. Bundle size changed to {family['pending_bundle_size']}."
-    else:
-        db.execute(
-            "UPDATE families SET pending_bundle_size=NULL, updated_at=? WHERE id=?",
-            (now(), fid)
-        )
-        msg = "Bundle size change request denied. Current size kept."
-    db.commit()
-    log.info(f'Bundle change {action}: family {fid}')
-    return jsonify({'ok': True, 'message': msg})
-
 
 # ── Volunteers ────────────────────────────────────────────────────────────────
 
@@ -2403,79 +2279,6 @@ def list_delivery_cycles():
     q += " ORDER BY delivery_date_start ASC"
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
-def _fix_delivery_cycles_schema(db):
-    """
-    Ensure delivery_cycles.status CHECK includes 'upcoming'.
-    Works regardless of which columns exist on the live DB.
-    Idempotent — no-ops if schema is already correct.
-    """
-    schema_row = db.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
-    ).fetchone()
-    if not schema_row or 'upcoming' in schema_row[0]:
-        return  # nothing to do
-
-    log.info('_fix_delivery_cycles_schema: rebuilding table to add upcoming status')
-    db.execute('PRAGMA foreign_keys=OFF')
-
-    # Discover which columns actually exist in the live table
-    col_info  = db.execute('PRAGMA table_info(delivery_cycles)').fetchall()
-    live_cols = {row[1] for row in col_info}   # row[1] = column name
-
-    # Build the SELECT list, supplying '' for missing TEXT NOT NULL columns
-    wanted = [
-        ('id',                  'id'),
-        ('title',               'title'),
-        ('delivery_date_start', 'delivery_date_start'),
-        ('delivery_date_end',   'delivery_date_end'),
-        ('request_open_at',     "COALESCE(request_open_at,'')"),
-        ('request_close_at',    "COALESCE(request_close_at,'')"),
-        ('status',              'status'),
-        ('notes',               'notes'),
-        ('created_by',          'created_by'),
-        ('created_at',          'created_at'),
-    ]
-    dst_cols = []
-    src_exprs = []
-    for col_name, expr in wanted:
-        raw = col_name if 'COALESCE' not in expr else col_name
-        if raw in live_cols:
-            dst_cols.append(col_name)
-            src_exprs.append(expr)
-        elif col_name in ('request_open_at', 'request_close_at'):
-            # Column doesn't exist at all — supply empty string
-            dst_cols.append(col_name)
-            src_exprs.append("''")
-
-    db.execute('DROP TABLE IF EXISTS delivery_cycles_new')
-    db.execute('''
-        CREATE TABLE delivery_cycles_new (
-            id                  TEXT PRIMARY KEY,
-            title               TEXT NOT NULL,
-            delivery_date_start TEXT NOT NULL,
-            delivery_date_end   TEXT NOT NULL,
-            request_open_at     TEXT NOT NULL DEFAULT '',
-            request_close_at    TEXT NOT NULL DEFAULT '',
-            status              TEXT NOT NULL DEFAULT 'upcoming'
-                                CHECK(status IN
-                                  ('draft','open','closed','upcoming','shopping','delivered')),
-            notes               TEXT,
-            created_by          TEXT,
-            created_at          TEXT NOT NULL,
-            updated_at          TEXT
-        )''')
-
-    db.execute(
-        f"INSERT INTO delivery_cycles_new ({', '.join(dst_cols)}) "
-        f"SELECT {', '.join(src_exprs)} FROM delivery_cycles"
-    )
-    db.execute('DROP TABLE delivery_cycles')
-    db.execute('ALTER TABLE delivery_cycles_new RENAME TO delivery_cycles')
-    db.commit()
-    db.execute('PRAGMA foreign_keys=ON')
-    log.info('_fix_delivery_cycles_schema: done')
-
-
 @app.route('/api/delivery-cycles', methods=['POST'])
 @require_auth(roles=['admin'])
 def create_delivery_cycle():
@@ -2484,14 +2287,8 @@ def create_delivery_cycle():
         return jsonify({'error': 'title, delivery_date_start and delivery_date_end are required'}), 422
     cid = str(uuid.uuid4())
     db  = get_db()
-
-    # Ensure schema supports 'upcoming' before inserting
-    try:
-        _fix_delivery_cycles_schema(db)
-    except Exception as _e:
-        log.error(f'create_delivery_cycle: schema fix failed: {_e}')
-        return jsonify({'error': f'Schema migration failed: {_e}'}), 500
-
+    # Default open/close dates if not supplied
+    delivery_start = data['delivery_date_start']
     req_open  = data.get('request_open_at')  or ''
     req_close = data.get('request_close_at') or ''
     db.execute(
@@ -2499,9 +2296,9 @@ def create_delivery_cycle():
            (id, title, delivery_date_start, delivery_date_end,
             request_open_at, request_close_at, status, notes, created_by, created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
-        (cid, data['title'], data['delivery_date_start'], data['delivery_date_end'],
+        (cid, data['title'], delivery_start, data['delivery_date_end'],
          req_open, req_close,
-         data.get('status') or 'upcoming', data.get('notes'),
+         'upcoming', data.get('notes'),
          g.user['user_id'], now())
     )
     db.commit()
@@ -2966,14 +2763,6 @@ def update_cycle_assignment(aid):
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()))
 
-@app.route('/my-order')
-def my_order_page():
-    return send_from_directory('public', 'my-order.html')
-
-@app.route('/volunteer-signup')
-def volunteer_signup_page():
-    return send_from_directory('public', 'volunteer-signup.html')
-
 # ── Public Intake (no auth) ───────────────────────────────────────────────────
 
 @app.route('/api/intake', methods=['POST'])
@@ -2981,40 +2770,21 @@ def public_intake():
     data = request.json or {}
     if not data.get('name') or not data.get('phone'):
         return jsonify({'error': 'Name and phone are required'}), 422
-    phone = _normalize_phone(data['phone'])
-    if not phone:
-        return jsonify({'error': 'A valid phone number is required'}), 422
-    db = get_db()
-    # Duplicate guard — block a second record for the same phone number
-    existing = db.execute(
-        "SELECT id, status FROM families WHERE phone=?", (phone,)
-    ).fetchone()
-    if existing:
-        if existing['status'] == 'inactive':
-            return jsonify({
-                'error': 'duplicate',
-                'message': 'This phone number was previously registered but is no longer active. '
-                           'Please message your coordinator on WhatsApp to reactivate your account.'
-            }), 409
-        return jsonify({
-            'error': 'duplicate',
-            'message': 'This phone number is already registered. '
-                       'If you cannot log in, please send a WhatsApp message to your coordinator.'
-        }), 409
     fid = str(uuid.uuid4())
-    family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
+    db = get_db()
+    family_code = _make_family_code(data['phone'], data.get('family_size'), db_conn=db)
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
             dietary_notes,frequency,income_range,status,source,family_code,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (fid, data['name'], phone, data.get('address'), data.get('city'),
+        (fid, data['name'], data['phone'], data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
          'pending', 'intake_form', family_code, now())
     )
     db.commit()
-    log.info(f'New intake: {data["name"]} ({phone})')
+    log.info(f'New intake: {data["name"]} ({data["phone"]})')
     return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
 
 @app.route('/api/volunteer-signup', methods=['POST'])
@@ -3024,28 +2794,19 @@ def public_volunteer_signup():
         return jsonify({'error': 'Name and phone are required'}), 422
     if not data.get('role'):
         return jsonify({'error': 'Please select a role'}), 422
-    phone = _normalize_phone(data['phone'])
-    if not phone:
-        return jsonify({'error': 'A valid phone number is required'}), 422
-    db = get_db()
-    existing = db.execute("SELECT id, status FROM volunteers WHERE phone=?", (phone,)).fetchone()
-    if existing:
-        return jsonify({
-            'error': 'duplicate',
-            'message': 'This phone number is already registered as a volunteer. '
-                       'Visit /portal to log in, or contact a coordinator for help.'
-        }), 409
     vid = str(uuid.uuid4())
+    role = data.get('role', 'shopper')
+    db = get_db()
     db.execute(
         '''INSERT INTO volunteers
-           (id,name,phone,email,role,availability,notes,status,source,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)''',
-        (vid, data['name'], phone, data.get('email'),
-         data.get('role', 'shopper'), data.get('availability'),
-         data.get('notes'), 'pending', 'signup_form', now())
+           (id,name,phone,email,role,notes,status,source,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)''',
+        (vid, data['name'], data['phone'], data.get('email'),
+         role, data.get('notes'),
+         'pending', 'signup_form', now())
     )
     db.commit()
-    log.info(f'New volunteer signup: {data["name"]} ({phone})')
+    log.info(f'New volunteer signup: {data["name"]}')
     return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
 
 # ── Static Pages ──────────────────────────────────────────────────────────────
@@ -3177,7 +2938,7 @@ def pwa_icons(filename):
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
     """Check if a phone number is registered and if there's an open cycle."""
-    phone = _normalize_phone(request.args.get('phone') or '')
+    phone = (request.args.get('phone') or '').strip()
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
 
@@ -3186,26 +2947,12 @@ def check_food_order_eligibility():
 
     # Check family exists
     family = db.execute(
-        "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
-        "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+        "SELECT id, name, family_size, family_code FROM families WHERE phone=? AND status != 'inactive'", (phone,)
     ).fetchone()
 
     if not family:
-        # Look up coordinator WA number for the helpful message
-        coord = db.execute(
-            "SELECT wa_phone FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
-        ).fetchone()
-        coord_phone = coord['wa_phone'] if coord else None
-        wa_link = f'https://wa.me/{coord_phone}' if coord_phone else None
-        return jsonify({
-            'registered': False,
-            'coordinator_wa': wa_link,
-            'message': (
-                'We could not find a record for that phone number. '
-                'If you are already enrolled, make sure you are using the same number you registered with. '
-                'If you need help, please send a WhatsApp message to your coordinator.'
-            )
-        })
+        return jsonify({'registered': False,
+                        'message': 'Phone number not found. Please register first.'})
 
     # Last order context (most recent completed order across all cycles)
     last_order_row = db.execute(
@@ -3224,25 +2971,11 @@ def check_food_order_eligibility():
     ).fetchone()
 
     if not cycle:
-        history_rows = db.execute(
-            '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
-                      dc.title as cycle_title, dc.delivery_date_start
-               FROM food_requests fr
-               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-               WHERE fr.family_id=?
-               ORDER BY dc.delivery_date_start DESC LIMIT 20''',
-            (family['id'],)
-        ).fetchall()
-        return jsonify({
-            'registered': True, 'family_name': family['name'],
-            'family_id': family['id'],
-            'bundle_size': family['bundle_size'],
-            'pending_bundle_size': family['pending_bundle_size'],
-            'open_cycle': False,
-            'last_order': last_order,
-            'history': [dict(r) for r in history_rows],
-            'message': 'There are no upcoming deliveries to confirm right now. Check back soon.'
-        })
+        return jsonify({'registered': True, 'family_name': family['name'],
+                        'family_id': family['id'],
+                        'open_cycle': False,
+                        'last_order': last_order,
+                        'message': 'There are no open delivery cycles at this time. Please check back soon.'})
 
     # Check if already submitted for this cycle
     existing = db.execute(
@@ -3261,37 +2994,12 @@ def check_food_order_eligibility():
             'message': 'You have already submitted a request for this delivery cycle.'
         })
 
-    # Determine bundle size (family override → rule → default M)
-    bundle_size = family['bundle_size'] or None
-    if not bundle_size:
-        size = db.execute(
-            "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
-            (family['family_size'] or 1, family['family_size'] or 1)
-        ).fetchone()
-        bundle_size = size['bundle_size'] if size else 'M'
-
-    # Order history — all past requests for this family, newest first
-    history_rows = db.execute(
-        '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
-                  dc.title as cycle_title, dc.delivery_date_start
-           FROM food_requests fr
-           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-           WHERE fr.family_id=?
-           ORDER BY dc.delivery_date_start DESC
-           LIMIT 20''',
-        (family['id'],)
-    ).fetchall()
-    history = [dict(r) for r in history_rows]
-
-    base = {
-        'registered': True,
-        'family_name': family['name'],
-        'family_id': family['id'],
-        'family_code': family['family_code'],
-        'bundle_size': bundle_size,
-        'pending_bundle_size': family['pending_bundle_size'],
-        'history': history,
-    }
+    # Determine bundle size
+    size = db.execute(
+        "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
+        (family['family_size'] or 1, family['family_size'] or 1)
+    ).fetchone()
+    bundle_size = size['bundle_size'] if size else 'M'
 
     # Get active food items
     items = db.execute(
@@ -3303,7 +3011,9 @@ def check_food_order_eligibility():
            ORDER BY fc.display_order, fi.display_order''').fetchall()
 
     return jsonify({
-        **base,
+        'registered': True, 'family_name': family['name'],
+        'family_id': family['id'],
+        'family_code': family['family_code'],
         'open_cycle': True, 'already_submitted': False,
         'last_order': last_order,
         'cycle_id': cycle['id'],
@@ -3311,6 +3021,7 @@ def check_food_order_eligibility():
         'delivery_start': cycle['delivery_date_start'],
         'delivery_end': cycle['delivery_date_end'],
         'request_close_at': cycle['request_close_at'],
+        'bundle_size': bundle_size,
         'food_items': [dict(i) for i in items]
     })
 
@@ -3389,7 +3100,7 @@ def portal_page():
 @app.route('/api/portal/login', methods=['POST'])
 def portal_login():
     data = request.json or {}
-    phone = _normalize_phone(data.get('phone') or '')
+    phone = (data.get('phone') or '').strip()
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
     db = get_db()
@@ -3397,9 +3108,7 @@ def portal_login():
         "SELECT * FROM volunteers WHERE phone=? AND status='active'", (phone,)
     ).fetchone()
     if not vol:
-        return jsonify({'error': 'No active volunteer found with this phone number. '
-                                 'Make sure you use the same number you signed up with, '
-                                 'or contact a coordinator for help.'}), 404
+        return jsonify({'error': 'No active volunteer found with this phone number. Contact a coordinator if you need help.'}), 404
     token = str(uuid.uuid4())
     expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
     db.execute(
@@ -4339,23 +4048,13 @@ def seed_cycles_2026():
         return cycles
 
     db = get_db()
-    cycles_to_seed = build_cycles()
-
-    # Fix schema before any inserts
-    try:
-        _fix_delivery_cycles_schema(db)
-    except Exception as _e:
-        log.error(f'seed_cycles_2026: schema fix failed: {_e}')
-        return jsonify({'error': f'Schema migration failed: {_e}'}), 500
-
-    # Wipe any existing 2026 cycles (regardless of status) and reseed cleanly
-    deleted = db.execute(
-        "DELETE FROM delivery_cycles WHERE delivery_date_start >= '2026-01-01'"
-    ).rowcount
-    db.commit()
-
-    created = 0
-    for c in cycles_to_seed:
+    existing_starts = {r['delivery_date_start'] for r in
+                       db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
+    created = skipped = 0
+    for c in build_cycles():
+        if c['delivery_date_start'] in existing_starts:
+            skipped += 1
+            continue
         cid = str(uuid.uuid4())
         db.execute(
             '''INSERT INTO delivery_cycles
@@ -4363,13 +4062,14 @@ def seed_cycles_2026():
                 request_open_at, request_close_at, status, notes, created_by, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (cid, c['title'], c['delivery_date_start'], c['delivery_date_end'],
-             c['request_open_at'], c['request_close_at'], 'upcoming', c['notes'],
+             c['request_open_at'], c['request_close_at'], c['status'], c['notes'],
              g.user['user_id'], now())
         )
+        db.commit()
+        # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
         created += 1
-    db.commit()
-    log.info(f'seed-cycles-2026: deleted={deleted}, created={created}')
-    return jsonify({'ok': True, 'created': created, 'deleted': deleted})
+    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}')
+    return jsonify({'ok': True, 'created': created, 'skipped': skipped})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])
@@ -4378,49 +4078,6 @@ def trigger_reminders():
     """Admin manual trigger — also used if Railway Cron is configured."""
     sent, target_date = _send_reminders_job()
     return jsonify({'ok': True, 'reminders_sent': sent, 'target_date': target_date})
-
-
-@app.route('/api/admin/db-debug', methods=['GET'])
-@require_auth(roles=['admin'])
-def db_debug():
-    """Diagnostic: show delivery_cycles schema + all rows."""
-    try:
-        db = get_db()
-        schema_row = db.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='delivery_cycles'"
-        ).fetchone()
-        schema_str = schema_row['sql'] if schema_row else None
-
-        cycles_raw = db.execute(
-            "SELECT id, title, delivery_date_start, status FROM delivery_cycles ORDER BY delivery_date_start"
-        ).fetchall()
-        cycles = [{'id': r['id'], 'title': r['title'],
-                   'date': r['delivery_date_start'], 'status': r['status']}
-                  for r in cycles_raw]
-
-        test_error = None
-        try:
-            test_id = '__dbdebug_test__'
-            db.execute(
-                "INSERT INTO delivery_cycles (id,title,delivery_date_start,delivery_date_end,request_open_at,request_close_at,status,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (test_id,'Test','2099-01-01','2099-01-02','','','upcoming','diag','2026-01-01')
-            )
-            db.execute("DELETE FROM delivery_cycles WHERE id=?", (test_id,))
-            db.commit()
-        except Exception as e:
-            test_error = str(e)
-
-        return jsonify({
-            'ok': True,
-            'schema_has_upcoming': 'upcoming' in (schema_str or ''),
-            'schema': schema_str,
-            'cycle_count': len(cycles),
-            'cycles': cycles,
-            'upcoming_insert_test': 'OK' if test_error is None else f'FAILED: {test_error}'
-        })
-    except Exception as e:
-        import traceback
-        return jsonify({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 def _send_family_confirmation_reminders():
     """7 days before delivery: create food_requests for all active families then WhatsApp opt-in link.
