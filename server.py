@@ -4048,6 +4048,13 @@ def seed_cycles_2026():
         return cycles
 
     db = get_db()
+
+    # Fix any legacy 'open'/'draft'/'closed' cycles left over from old schema
+    migrated = db.execute(
+        "UPDATE delivery_cycles SET status='upcoming' WHERE status IN ('open','draft','closed')"
+    ).rowcount
+    db.commit()
+
     existing_starts = {r['delivery_date_start'] for r in
                        db.execute("SELECT delivery_date_start FROM delivery_cycles").fetchall()}
     created = skipped = 0
@@ -4068,8 +4075,8 @@ def seed_cycles_2026():
         db.commit()
         # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
         created += 1
-    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}')
-    return jsonify({'ok': True, 'created': created, 'skipped': skipped})
+    log.info(f'seed-cycles-2026: created={created}, skipped={skipped}, migrated={migrated}')
+    return jsonify({'ok': True, 'created': created, 'skipped': skipped, 'migrated': migrated})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])

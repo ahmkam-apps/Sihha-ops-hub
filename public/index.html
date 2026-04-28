@@ -1371,7 +1371,8 @@ async function seedCycles2026() {
     });
     if (res.ok) {
       const data = await res.json();
-      alert(`Done! Created: ${data.created} · Skipped (existing): ${data.skipped}`);
+      const migratedMsg = data.migrated > 0 ? ` · Fixed ${data.migrated} legacy cycles` : '';
+      alert(`Done! Created: ${data.created} · Skipped: ${data.skipped}${migratedMsg}`);
       renderDashboard();
       return;
     }
