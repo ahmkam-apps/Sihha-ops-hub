@@ -4387,7 +4387,8 @@ def portal_get_families(cycle_id):
 @app.route('/api/portal/signup', methods=['POST'])
 @require_portal_auth()
 def portal_signup():
-    """Volunteer signs up for one or more task types for a family in a cycle."""
+    """Volunteer claims the open slot for a family+task in a cycle.
+    One volunteer per slot — claims the existing open slot rather than creating a new row."""
     d = request.json or {}
     cycle_id   = d.get('cycle_id')
     family_id  = d.get('family_id')
@@ -4401,43 +4402,70 @@ def portal_signup():
     if not cycle:
         return jsonify({'error': 'Cycle not found'}), 404
 
-    created = []
+    claimed = []
+    ts = now()
     for task_type in task_types:
+        # Already mine — skip silently
         if db.execute(
-            "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND claimed_by=?",
+            "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND claimed_by=? AND status='claimed'",
             (cycle_id, family_id, task_type, vol_id)
         ).fetchone():
             continue
-        slot_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (slot_id, cycle_id, family_id, task_type, cycle['delivery_date_start'], vol_id, now(), 'claimed', now())
-        )
-        created.append(task_type)
+
+        # Already taken by someone else?  Check BEFORE touching the open slot.
+        taken = db.execute(
+            '''SELECT v.name FROM volunteer_slots vs
+               JOIN volunteers v ON vs.claimed_by = v.id
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.task_type=?
+                 AND vs.status='claimed' AND vs.claimed_by != ?''',
+            (cycle_id, family_id, task_type, vol_id)
+        ).fetchone()
+        if taken:
+            return jsonify({'error': f'{task_type.capitalize()} is already assigned to {taken["name"]}'}), 409
+
+        # Claim the existing open slot (created by _ensure_volunteer_slots)
+        open_slot = db.execute(
+            "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND status='open'",
+            (cycle_id, family_id, task_type)
+        ).fetchone()
+
+        if open_slot:
+            db.execute(
+                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='claimed', updated_at=? WHERE id=?",
+                (vol_id, ts, ts, open_slot['id'])
+            )
+        else:
+            # Safety fallback: no pre-created slot (old cycle or edge case) — insert one
+            db.execute(
+                "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), cycle_id, family_id, task_type, cycle['delivery_date_start'], vol_id, ts, 'claimed', ts)
+            )
+        claimed.append(task_type)
+
     db.commit()
 
     # WhatsApp confirmation
-    if created:
+    if claimed:
         vol_row = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
         vol = dict(vol_row) if vol_row else {}
         fam = dict(family) if family else {}
         if vol.get('wa_phone') and vol.get('wa_apikey'):
             fcode      = fam.get('family_code', '')
-            task_label = ', '.join(t.capitalize() for t in created)
+            task_label = ', '.join(t.capitalize() for t in claimed)
             msg = (f"SIHAA Confirmed: {task_label}\n"
                    f"Family: {fcode} · Size: {fam.get('family_size', '?')}\n"
                    f"Delivery: {cycle['delivery_date_start']}\n"
                    f"JazakAllah Khair!")
-            if 'delivery' in created and fam.get('address'):
+            if 'delivery' in claimed and fam.get('address'):
                 msg += f"\nAddress: {fam['address']}, {fam.get('city', '')}"
             _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
 
-    return jsonify({'ok': True, 'created': created}), 201
+    return jsonify({'ok': True, 'claimed': claimed}), 201
 
 @app.route('/api/portal/cancel/<slot_id>', methods=['DELETE'])
 @require_portal_auth()
 def portal_cancel_slot(slot_id):
-    """Volunteer cancels their own slot signup."""
+    """Volunteer releases their slot back to open so another volunteer can claim it."""
     vol_id = g.pv['volunteer_id']
     db = get_db()
     slot = db.execute(
@@ -4445,7 +4473,11 @@ def portal_cancel_slot(slot_id):
     ).fetchone()
     if not slot:
         return jsonify({'error': 'Not found or not yours'}), 404
-    db.execute("DELETE FROM volunteer_slots WHERE id=?", (slot_id,))
+    # Release back to open — preserve the slot so another volunteer can claim it
+    db.execute(
+        "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE id=?",
+        (now(), slot_id)
+    )
     db.commit()
     return jsonify({'ok': True})
 
