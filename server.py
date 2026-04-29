@@ -3190,71 +3190,39 @@ def check_food_order_eligibility():
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
 
+    db = get_db()
+
+    # Ensure pending_bundle_size column exists
     try:
-        db = get_db()
-        auto_update_cycle_statuses(db)
+        db.execute('ALTER TABLE families ADD COLUMN pending_bundle_size TEXT')
+    except Exception:
+        pass  # already exists
 
-        # Ensure pending_bundle_size column exists (idempotent guard)
-        try:
-            db.execute('ALTER TABLE families ADD COLUMN pending_bundle_size TEXT')
-            db.commit()
-        except Exception:
-            pass  # Column already exists
-
-        # Check family exists — try exact match first, then strip leading country code
-        family_row = db.execute(
+    # Look up family — exact match first, then fuzzy (handles un-normalised stored phones)
+    family = None
+    try:
+        row = db.execute(
             "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
             "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
         ).fetchone()
-        if not family_row:
-            # Normalise stored phones on the fly and compare last 10 digits
-            # Handles: leading 1, stored hyphens/spaces not yet migrated, country codes
-            candidates = db.execute(
+        if row:
+            family = dict(row)
+        else:
+            last10 = phone[-10:] if len(phone) >= 10 else phone
+            for r in db.execute(
                 "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
                 "FROM families WHERE status != 'inactive'"
-            ).fetchall()
-            last10 = phone[-10:] if len(phone) >= 10 else phone
-            for c in candidates:
-                stored_norm = _normalize_phone(c['phone'] or '')
-                if stored_norm == phone or stored_norm[-10:] == last10:
-                    family_row = c
+            ).fetchall():
+                if _normalize_phone(r['phone'] or '')[-10:] == last10:
+                    family = dict(r)
                     break
     except Exception as exc:
-        log.exception(f'check_food_order_eligibility DB error: {exc}')
-        # Fallback: try without pending_bundle_size in case column truly missing
-        try:
-            db2 = get_db()
-            family_row_basic = db2.execute(
-                "SELECT id, name, family_size, family_code, bundle_size "
-                "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
-            ).fetchone()
-            if family_row_basic is None:
-                return jsonify({'registered': False, 'message': 'Phone number not found.'})
-            # Rebuild as dict with missing column defaulted
-            family = dict(family_row_basic)
-            family['pending_bundle_size'] = None
-            # Run abbreviated response (no cycle lookup to keep it safe)
-            return jsonify({
-                'registered': True,
-                'family_name': family['name'],
-                'family_id': family['id'],
-                'bundle_size': family['bundle_size'],
-                'pending_bundle_size': None,
-                'open_cycle': False,
-                'history': [],
-                'message': 'There are no upcoming deliveries to confirm right now. Check back soon.'
-            })
-        except Exception as exc2:
-            log.exception(f'check_food_order_eligibility fallback error: {exc2}')
-            return jsonify({'error': 'Could not look up your record. Please try again later.'}), 500
-
-    family = dict(family_row) if family_row else None
+        log.exception(f'check_food_order_eligibility lookup error: {exc}')
+        return jsonify({'error': f'DB error: {exc}'}), 500
 
     if not family:
-        # DEBUG: log all stored phones to help diagnose mismatch
         all_phones = db.execute("SELECT phone, status FROM families").fetchall()
-        log.warning(f'PHONE LOOKUP MISS — searched: {phone!r} — stored phones: {[(r["phone"], r["status"]) for r in all_phones]}')
-
+        log.warning(f'PHONE MISS — searched={phone!r} stored={[(r["phone"],r["status"]) for r in all_phones]}')
         coord = db.execute(
             "SELECT wa_phone FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
         ).fetchone()
