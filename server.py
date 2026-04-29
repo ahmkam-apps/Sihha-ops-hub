@@ -3907,81 +3907,99 @@ def submit_food_order():
 @app.route('/api/food-order/cancel', methods=['POST'])
 def cancel_food_order():
     """Family cancels their confirmed order — allowed up to 24 hours before delivery (Central time)."""
-    data      = request.json or {}
-    family_id = data.get('family_id')
-    request_id = data.get('request_id')
-    if not family_id or not request_id:
-        return jsonify({'error': 'family_id and request_id required'}), 422
-
-    db  = get_db()
-    req = db.execute(
-        '''SELECT fr.*, dc.delivery_date_start, dc.title as cycle_title,
-                  f.name as family_name, f.family_code
-           FROM food_requests fr
-           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
-           JOIN families f ON fr.family_id=f.id
-           WHERE fr.id=? AND fr.family_id=?''',
-        (request_id, family_id)
-    ).fetchone()
-    if not req:
-        return jsonify({'error': 'Order not found'}), 404
-    if req['status'] in ('skipped', 'delivered', 'cancelled'):
-        return jsonify({'error': 'Order cannot be cancelled in its current state'}), 409
-
-    # Enforce 24-hour cutoff using Central time
     try:
-        from datetime import date as _date
-        delivery_dt = _date.fromisoformat(req['delivery_date_start'])
-        days_until  = (delivery_dt - _today_central()).days
-    except Exception:
-        days_until = 99  # unknown date — allow cancellation
-    if days_until < 1:
-        return jsonify({'error': 'Orders can only be cancelled at least 1 day before delivery'}), 409
+        data      = request.json or {}
+        family_id = data.get('family_id')
+        request_id = data.get('request_id')
+        if not family_id or not request_id:
+            return jsonify({'error': 'family_id and request_id required'}), 422
 
-    # Find claimed volunteers for this family/cycle BEFORE releasing slots (for notification)
-    claimed_volunteers = db.execute(
-        '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
-           FROM volunteer_slots vs
-           JOIN volunteers v ON vs.claimed_by = v.id
-           WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' ''',
-        (req['cycle_id'], family_id)
-    ).fetchall()
+        db  = get_db()
+        req = db.execute(
+            '''SELECT fr.*, dc.delivery_date_start, dc.title as cycle_title,
+                      f.name as family_name, f.family_code
+               FROM food_requests fr
+               JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+               JOIN families f ON fr.family_id=f.id
+               WHERE fr.id=? AND fr.family_id=?''',
+            (request_id, family_id)
+        ).fetchone()
+        if not req:
+            return jsonify({'error': 'Order not found'}), 404
+        if req['status'] in ('skipped', 'delivered', 'cancelled'):
+            return jsonify({'error': 'Order cannot be cancelled in its current state'}), 409
 
-    # Mark as cancelled (not skipped — this is family-initiated)
-    db.execute(
-        "UPDATE food_requests SET status='cancelled', updated_at=? WHERE id=?",
-        (now(), request_id)
-    )
+        # Enforce 24-hour cutoff using Central time
+        try:
+            from datetime import date as _date
+            delivery_dt = _date.fromisoformat(req['delivery_date_start'])
+            days_until  = (delivery_dt - _today_central()).days
+        except Exception:
+            days_until = 99  # unknown date — allow cancellation
+        if days_until < 1:
+            return jsonify({'error': 'Orders can only be cancelled at least 1 day before delivery'}), 409
 
-    # Release volunteer slots back to open so others can claim them
-    db.execute(
-        "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status='claimed'",
-        (now(), req['cycle_id'], family_id)
-    )
+        # Find claimed volunteers for this family/cycle BEFORE releasing slots (for notification)
+        claimed_volunteers = db.execute(
+            '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
+               FROM volunteer_slots vs
+               JOIN volunteers v ON vs.claimed_by = v.id
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' ''',
+            (req['cycle_id'], family_id)
+        ).fetchall()
 
-    _log_order_event(db, request_id, 'cancelled', actor='family',
-                     payload={'days_until_delivery': days_until})
-    db.commit()
-
-    # Notify coordinators
-    _notify_coordinators(db,
-        f"Order cancelled by family:\n"
-        f"Family: {req['family_name']} ({req['family_code']})\n"
-        f"Cycle: {req['cycle_title']}\n"
-        f"Days until delivery: {days_until}\n"
-        f"Volunteer slots released back to open."
-    )
-
-    # Notify any volunteers whose slots were released
-    for vol in claimed_volunteers:
-        if vol['wa_phone'] and vol['wa_apikey']:
-            _wa_send(vol['wa_phone'], vol['wa_apikey'],
-                f"Update: {req['family_name']} has cancelled their food order for {req['cycle_title']}.\n"
-                f"Your {vol['task_type']} slot has been released — no action needed."
+        # Mark as cancelled (not skipped — this is family-initiated)
+        # updated_at may not exist on older DBs — use a safe fallback
+        try:
+            db.execute(
+                "UPDATE food_requests SET status='cancelled', updated_at=? WHERE id=?",
+                (now(), request_id)
+            )
+        except Exception:
+            db.execute(
+                "UPDATE food_requests SET status='cancelled' WHERE id=?",
+                (request_id,)
             )
 
-    log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
-    return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
+        # Release volunteer slots back to open so others can claim them
+        try:
+            db.execute(
+                "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status='claimed'",
+                (now(), req['cycle_id'], family_id)
+            )
+        except Exception:
+            db.execute(
+                "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open' WHERE cycle_id=? AND family_id=? AND status='claimed'",
+                (req['cycle_id'], family_id)
+            )
+
+        _log_order_event(db, request_id, 'cancelled', actor='family',
+                         payload={'days_until_delivery': days_until})
+        db.commit()
+
+        # Notify coordinators
+        _notify_coordinators(db,
+            f"Order cancelled by family:\n"
+            f"Family: {req['family_name']} ({req['family_code']})\n"
+            f"Cycle: {req['cycle_title']}\n"
+            f"Days until delivery: {days_until}\n"
+            f"Volunteer slots released back to open."
+        )
+
+        # Notify any volunteers whose slots were released
+        for vol in claimed_volunteers:
+            if vol['wa_phone'] and vol['wa_apikey']:
+                _wa_send(vol['wa_phone'], vol['wa_apikey'],
+                    f"Update: {req['family_name']} has cancelled their food order for {req['cycle_title']}.\n"
+                    f"Your {vol['task_type']} slot has been released — no action needed."
+                )
+
+        log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
+        return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
+
+    except Exception as _e:
+        log.exception(f'cancel_food_order ERROR — family={family_id!r} request={request_id!r}')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
 
 
 @app.route('/api/food-order/items', methods=['PUT'])

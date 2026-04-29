@@ -822,7 +822,7 @@
       document.getElementById('items-section').style.display = 'none';
       document.getElementById('skipped-banner').style.display = 'block';
     } catch(e) {
-      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : ('Something went wrong. Please try again. (' + e.message + ')'));
     }
   }
 
