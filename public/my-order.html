@@ -397,6 +397,7 @@
   .status-received { background: #e8f5ee; color: #155f30; }
   .status-upcoming  { background: #fff8e6; color: #8a5c00; }
   .status-skipped   { background: var(--gray-1); color: var(--gray-4); }
+  .status-cancelled { background: #fdecea; color: #b00; }
   .status-pending   { background: #eef3ff; color: #3350aa; }
 
   .no-history { font-size: 14px; color: var(--gray-4); text-align: center; padding: 32px 0; }
@@ -577,8 +578,8 @@
   };
 
   const STATUS_LABELS = {
-    en: { received: 'Received', upcoming: 'Upcoming', skipped: 'Not this cycle', pending: 'Pending', confirmed: 'Confirmed' },
-    ar: { received: 'تم الاستلام', upcoming: 'قادم', skipped: 'تم التخطي', pending: 'قيد الانتظار', confirmed: 'تم التأكيد' }
+    en: { received: 'Received', upcoming: 'Upcoming', skipped: 'Not this cycle', cancelled: 'Cancelled', pending: 'Pending', confirmed: 'Confirmed' },
+    ar: { received: 'تم الاستلام', upcoming: 'قادم', skipped: 'تم التخطي', cancelled: 'تم الإلغاء', pending: 'قيد الانتظار', confirmed: 'تم التأكيد' }
   };
 
   // ── Login ─────────────────────────────────────────────────────────────────
@@ -697,8 +698,12 @@
       if (d.already_submitted) {
         document.getElementById('cycle-actions').style.display = 'none';
 
-        if (d.order_status === 'skipped') {
+        if (d.order_status === 'skipped' || d.order_status === 'cancelled') {
           document.getElementById('skipped-banner').style.display = 'block';
+          document.getElementById('skipped-banner').querySelector('span').textContent =
+            d.order_status === 'cancelled'
+              ? (currentLang === 'ar' ? 'لقد ألغيت طلبك. نراك في الدورة القادمة.' : 'You cancelled this order. See you next cycle.')
+              : (currentLang === 'ar' ? 'لقد تخطيت هذه الدورة. نراك في المرة القادمة.' : 'You have skipped this cycle. See you next time.');
           document.getElementById('items-section').style.display = 'none';
         } else {
           document.getElementById('confirmed-banner').style.display = 'block';
@@ -757,6 +762,7 @@
       const statusKey = row.status === 'delivered'                                       ? 'received'
                       : ['confirmed','auto_confirmed','submitted'].includes(row.status)  ? 'confirmed'
                       : row.status === 'skipped'                                         ? 'skipped'
+                      : row.status === 'cancelled'                                       ? 'cancelled'
                       : row.status === 'upcoming'                                        ? 'upcoming'
                       : 'pending';
       const statusClass = `status-${statusKey}`;
