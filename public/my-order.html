@@ -3,14 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>My Order — Sihha</title>
+<title>My Deliveries — Sihha</title>
 <meta name="theme-color" content="#111111">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
   @font-face {
@@ -28,17 +26,16 @@
 
   :root {
     --black: #111111; --white: #ffffff;
-    --gray-1: #f6f6f6; --gray-2: #e8e8e8;
-    --gray-3: #cccccc; --gray-4: #888888; --gray-5: #444444;
+    --gray-1: #f6f6f6; --gray-2: #e8e8e8; --gray-3: #cccccc;
+    --gray-4: #888888; --gray-5: #444444;
     --green: #1a7a3c; --red: #b00;
+    --amber-bg: #fff8e6; --amber-border: #f0c040; --amber-text: #7a4a00;
     --font-body: 'AreaNormal', 'Cairo', Helvetica, Arial, sans-serif;
     --font-head: 'AreaExtrabold', 'Cairo', Helvetica, Arial, sans-serif;
     --font-ar: 'Cairo', Arial, sans-serif;
   }
 
   [lang="ar"] { font-family: var(--font-ar); }
-  [lang="ar"] .logo { font-family: var(--font-ar); font-weight: 700; }
-
   body {
     font-family: var(--font-body);
     background: var(--gray-1);
@@ -48,6 +45,7 @@
     min-height: 100vh;
   }
 
+  /* ── Header ── */
   header {
     background: var(--black);
     color: var(--white);
@@ -55,6 +53,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
   .logo {
     font-family: var(--font-head);
@@ -72,14 +73,13 @@
     font-size: 13px;
     cursor: pointer;
     font-family: var(--font-body);
-    letter-spacing: 0.03em;
     transition: border-color 0.15s;
   }
   .lang-toggle:hover { border-color: var(--white); }
 
-  .container { max-width: 520px; margin: 0 auto; padding: 32px 16px 60px; }
+  .container { max-width: 560px; margin: 0 auto; padding: 28px 16px 80px; }
 
-  /* ── Login card ── */
+  /* ── Login ── */
   .login-card {
     background: var(--white);
     border: 1px solid var(--gray-2);
@@ -93,9 +93,7 @@
     letter-spacing: -0.03em;
     margin-bottom: 8px;
   }
-  [lang="ar"] .login-card h1 { font-family: var(--font-ar); font-weight: 700; letter-spacing: 0; }
   .login-card p { font-size: 14px; color: var(--gray-4); margin-bottom: 28px; }
-
   .field-label {
     display: block;
     font-size: 11px;
@@ -106,7 +104,6 @@
     margin-bottom: 7px;
   }
   [lang="ar"] .field-label { text-transform: none; letter-spacing: 0; font-size: 13px; }
-
   input[type="tel"] {
     width: 100%;
     border: 1px solid var(--gray-2);
@@ -115,304 +112,322 @@
     font-size: 17px;
     background: var(--white);
     outline: none;
-    -webkit-appearance: none;
     border-radius: 0;
+    -webkit-appearance: none;
     transition: border-color 0.15s;
   }
   input[type="tel"]:focus { border-color: var(--black); }
-
   .btn-primary {
-    display: block;
-    width: 100%;
-    background: var(--black);
-    color: var(--white);
-    border: none;
-    padding: 14px 24px;
+    display: block; width: 100%;
+    background: var(--black); color: var(--white);
+    border: none; padding: 14px 24px;
     font-family: var(--font-body);
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    margin-top: 16px;
-    text-transform: uppercase;
+    font-size: 14px; font-weight: 600;
+    letter-spacing: 0.04em; cursor: pointer;
+    margin-top: 16px; text-transform: uppercase;
     transition: background 0.15s;
   }
-  [lang="ar"] .btn-primary { text-transform: none; font-family: var(--font-ar); letter-spacing: 0; font-size: 16px; }
+  [lang="ar"] .btn-primary { text-transform: none; letter-spacing: 0; font-size: 16px; font-family: var(--font-ar); }
   .btn-primary:hover { background: #333; }
   .btn-primary:disabled { background: var(--gray-3); cursor: not-allowed; }
-
-  .error-msg {
-    font-size: 13px;
-    color: var(--red);
-    margin-top: 12px;
-    display: none;
-  }
-  .wa-link {
-    display: inline-block;
-    margin-top: 6px;
-    font-size: 13px;
-    color: var(--green);
-    text-decoration: none;
-    border-bottom: 1px solid currentColor;
-  }
+  .error-msg { font-size: 13px; color: var(--red); margin-top: 12px; display: none; }
+  .wa-link { display:inline-block; margin-top:6px; font-size:13px; color:var(--green); text-decoration:none; border-bottom:1px solid currentColor; }
 
   /* ── Dashboard ── */
   #dashboard { display: none; }
-
   .greeting {
-    font-size: 13px;
-    color: var(--gray-4);
+    font-size: 13px; color: var(--gray-4);
     margin-bottom: 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    display: flex; justify-content: space-between; align-items: center;
   }
   .btn-logout {
-    background: none;
-    border: none;
-    font-size: 12px;
-    color: var(--gray-4);
-    cursor: pointer;
-    text-decoration: underline;
-    font-family: var(--font-body);
+    background: none; border: none;
+    font-size: 12px; color: var(--gray-4); cursor: pointer;
+    text-decoration: underline; font-family: var(--font-body);
   }
   .btn-logout:hover { color: var(--black); }
 
-  /* Upcoming cycle card */
+  /* ── Tabs ── */
+  .tab-bar {
+    display: flex;
+    border-bottom: 2px solid var(--gray-2);
+    margin-bottom: 24px;
+  }
+  .tab-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 12px 0;
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--gray-4);
+    cursor: pointer;
+    text-transform: uppercase;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  [lang="ar"] .tab-btn { text-transform: none; letter-spacing: 0; font-size: 14px; font-family: var(--font-ar); }
+  .tab-btn.active { color: var(--black); border-bottom-color: var(--black); }
+  .tab-btn:hover:not(.active) { color: var(--gray-5); }
+
+  /* ── Cycle card ── */
   .cycle-card {
     background: var(--white);
     border: 1px solid var(--gray-2);
-    padding: 24px;
-    margin-bottom: 24px;
+    margin-bottom: 16px;
+    overflow: hidden;
   }
+  .cycle-card-header {
+    padding: 20px 20px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .cycle-card-meta { flex: 1; min-width: 0; }
   .cycle-card-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--gray-4);
-    margin-bottom: 6px;
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--gray-4); margin-bottom: 4px;
   }
   [lang="ar"] .cycle-card-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
   .cycle-card-title {
     font-family: var(--font-head);
-    font-size: 18px;
-    font-weight: 800;
+    font-size: 17px; font-weight: 800;
     letter-spacing: -0.02em;
-    margin-bottom: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   [lang="ar"] .cycle-card-title { font-family: var(--font-ar); font-weight: 700; letter-spacing: 0; }
-  .cycle-card-dates { font-size: 13px; color: var(--gray-5); margin-bottom: 6px; }
-  .bundle-badge {
-    display: inline-block;
-    background: var(--gray-1);
-    border: 1px solid var(--gray-2);
-    font-size: 12px;
-    padding: 3px 10px;
-    margin-bottom: 20px;
-  }
-  .cycle-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-  .btn-confirm {
-    flex: 1;
-    background: var(--green);
-    color: var(--white);
-    border: none;
-    padding: 13px 20px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: var(--font-body);
-    transition: background 0.15s;
-  }
-  [lang="ar"] .btn-confirm { font-family: var(--font-ar); font-size: 15px; }
-  .btn-confirm:hover { background: #155f30; }
-  .btn-skip {
-    flex: 1;
-    background: transparent;
-    color: var(--gray-5);
-    border: 1px solid var(--gray-3);
-    padding: 13px 20px;
-    font-size: 14px;
-    cursor: pointer;
-    font-family: var(--font-body);
-    transition: all 0.15s;
-  }
-  [lang="ar"] .btn-skip { font-family: var(--font-ar); font-size: 15px; }
-  .btn-skip:hover { border-color: var(--black); color: var(--black); }
+  .cycle-card-dates { font-size: 13px; color: var(--gray-5); margin-top: 3px; }
 
-  .confirmed-banner {
-    background: #e8f5ee;
-    border: 1px solid #a8d9b8;
-    color: #155f30;
-    padding: 14px 16px;
-    font-size: 14px;
+  .status-badge {
+    flex-shrink: 0;
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 4px 10px; white-space: nowrap;
+  }
+  [lang="ar"] .status-badge { text-transform: none; letter-spacing: 0; font-size: 11px; }
+  .badge-open     { background: #e8f5ee; color: #155f30; }
+  .badge-upcoming { background: var(--amber-bg); color: var(--amber-text); }
+  .badge-shopping { background: #eef3ff; color: #3350aa; }
+  .badge-confirmed { background: #e8f5ee; color: #155f30; }
+  .badge-cancelled  { background: #fdecea; color: var(--red); }
+  .badge-skipped   { background: var(--gray-1); color: var(--gray-4); }
+
+  .cycle-card-body { padding: 0 20px 20px; }
+
+  /* ── Place order form ── */
+  .place-order-btn {
+    width: 100%;
+    background: var(--black); color: var(--white);
+    border: none; padding: 13px 20px;
+    font-family: var(--font-body);
+    font-size: 14px; font-weight: 600;
+    letter-spacing: 0.04em; cursor: pointer;
+    text-transform: uppercase; margin-top: 4px;
+    transition: background 0.15s; display: block;
+  }
+  [lang="ar"] .place-order-btn { text-transform: none; letter-spacing: 0; font-size: 15px; font-family: var(--font-ar); }
+  .place-order-btn:hover { background: #333; }
+
+  .order-form-panel {
+    border-top: 1px solid var(--gray-2);
+    padding: 16px 0 0;
+    margin-top: 4px;
     display: none;
   }
-  .skipped-banner {
-    background: var(--gray-1);
-    border: 1px solid var(--gray-2);
-    color: var(--gray-5);
-    padding: 14px 16px;
-    font-size: 14px;
-    display: none;
+  .order-form-panel.open { display: block; }
+  .form-section-title {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--gray-5); margin-bottom: 12px;
   }
+  [lang="ar"] .form-section-title { text-transform: none; letter-spacing: 0; font-size: 13px; }
 
-  /* Item list */
-  .items-section {
-    background: var(--white);
-    border: 1px solid var(--gray-2);
-    padding: 20px 24px;
-    margin-bottom: 16px;
-  }
-  .items-section-title {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--gray-4);
-    margin-bottom: 14px;
-    font-weight: 700;
-  }
-  [lang="ar"] .items-section-title { text-transform: none; letter-spacing: 0; font-size: 12px; }
   .item-category {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--gray-5);
-    margin: 14px 0 6px;
-    padding-bottom: 4px;
+    margin: 12px 0 4px; padding-bottom: 4px;
     border-bottom: 1px solid var(--gray-2);
   }
   [lang="ar"] .item-category { text-transform: none; letter-spacing: 0; font-size: 13px; }
   .item-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--gray-1);
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 0; border-bottom: 1px solid var(--gray-1);
     cursor: pointer;
   }
   .item-row:last-child { border-bottom: none; }
   .item-check {
     width: 20px; height: 20px;
     border: 2px solid var(--gray-3);
-    border-radius: 4px;
-    flex-shrink: 0;
+    border-radius: 4px; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
-    transition: all 0.12s;
-    background: var(--white);
+    transition: all 0.12s; background: var(--white);
   }
-  .item-row.selected .item-check {
-    background: var(--green);
-    border-color: var(--green);
-  }
+  .item-row.selected .item-check { background: var(--green); border-color: var(--green); }
   .item-row.selected .item-check::after {
     content: '';
     width: 5px; height: 9px;
-    border-right: 2px solid white;
-    border-bottom: 2px solid white;
-    transform: rotate(45deg) translate(-1px, -1px);
-    display: block;
+    border-right: 2px solid white; border-bottom: 2px solid white;
+    transform: rotate(45deg) translate(-1px, -1px); display: block;
   }
   .item-name { flex: 1; font-size: 14px; }
   .item-qty {
-    font-size: 12px;
-    color: var(--gray-4);
-    white-space: nowrap;
+    font-size: 12px; color: var(--gray-4);
+    white-space: nowrap; background: var(--gray-1);
+    padding: 2px 8px; border-radius: 10px;
+  }
+
+  .notes-label {
+    display: block; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--gray-5); margin: 14px 0 6px;
+  }
+  [lang="ar"] .notes-label { text-transform: none; letter-spacing: 0; font-size: 13px; }
+  textarea.order-notes {
+    width: 100%; border: 1px solid var(--gray-2);
+    padding: 10px 12px; font-family: var(--font-body);
+    font-size: 13px; resize: vertical; outline: none;
+    border-radius: 0; transition: border-color 0.15s;
+  }
+  textarea.order-notes:focus { border-color: var(--black); }
+
+  .form-actions { display: flex; gap: 10px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+  .btn-confirm-order {
+    background: var(--green); color: var(--white);
+    border: none; padding: 12px 24px;
+    font-family: var(--font-body); font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+  }
+  [lang="ar"] .btn-confirm-order { font-family: var(--font-ar); font-size: 15px; }
+  .btn-confirm-order:hover { background: #155f30; }
+  .btn-confirm-order:disabled { background: var(--gray-3); cursor: not-allowed; }
+  .btn-cancel-form {
+    background: none; border: 1px solid var(--gray-3);
+    color: var(--gray-5); padding: 12px 16px;
+    font-family: var(--font-body); font-size: 13px; cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .btn-cancel-form:hover { border-color: var(--black); color: var(--black); }
+  .form-msg { font-size: 13px; display: none; }
+
+  /* ── Confirmed order view ── */
+  .confirmed-items {
     background: var(--gray-1);
-    padding: 2px 8px;
-    border-radius: 10px;
+    border: 1px solid var(--gray-2);
+    padding: 12px 14px; margin-bottom: 14px;
   }
-  .items-loading { font-size: 13px; color: var(--gray-4); padding: 8px 0; }
+  .confirmed-items-label {
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--gray-4); margin-bottom: 8px;
+  }
+  [lang="ar"] .confirmed-items-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+  .confirmed-item-cat { font-size: 11px; color: var(--gray-4); margin: 6px 0 2px; }
+  .confirmed-item-list { font-size: 13px; color: var(--gray-5); display: flex; flex-wrap: wrap; gap: 4px; }
+  .confirmed-item-chip {
+    background: var(--white); border: 1px solid var(--gray-2);
+    padding: 2px 10px; font-size: 12px;
+  }
 
-  /* Bundle change request */
-  .bundle-change-row {
-    margin-top: 12px;
-    font-size: 13px;
-    color: var(--gray-4);
+  .order-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .btn-request-change {
+    background: var(--black); color: var(--white);
+    border: none; padding: 9px 16px;
+    font-family: var(--font-body); font-size: 13px; cursor: pointer;
+    transition: background 0.15s;
   }
-  .bundle-change-link {
-    color: var(--black);
+  [lang="ar"] .btn-request-change { font-family: var(--font-ar); font-size: 14px; }
+  .btn-request-change:hover { background: #333; }
+  .btn-cancel-order {
+    background: none; border: none; color: var(--red);
+    font-family: var(--font-body); font-size: 13px;
+    cursor: pointer; text-decoration: underline; padding: 0;
+  }
+
+  /* Pending change request banner */
+  .pending-cr-banner {
+    background: var(--amber-bg); border: 1px solid var(--amber-border);
+    padding: 12px 14px; margin-bottom: 12px;
+  }
+  .pending-cr-title { font-weight: 700; color: var(--amber-text); font-size: 13px; margin-bottom: 4px; }
+  .pending-cr-notes { font-size: 12px; color: #666; margin-bottom: 8px; }
+  .btn-retract {
+    background: none; border: 1px solid #bbb; color: #666;
+    padding: 4px 12px; font-size: 12px; cursor: pointer; font-family: var(--font-body);
+    transition: border-color 0.15s;
+  }
+  .btn-retract:hover { border-color: var(--black); color: var(--black); }
+
+  /* Change request form */
+  .cr-form-panel {
+    border-top: 1px solid var(--gray-2);
+    padding: 14px 0 0; margin-top: 8px;
+    display: none;
+  }
+  .cr-form-panel.open { display: block; }
+
+  /* Event timeline */
+  .events-toggle {
+    font-size: 12px; color: var(--gray-4);
+    background: none; border: none; cursor: pointer;
+    font-family: var(--font-body); padding: 4px 0;
     text-decoration: underline;
-    cursor: pointer;
-    background: none;
-    border: none;
-    font-size: 13px;
-    font-family: var(--font-body);
-    padding: 0;
   }
-  .bundle-change-form { margin-top: 10px; display: none; }
-  .size-picker { display: flex; gap: 8px; margin-bottom: 10px; }
-  .size-btn {
-    flex: 1;
-    padding: 10px;
-    border: 1px solid var(--gray-2);
-    background: var(--white);
-    cursor: pointer;
-    font-size: 14px;
-    font-family: var(--font-body);
-    transition: all 0.1s;
+  .events-toggle:hover { color: var(--black); }
+  .events-list {
+    margin-top: 8px; display: none;
+    border-top: 1px solid var(--gray-1); padding-top: 8px;
   }
-  .size-btn.active { border-color: var(--black); background: var(--black); color: var(--white); }
-  .size-btn:hover:not(.active) { border-color: var(--gray-4); }
-  .bundle-submit {
-    background: var(--black);
-    color: var(--white);
-    border: none;
-    padding: 10px 20px;
-    font-size: 13px;
-    cursor: pointer;
-    font-family: var(--font-body);
+  .events-list.open { display: block; }
+  .event-row {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 4px 0; font-size: 12px;
+    border-bottom: 1px solid var(--gray-1);
   }
-  .bundle-msg { font-size: 13px; color: var(--green); margin-top: 6px; display: none; }
+  .event-row:last-child { border-bottom: none; }
+  .event-label { color: #333; }
+  .event-detail { color: #888; font-size: 11px; }
+  .event-time { color: #bbb; white-space: nowrap; margin-left: 10px; font-size: 11px; }
 
-  /* History */
-  .section-title {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--gray-4);
-    margin-bottom: 12px;
+  /* No-order states */
+  .coming-soon-note {
+    font-size: 13px; color: var(--gray-4); margin-top: 4px; padding: 4px 0 4px;
   }
-  [lang="ar"] .section-title { text-transform: none; letter-spacing: 0; font-size: 13px; }
+  .locked-note {
+    font-size: 13px; color: var(--gray-4); background: var(--gray-1);
+    border: 1px solid var(--gray-2); padding: 10px 14px; margin-top: 4px;
+  }
 
-  .history-list { display: flex; flex-direction: column; gap: 1px; }
+  /* No cycles placeholder */
+  .no-cycles {
+    background: var(--white); border: 1px solid var(--gray-2);
+    padding: 36px 24px; text-align: center;
+    color: var(--gray-4); font-size: 14px; line-height: 1.7;
+  }
+
+  /* ── History tab ── */
   .history-row {
-    background: var(--white);
-    border: 1px solid var(--gray-2);
+    background: var(--white); border: 1px solid var(--gray-2);
     padding: 14px 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 1px;
   }
   .history-cycle { font-size: 14px; font-weight: 600; }
-  .history-bundle { font-size: 12px; color: var(--gray-4); margin-top: 2px; }
+  .history-dates { font-size: 12px; color: var(--gray-4); margin-top: 2px; }
   .status-pill {
-    font-size: 11px;
-    padding: 3px 10px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
+    font-size: 11px; padding: 3px 10px; font-weight: 600;
+    letter-spacing: 0.03em; white-space: nowrap; flex-shrink: 0;
   }
   [lang="ar"] .status-pill { letter-spacing: 0; font-size: 12px; }
-  .status-received { background: #e8f5ee; color: #155f30; }
-  .status-upcoming  { background: #fff8e6; color: #8a5c00; }
-  .status-skipped   { background: var(--gray-1); color: var(--gray-4); }
-  .status-cancelled { background: #fdecea; color: #b00; }
-  .status-pending   { background: #eef3ff; color: #3350aa; }
-
+  .pill-delivered  { background: #e8f5ee; color: #155f30; }
+  .pill-confirmed  { background: #e8f5ee; color: #155f30; }
+  .pill-skipped    { background: var(--gray-1); color: var(--gray-4); }
+  .pill-cancelled  { background: #fdecea; color: var(--red); }
   .no-history { font-size: 14px; color: var(--gray-4); text-align: center; padding: 32px 0; }
-
-  /* No upcoming card */
-  .no-cycle-card {
-    background: var(--white);
-    border: 1px solid var(--gray-2);
-    padding: 24px;
-    margin-bottom: 24px;
-    text-align: center;
-    color: var(--gray-4);
-    font-size: 14px;
-    line-height: 1.7;
-  }
 </style>
 </head>
 <body>
@@ -426,14 +441,14 @@
 <div id="login-screen">
   <div class="container">
     <div class="login-card">
-      <h1 data-en="My Order" data-ar="طلباتي">My Order</h1>
-      <p data-en="Enter the phone number you registered with to view your deliveries and confirm upcoming orders." data-ar="أدخل رقم الهاتف الذي سجّلت به لعرض طلباتك وتأكيد التسليمات القادمة.">Enter the phone number you registered with to view your deliveries and confirm upcoming orders.</p>
+      <h1 data-en="My Deliveries" data-ar="طلباتي">My Deliveries</h1>
+      <p data-en="Enter the phone number you registered with to manage your food orders." data-ar="أدخل رقم الهاتف الذي سجّلت به لإدارة طلباتك.">Enter the phone number you registered with to manage your food orders.</p>
 
       <label class="field-label" for="phone-input" data-en="Phone Number" data-ar="رقم الهاتف">Phone Number</label>
       <input type="tel" id="phone-input" placeholder="e.g. 5551234567" autocomplete="tel" inputmode="numeric">
 
       <button class="btn-primary" onclick="doLogin()" id="login-btn">
-        <span data-en="VIEW MY ORDERS" data-ar="عرض طلباتي">VIEW MY ORDERS</span>
+        <span data-en="VIEW MY DELIVERIES" data-ar="عرض طلباتي">VIEW MY DELIVERIES</span>
       </button>
 
       <div class="error-msg" id="login-error">
@@ -442,7 +457,6 @@
            data-en="Message your coordinator on WhatsApp →" data-ar="تواصل مع المنسق عبر واتساب →">Message your coordinator on WhatsApp →</a>
       </div>
     </div>
-
     <p style="text-align:center;margin-top:20px;font-size:13px;color:var(--gray-4)">
       <span data-en="Not registered yet?" data-ar="لم تسجّل بعد؟">Not registered yet?</span>
       <a href="/intake" style="color:var(--black);text-decoration:underline" data-en="Sign up here →" data-ar="سجّل هنا →">Sign up here →</a>
@@ -459,783 +473,634 @@
       <button class="btn-logout" onclick="doLogout()" data-en="Sign out" data-ar="تسجيل الخروج">Sign out</button>
     </div>
 
-    <!-- Upcoming cycle -->
-    <div id="upcoming-section">
-
-      <!-- Has an upcoming cycle to confirm -->
-      <div id="cycle-card" class="cycle-card" style="display:none">
-        <div class="cycle-card-label" data-en="Upcoming Delivery" data-ar="التسليم القادم">Upcoming Delivery</div>
-        <div class="cycle-card-title" id="cycle-title-display"></div>
-        <div class="cycle-card-dates" id="cycle-dates-display"></div>
-        <span class="bundle-badge" id="cycle-bundle-display"></span>
-
-        <div class="cycle-actions" id="cycle-actions">
-          <button class="btn-confirm" onclick="doConfirm()" data-en="Confirm Delivery" data-ar="تأكيد التسليم">Confirm Delivery</button>
-          <button class="btn-skip" onclick="doSkip()" data-en="Not this cycle" data-ar="تخطي هذه الدورة">Not this cycle</button>
-        </div>
-        <div class="confirmed-banner" id="confirmed-banner">
-          <span data-en="✓ Confirmed — your bundle will be delivered on the scheduled date." data-ar="✓ تم التأكيد — سيتم تسليم طلبك في الموعد المحدد.">✓ Confirmed — your bundle will be delivered on the scheduled date.</span>
-        </div>
-        <div class="skipped-banner" id="skipped-banner">
-          <span data-en="You have skipped this cycle. See you next time." data-ar="لقد تخطيت هذه الدورة. نراك في المرة القادمة.">You have skipped this cycle. See you next time.</span>
-        </div>
-        <div id="order-actions-row" style="display:none;margin-top:12px;gap:12px;align-items:center;flex-wrap:wrap;">
-          <button id="request-change-btn" onclick="showChangeRequestForm()" style="background:#111;color:#fff;border:none;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;display:none;"
-            data-en="Request Change" data-ar="طلب تعديل">Request Change</button>
-          <button onclick="doCancelOrder()" id="cancel-order-btn" style="background:none;border:none;color:#b00;font-size:13px;cursor:pointer;text-decoration:underline;padding:0;display:none;"
-            data-en="Cancel this order" data-ar="إلغاء هذا الطلب">Cancel this order</button>
-        </div>
-
-        <!-- Pending change request banner -->
-        <div id="pending-change-banner" style="display:none;margin-top:12px;background:#fff8e6;border:1px solid #f0c040;padding:12px 14px;font-size:13px;">
-          <div style="font-weight:700;color:#7a4a00;margin-bottom:4px;" data-en="⏳ Change Request Pending" data-ar="⏳ طلب تعديل قيد المراجعة">⏳ Change Request Pending</div>
-          <div id="pending-change-notes" style="color:#555;margin-bottom:8px;font-size:12px;"></div>
-          <button onclick="doRetractRequest()" style="background:none;border:1px solid #aaa;color:#555;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;"
-            data-en="Retract request" data-ar="سحب الطلب">Retract request</button>
-        </div>
-
-        <!-- Change request form (hidden until button clicked) -->
-        <div id="change-request-form" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:14px;">
-          <div style="font-size:13px;font-weight:700;margin-bottom:10px;" data-en="Request Change — select what you need" data-ar="طلب تعديل — اختر ما تحتاجه">Request Change — select what you need</div>
-          <div id="change-request-items" style="margin-bottom:12px;"></div>
-          <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;" data-en="Notes for coordinator (optional)" data-ar="ملاحظات للمنسق (اختياري)">Notes for coordinator (optional)</label>
-          <textarea id="change-request-notes" rows="3" style="width:100%;border:1px solid #ddd;padding:8px;font-size:13px;font-family:inherit;resize:vertical;" placeholder="e.g. We don't need eggs this cycle"></textarea>
-          <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center;">
-            <button onclick="submitChangeRequest()" id="submit-change-btn" style="background:#111;color:#fff;border:none;padding:10px 20px;font-size:13px;cursor:pointer;font-family:inherit;"
-              data-en="Submit Request" data-ar="إرسال الطلب">Submit Request</button>
-            <button onclick="hideChangeRequestForm()" style="background:none;border:1px solid #ccc;color:#555;padding:10px 14px;font-size:13px;cursor:pointer;font-family:inherit;"
-              data-en="Cancel" data-ar="إلغاء">Cancel</button>
-            <div id="change-request-msg" style="font-size:13px;display:none;"></div>
-          </div>
-        </div>
-        <!-- Event timeline -->
-        <div id="order-events-section" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
-          <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:8px;"
-            data-en="Order Activity" data-ar="سجل الطلب">Order Activity</div>
-          <div id="order-events-list"></div>
-        </div>
-
-        <!-- Bundle size change -->
-        <div class="bundle-change-row">
-          <span data-en="Wrong size?" data-ar="الحجم غير مناسب؟">Wrong size?</span>
-          <button class="bundle-change-link" onclick="toggleBundleForm()" data-en="Request a change" data-ar="طلب تغيير">Request a change</button>
-          <div class="bundle-change-form" id="bundle-change-form">
-            <div class="size-picker" id="size-picker"></div>
-            <button class="bundle-submit" onclick="submitBundleChange()" data-en="Send request" data-ar="إرسال الطلب">Send request</button>
-            <div class="bundle-msg" id="bundle-msg"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- No upcoming cycle -->
-      <div id="no-cycle-card" class="no-cycle-card" style="display:none">
-        <p data-en="No upcoming delivery to confirm right now." data-ar="لا يوجد تسليم قادم للتأكيد في الوقت الحالي.">No upcoming delivery to confirm right now.</p>
-        <p style="margin-top:6px;font-size:13px" data-en="Check back closer to the next delivery window." data-ar="تحقق مجدداً قريباً من موعد التسليم القادم.">Check back closer to the next delivery window.</p>
-      </div>
-
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-btn-deliveries" onclick="switchTab('deliveries')"
+        data-en="MY DELIVERIES" data-ar="طلباتي">MY DELIVERIES</button>
+      <button class="tab-btn" id="tab-btn-history" onclick="switchTab('history')"
+        data-en="HISTORY" data-ar="السجل">HISTORY</button>
     </div>
 
-    <!-- Item selection (shown when there is an open cycle & not yet submitted) -->
-    <div id="items-section" style="display:none">
-      <div class="items-section">
-        <div class="items-section-title" id="items-section-title" data-en="Your Bundle Items — select what you need" data-ar="محتويات طردك — اختر ما تحتاجه">Your Bundle Items — select what you need</div>
-        <div id="items-list"><div class="items-loading" data-en="Loading items…" data-ar="جارٍ التحميل…">Loading items…</div></div>
-        <!-- Edit mode controls (hidden until Edit Order clicked) -->
-        <div id="edit-actions" style="display:none;margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;display:none;">
-          <button onclick="saveEditOrder()" id="save-edit-btn" style="background:#111;color:#fff;border:none;padding:10px 20px;font-size:13px;cursor:pointer;font-family:inherit;"
-            data-en="Save Changes" data-ar="حفظ التغييرات">Save Changes</button>
-          <button onclick="cancelEditOrder()" style="background:none;color:#555;border:1px solid #ccc;padding:10px 16px;font-size:13px;cursor:pointer;font-family:inherit;"
-            data-en="Cancel" data-ar="إلغاء">Cancel</button>
-          <div id="edit-msg" style="font-size:13px;color:#1a8754;display:none;align-self:center;"></div>
-        </div>
-      </div>
+    <div id="tab-deliveries">
+      <div id="cycles-list"></div>
     </div>
 
-    <!-- Order history -->
-    <div id="history-section" style="margin-top:8px">
-      <div class="section-title" data-en="Delivery History" data-ar="سجل التسليمات">Delivery History</div>
-      <div id="history-list" class="history-list"></div>
+    <div id="tab-history" style="display:none">
+      <div id="history-list"></div>
     </div>
 
   </div>
 </div>
 
 <script>
-  // ── Language ──────────────────────────────────────────────────────────────
-  let currentLang = 'en';
-
-  function toggleLang() {
-    currentLang = currentLang === 'en' ? 'ar' : 'en';
-    applyLang();
-  }
-
-  function applyLang() {
-    const root = document.getElementById('html-root');
-    root.lang = currentLang;
-    root.dir  = currentLang === 'ar' ? 'rtl' : 'ltr';
-    document.getElementById('lang-btn').textContent = currentLang === 'en' ? 'عربي' : 'EN';
-    document.querySelectorAll('[data-en]').forEach(el => {
-      el.textContent = el.getAttribute('data-' + currentLang) || el.getAttribute('data-en');
-    });
-    // Placeholders
-    const phoneInput = document.getElementById('phone-input');
-    phoneInput.placeholder = currentLang === 'ar' ? 'مثال: 5551234567' : 'e.g. 5551234567';
-    // Re-render dynamic content if loaded
-    if (STATE.family) renderDashboard();
-  }
-
-  // ── State ─────────────────────────────────────────────────────────────────
-  const STATE = {
-    family: null,
-    cycle: null,
-    familyId: null,
-    bundleSize: null,
-    pendingBundleSize: null,
-    bundleCategories: [],
-    selectedCategories: [],
-    canRequestChange: false,
-    pendingChangeRequest: null,
-  };
-
-  const BUNDLE_LABELS = {
-    en: { S: 'Small bundle (S)', M: 'Medium bundle (M)', L: 'Large bundle (L)' },
-    ar: { S: 'طرد صغير (S)', M: 'طرد متوسط (M)', L: 'طرد كبير (L)' }
-  };
-
-  const STATUS_LABELS = {
-    en: { received: 'Received', upcoming: 'Upcoming', skipped: 'Not this cycle', cancelled: 'Cancelled', pending: 'Pending', confirmed: 'Confirmed' },
-    ar: { received: 'تم الاستلام', upcoming: 'قادم', skipped: 'تم التخطي', cancelled: 'تم الإلغاء', pending: 'قيد الانتظار', confirmed: 'تم التأكيد' }
-  };
-
-  // ── Login ─────────────────────────────────────────────────────────────────
-  document.getElementById('phone-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doLogin();
+// ── Language ───────────────────────────────────────────────────────────────────
+let currentLang = 'en';
+function toggleLang() {
+  currentLang = currentLang === 'en' ? 'ar' : 'en';
+  applyLang();
+}
+function applyLang() {
+  const root = document.getElementById('html-root');
+  root.lang = currentLang;
+  root.dir  = currentLang === 'ar' ? 'rtl' : 'ltr';
+  document.getElementById('lang-btn').textContent = currentLang === 'en' ? 'عربي' : 'EN';
+  document.querySelectorAll('[data-en]').forEach(el => {
+    el.textContent = el.getAttribute('data-' + currentLang) || el.getAttribute('data-en');
   });
+  document.getElementById('phone-input').placeholder =
+    currentLang === 'ar' ? 'مثال: 5551234567' : 'e.g. 5551234567';
+  if (STATE.familyId) renderAll();
+}
 
-  async function doLogin() {
-    const phoneRaw = document.getElementById('phone-input').value.trim();
-    const phone = phoneRaw.replace(/\D/g, '');
-    if (!phone) {
-      showLoginError(currentLang === 'ar' ? 'الرجاء إدخال رقم الهاتف.' : 'Please enter your phone number.');
-      return;
-    }
+// ── State ──────────────────────────────────────────────────────────────────────
+const STATE = {
+  phone:    '',
+  family:   null,
+  familyId: null,
+  bundleSize: null,
+  cycles:   [],
+  history:  [],
+  activeTab: 'deliveries',
+};
 
-    const btn = document.getElementById('login-btn');
-    btn.disabled = true;
+const BUNDLE_LABELS = {
+  en: { S: 'Small bundle', M: 'Medium bundle', L: 'Large bundle' },
+  ar: { S: 'طرد صغير',     M: 'طرد متوسط',    L: 'طرد كبير' }
+};
 
-    try {
-      const res = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
-      const data = await res.json();
+const STATUS_LABELS_EN = {
+  delivered: 'Delivered', confirmed: 'Confirmed', auto_confirmed: 'Confirmed',
+  submitted: 'Confirmed', skipped: 'Skipped', cancelled: 'Cancelled',
+  pending_confirmation: 'Pending', open: 'Open',
+};
+const STATUS_LABELS_AR = {
+  delivered: 'تم التسليم', confirmed: 'تم التأكيد', auto_confirmed: 'تم التأكيد',
+  submitted: 'تم التأكيد', skipped: 'تم التخطي', cancelled: 'تم الإلغاء',
+  pending_confirmation: 'قيد الانتظار', open: 'مفتوح',
+};
 
-      if (!data.registered) {
-        const msg = data.message || (currentLang === 'ar'
+const EVENT_LABELS = {
+  confirmed:        { en: '✓ Order confirmed',              ar: '✓ تم تأكيد الطلب' },
+  items_edited:     { en: '✏ Items updated',                ar: '✏ تم تعديل العناصر' },
+  cancelled:        { en: '✕ Order cancelled',              ar: '✕ تم إلغاء الطلب' },
+  auto_skipped:     { en: '— No response — skipped',        ar: '— لم يستجب — تم التخطي' },
+  admin_override:   { en: '⚙ Updated by coordinator',       ar: '⚙ تم التحديث من المنسق' },
+  change_requested: { en: '📋 Change request submitted',    ar: '📋 تم إرسال طلب التعديل' },
+  change_approved:  { en: '✓ Change request approved',      ar: '✓ تمت الموافقة على طلب التعديل' },
+  change_rejected:  { en: '✕ Change request not approved',  ar: '✕ لم تتم الموافقة' },
+  change_retracted: { en: '↩ Change request retracted',     ar: '↩ تم سحب طلب التعديل' },
+  order_reset:      { en: '⟳ Order reset by coordinator',   ar: '⟳ تمت إعادة تعيين الطلب' },
+};
+
+// ── Login ──────────────────────────────────────────────────────────────────────
+document.getElementById('phone-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+async function doLogin() {
+  const raw   = document.getElementById('phone-input').value.trim();
+  const phone = raw.replace(/\D/g, '');
+  if (!phone) {
+    showLoginError(currentLang === 'ar' ? 'الرجاء إدخال رقم الهاتف.' : 'Please enter your phone number.');
+    return;
+  }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
+    const data = await res.json();
+    if (!data.registered) {
+      showLoginError(
+        data.message || (currentLang === 'ar'
           ? 'لم نجد رقمك. تأكد من استخدام نفس الرقم الذي سجّلت به.'
-          : 'Phone number not found. Make sure you use the number you registered with.');
-        showLoginError(msg, data.coordinator_wa);
-        btn.disabled = false;
-        return;
-      }
-
-      STATE.family               = data.family_name;
-      STATE.familyId             = data.family_id;
-      STATE.cycle                = data.open_cycle ? data : null;
-      STATE.history              = data.history || [];
-      STATE.bundleSize           = data.bundle_size;
-      STATE.pendingBundleSize    = data.pending_bundle_size;
-      STATE.requestId            = data.request_id   || null;
-      STATE.canCancel            = data.can_cancel   || false;
-      STATE.canEdit              = data.can_edit     || false;
-      STATE.canRequestChange     = data.can_request_change || false;
-      STATE.pendingChangeRequest = data.pending_change_request || null;
-      STATE.orderEvents          = data.order_events || [];
-      STATE.cycleStatus          = data.cycle_status || '';
-      STATE.phone                = document.getElementById('phone-input').value.trim();
-      STATE.bundleCategories     = data.bundle_categories   || [];
-      STATE.selectedCategories   = data.selected_categories || [];
-      STATE.editMode             = false;
-
-      document.getElementById('login-screen').style.display = 'none';
-      document.getElementById('dashboard').style.display = 'block';
-      renderDashboard();
-
-    } catch(e) {
-      console.error('doLogin error:', e);
-      showLoginError(currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+          : 'Phone number not found. Make sure you use the number you registered with.'),
+        data.coordinator_wa
+      );
       btn.disabled = false;
-    }
-  }
-
-  function showLoginError(msg, waLink) {
-    const errEl = document.getElementById('login-error');
-    const errText = document.getElementById('login-error-text');
-    const waEl = document.getElementById('wa-coordinator-link');
-    errText.textContent = msg;
-    if (waLink) {
-      waEl.href = waLink;
-      waEl.textContent = currentLang === 'ar' ? 'تواصل مع المنسق عبر واتساب →' : 'Message your coordinator on WhatsApp →';
-      waEl.style.display = 'inline';
-    } else {
-      waEl.style.display = 'none';
-    }
-    errEl.style.display = 'block';
-  }
-
-  function doLogout() {
-    STATE.family = null; STATE.familyId = null; STATE.cycle = null;
-    document.getElementById('dashboard').style.display = 'none';
-    document.getElementById('login-screen').style.display = 'block';
-    document.getElementById('phone-input').value = '';
-    document.getElementById('login-error').style.display = 'none';
-    document.getElementById('login-btn').disabled = false;
-  }
-
-  // ── Dashboard render ──────────────────────────────────────────────────────
-  function renderDashboard() {
-    const L = currentLang;
-    document.getElementById('family-name-display').textContent = STATE.family || '';
-
-    const cycleCard   = document.getElementById('cycle-card');
-    const noCycleCard = document.getElementById('no-cycle-card');
-
-    if (STATE.cycle && STATE.cycle.open_cycle) {
-      cycleCard.style.display   = 'block';
-      noCycleCard.style.display = 'none';
-
-      const d = STATE.cycle;
-      document.getElementById('cycle-title-display').textContent = d.cycle_title || '';
-
-      const fmtDate = s => { if (!s) return ''; const [y,m,day] = s.split('-'); return `${parseInt(day)} ${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m)]} ${y}`; };
-      document.getElementById('cycle-dates-display').textContent = `${fmtDate(d.delivery_start)} – ${fmtDate(d.delivery_end)}`;
-
-      const bSize = STATE.bundleSize || d.bundle_size || 'M';
-      document.getElementById('cycle-bundle-display').textContent = BUNDLE_LABELS[L][bSize] || bSize;
-
-      // Build size picker
-      const picker = document.getElementById('size-picker');
-      picker.innerHTML = '';
-      ['S','M','L'].forEach(s => {
-        const btn = document.createElement('button');
-        btn.className = 'size-btn' + (s === bSize ? ' active' : '');
-        btn.textContent = BUNDLE_LABELS[L][s];
-        btn.onclick = () => { picker.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); };
-        picker.appendChild(btn);
-      });
-
-      // Show confirmed/skipped state if already submitted
-      if (d.already_submitted) {
-        document.getElementById('cycle-actions').style.display = 'none';
-
-        if (d.order_status === 'skipped' || d.order_status === 'cancelled') {
-          document.getElementById('skipped-banner').style.display = 'block';
-          document.getElementById('skipped-banner').querySelector('span').textContent =
-            d.order_status === 'cancelled'
-              ? (currentLang === 'ar' ? 'لقد ألغيت طلبك. نراك في الدورة القادمة.' : 'You cancelled this order. See you next cycle.')
-              : (currentLang === 'ar' ? 'لقد تخطيت هذه الدورة. نراك في المرة القادمة.' : 'You have skipped this cycle. See you next time.');
-          document.getElementById('items-section').style.display = 'none';
-        } else {
-          document.getElementById('confirmed-banner').style.display = 'block';
-          // Always show items — use selected if available, fall back to full bundle list
-          document.getElementById('items-section').style.display = 'block';
-          if (STATE.selectedCategories.length) {
-            renderConfirmedItems();
-          } else if (STATE.bundleCategories.length) {
-            renderConfirmedItems(STATE.bundleCategories);
-          } else {
-            renderConfirmedItems([]);
-          }
-          // Show action buttons
-          const actionsRow = document.getElementById('order-actions-row');
-          actionsRow.style.display = 'flex';
-          if (STATE.canRequestChange && !STATE.pendingChangeRequest) {
-            document.getElementById('request-change-btn').style.display = 'inline-block';
-          }
-          if (STATE.canCancel) {
-            document.getElementById('cancel-order-btn').style.display = 'inline-block';
-          }
-          // Pending change request banner
-          const pendingBanner = document.getElementById('pending-change-banner');
-          if (STATE.pendingChangeRequest) {
-            pendingBanner.style.display = 'block';
-            document.getElementById('pending-change-notes').textContent =
-              STATE.pendingChangeRequest.family_notes
-                ? `"${STATE.pendingChangeRequest.family_notes}"`
-                : (currentLang === 'ar' ? 'لا توجد ملاحظات' : 'No notes added');
-          } else {
-            pendingBanner.style.display = 'none';
-          }
-          // Render event timeline
-          renderOrderEvents();
-        }
-      } else {
-        // Show item selection checklist
-        document.getElementById('items-section').style.display = 'block';
-        renderItemList();
-      }
-
-    } else {
-      cycleCard.style.display   = 'none';
-      noCycleCard.style.display = 'block';
-      document.getElementById('items-section').style.display = 'none';
-    }
-
-    // Apply lang to dynamic elements
-    document.querySelectorAll('[data-en]').forEach(el => {
-      el.textContent = el.getAttribute('data-' + L) || el.getAttribute('data-en');
-    });
-
-    renderHistory();
-  }
-
-  function renderHistory() {
-    const L = currentLang;
-    const list = document.getElementById('history-list');
-    const history = STATE.history || [];
-
-    if (!history.length) {
-      list.innerHTML = `<div class="no-history">${L === 'ar' ? 'لا توجد طلبات سابقة.' : 'No previous orders yet.'}</div>`;
       return;
     }
+    STATE.phone       = raw;
+    STATE.family      = data.family_name;
+    STATE.familyId    = data.family_id;
+    STATE.bundleSize  = data.bundle_size;
+    STATE.cycles      = data.cycles  || [];
+    STATE.history     = data.history || [];
 
-    list.innerHTML = history.map(row => {
-      const statusKey = row.status === 'delivered'                                       ? 'received'
-                      : ['confirmed','auto_confirmed','submitted'].includes(row.status)  ? 'confirmed'
-                      : row.status === 'skipped'                                         ? 'skipped'
-                      : row.status === 'cancelled'                                       ? 'cancelled'
-                      : row.status === 'upcoming'                                        ? 'upcoming'
-                      : 'pending';
-      const statusClass = `status-${statusKey}`;
-      const statusLabel = STATUS_LABELS[L][statusKey];
-      const bundleLabel = BUNDLE_LABELS[L][row.bundle_size] || row.bundle_size || '';
-      return `
-        <div class="history-row">
-          <div>
-            <div class="history-cycle">${escHtml(row.cycle_title || row.delivery_date || '')}</div>
-            <div class="history-bundle">${escHtml(bundleLabel)}</div>
-          </div>
-          <span class="status-pill ${statusClass}">${escHtml(statusLabel)}</span>
-        </div>`;
-    }).join('');
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('dashboard').style.display    = 'block';
+    renderAll();
+  } catch(e) {
+    showLoginError(currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+    btn.disabled = false;
   }
+}
 
-  // ── Item list ─────────────────────────────────────────────────────────────
-  function renderConfirmedItems(overrideCats) {
-    const L = currentLang;
-    const container = document.getElementById('items-list');
-    const cats = overrideCats !== undefined ? overrideCats : STATE.selectedCategories;
-    const titleEl = document.querySelector('.items-section-title');
-    if (titleEl) titleEl.textContent = L === 'ar' ? 'محتويات طردك' : 'What\'s in your bundle';
-    if (!cats || !cats.length) {
-      container.innerHTML = `<div class="items-loading">${L === 'ar' ? 'لا توجد عناصر.' : 'Bundle details will appear here once finalized.'}</div>`;
-      return;
-    }
-    container.innerHTML = cats.map(cat => `
-      <div class="item-category">${escHtml(cat.category)}</div>
-      ${cat.items.map(item => `
-        <div class="item-row selected" style="cursor:default;pointer-events:none">
-          <div class="item-check"></div>
-          <div class="item-name">${escHtml(item.name)}</div>
-          <div class="item-qty">${escHtml(item.quantity || '')} ${escHtml(item.unit || '')}</div>
-        </div>`).join('')}
-    `).join('');
+function showLoginError(msg, waLink) {
+  const errEl   = document.getElementById('login-error');
+  const errText = document.getElementById('login-error-text');
+  const waEl    = document.getElementById('wa-coordinator-link');
+  errText.textContent = msg;
+  if (waLink) {
+    waEl.href = waLink;
+    waEl.style.display = 'inline';
+  } else {
+    waEl.style.display = 'none';
   }
+  errEl.style.display = 'block';
+}
 
-  // ── Cancel order ──────────────────────────────────────────────────────────
-  async function doCancelOrder() {
-    const L = currentLang;
-    const msg = L === 'ar'
-      ? 'هل تريد إلغاء طلبك؟ لن يتم تسليم أي طرد في هذه الدورة.'
-      : 'Cancel your order? You will not receive a bundle this cycle.';
-    if (!confirm(msg)) return;
-    try {
-      const res = await fetch('/api/food-order/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ family_id: STATE.familyId, request_id: STATE.requestId })
-      });
-      const data = await res.json();
-      if (!res.ok) { alert(data.error || 'Something went wrong.'); return; }
-      // Update UI
-      document.getElementById('confirmed-banner').style.display = 'none';
-      document.getElementById('cancel-order-row').style.display = 'none';
-      document.getElementById('items-section').style.display = 'none';
-      document.getElementById('skipped-banner').style.display = 'block';
-    } catch(e) {
-      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : ('Something went wrong. Please try again. (' + e.message + ')'));
-    }
-  }
+function doLogout() {
+  STATE.familyId = null; STATE.family = null; STATE.cycles = []; STATE.history = [];
+  document.getElementById('dashboard').style.display    = 'none';
+  document.getElementById('login-screen').style.display = 'block';
+  document.getElementById('phone-input').value  = '';
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-btn').disabled = false;
+}
 
-  // ── Change Request ────────────────────────────────────────────────────────
-  function showChangeRequestForm() {
-    const L = currentLang;
-    document.getElementById('change-request-form').style.display = 'block';
-    document.getElementById('request-change-btn').style.display = 'none';
-    document.getElementById('cancel-order-btn').style.display = 'none';
-    // Render item checklist using bundle_categories
-    const cats = STATE.bundleCategories;
-    const selectedNames = new Set();
-    (STATE.selectedCategories || []).forEach(cat => cat.items.forEach(i => selectedNames.add(i.name)));
-    const defaultAll = !STATE.selectedCategories.length;
-    const container = document.getElementById('change-request-items');
-    if (!cats || !cats.length) {
-      container.innerHTML = `<p style="font-size:13px;color:#888;">${L === 'ar' ? 'لا توجد عناصر.' : 'No items available.'}</p>`;
-      return;
-    }
-    container.innerHTML = cats.map(cat => `
-      <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#888;margin:10px 0 4px;">${escHtml(cat.category)}</div>
-      ${cat.items.map(item => {
-        const checked = defaultAll || selectedNames.has(item.name);
-        return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-bottom:1px solid #f5f5f5;">
-          <input type="checkbox" data-item-id="${escHtml(item.id)}" ${checked ? 'checked' : ''}
-            style="width:16px;height:16px;cursor:pointer;accent-color:#111;">
-          <span style="flex:1;font-size:14px;">${escHtml(item.name)}</span>
-          <span style="font-size:12px;color:#888;">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
-        </label>`;
-      }).join('')}
-    `).join('');
-  }
+// ── Tabs ───────────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  STATE.activeTab = tab;
+  document.getElementById('tab-deliveries').style.display = tab === 'deliveries' ? 'block' : 'none';
+  document.getElementById('tab-history').style.display    = tab === 'history'    ? 'block' : 'none';
+  document.getElementById('tab-btn-deliveries').classList.toggle('active', tab === 'deliveries');
+  document.getElementById('tab-btn-history').classList.toggle('active', tab === 'history');
+}
 
-  function hideChangeRequestForm() {
-    document.getElementById('change-request-form').style.display = 'none';
-    document.getElementById('change-request-msg').style.display = 'none';
-    document.getElementById('change-request-notes').value = '';
-    if (STATE.canRequestChange) document.getElementById('request-change-btn').style.display = 'inline-block';
-    if (STATE.canCancel) document.getElementById('cancel-order-btn').style.display = 'inline-block';
-  }
+// ── Render all ─────────────────────────────────────────────────────────────────
+function renderAll() {
+  const L = currentLang;
+  document.getElementById('family-name-display').textContent = STATE.family || '';
+  document.querySelectorAll('[data-en]').forEach(el => {
+    el.textContent = el.getAttribute('data-' + L) || el.getAttribute('data-en');
+  });
+  renderDeliveries();
+  renderHistory();
+}
 
-  async function submitChangeRequest() {
-    const L = currentLang;
-    const btn = document.getElementById('submit-change-btn');
-    const msg = document.getElementById('change-request-msg');
-    const notes = document.getElementById('change-request-notes').value.trim();
-    const selectedIds = Array.from(document.querySelectorAll('#change-request-items input[type=checkbox]:checked'))
-      .map(cb => cb.dataset.itemId);
-    btn.disabled = true;
-    btn.textContent = L === 'ar' ? 'جارٍ الإرسال…' : 'Sending…';
-    msg.style.display = 'none';
-    try {
-      const res = await fetch('/api/family-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          family_id: STATE.familyId,
-          request_id: STATE.requestId,
-          family_notes: notes,
-          selected_item_ids: selectedIds
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        msg.textContent = data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.');
-        msg.style.color = '#b00';
-        msg.style.display = 'inline';
-        btn.disabled = false;
-        btn.textContent = L === 'ar' ? 'إرسال الطلب' : 'Submit Request';
-        return;
-      }
-      // Refresh state from server
-      const check = await fetch(`/api/food-order/check?phone=${encodeURIComponent(STATE.phone)}`);
-      const fresh = await check.json();
-      STATE.canRequestChange     = fresh.can_request_change || false;
-      STATE.pendingChangeRequest = fresh.pending_change_request || null;
-      STATE.orderEvents          = fresh.order_events || [];
-      hideChangeRequestForm();
-      // Show pending banner
-      const pendingBanner = document.getElementById('pending-change-banner');
-      pendingBanner.style.display = 'block';
-      document.getElementById('pending-change-notes').textContent = notes ? `"${notes}"` : (L === 'ar' ? 'لا توجد ملاحظات' : 'No notes added');
-      document.getElementById('request-change-btn').style.display = 'none';
-      renderOrderEvents();
-    } catch(e) {
-      msg.textContent = L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.';
-      msg.style.color = '#b00';
-      msg.style.display = 'inline';
-      btn.disabled = false;
-      btn.textContent = L === 'ar' ? 'إرسال الطلب' : 'Submit Request';
-    }
-  }
-
-  async function doRetractRequest() {
-    const L = currentLang;
-    if (!STATE.pendingChangeRequest) return;
-    if (!confirm(L === 'ar' ? 'هل تريد سحب طلب التعديل؟' : 'Retract this change request?')) return;
-    try {
-      const res = await fetch(`/api/family-request/${STATE.pendingChangeRequest.id}/retract`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ family_id: STATE.familyId })
-      });
-      const data = await res.json();
-      if (!res.ok) { alert(data.error || 'Something went wrong.'); return; }
-      STATE.pendingChangeRequest = null;
-      STATE.canRequestChange = true;
-      document.getElementById('pending-change-banner').style.display = 'none';
-      document.getElementById('request-change-btn').style.display = 'inline-block';
-      // Refresh events
-      const check = await fetch(`/api/food-order/check?phone=${encodeURIComponent(STATE.phone)}`);
-      const fresh = await check.json();
-      STATE.orderEvents = fresh.order_events || [];
-      renderOrderEvents();
-    } catch(e) {
-      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
-    }
-  }
-
-  // ── Order event timeline ─────────────────────────────────────────────────
-  function renderOrderEvents() {
-    const events = STATE.orderEvents || [];
-    if (!events.length) return;
-    const L = currentLang;
-    const section = document.getElementById('order-events-section');
-    const list    = document.getElementById('order-events-list');
-    section.style.display = 'block';
-
-    const EVENT_LABELS = {
-      confirmed:         { en: '✓ Order confirmed',            ar: '✓ تم تأكيد الطلب' },
-      items_edited:      { en: '✏ Items updated',               ar: '✏ تم تعديل العناصر' },
-      cancelled:         { en: '✕ Order cancelled',             ar: '✕ تم إلغاء الطلب' },
-      auto_skipped:      { en: '— No response — skipped',       ar: '— لم يستجب — تم التخطي' },
-      admin_override:    { en: '⚙ Updated by coordinator',      ar: '⚙ تم التحديث من المنسق' },
-      change_requested:  { en: '📋 Change request submitted',   ar: '📋 تم إرسال طلب التعديل' },
-      change_approved:   { en: '✓ Change request approved',     ar: '✓ تمت الموافقة على طلب التعديل' },
-      change_rejected:   { en: '✕ Change request not approved', ar: '✕ لم تتم الموافقة على طلب التعديل' },
-      change_retracted:  { en: '↩ Change request retracted',    ar: '↩ تم سحب طلب التعديل' },
-      order_reset:       { en: '⟳ Order reset by coordinator',  ar: '⟳ تمت إعادة تعيين الطلب' },
-    };
-
-    list.innerHTML = events.filter(ev => !ev.payload?.note?.includes('backfilled')).map(ev => {
-      const label = EVENT_LABELS[ev.event_type]?.[L === 'ar' ? 'ar' : 'en'] || ev.event_type;
-      const ts = ev.created_at ? new Date(ev.created_at + (ev.created_at.endsWith('Z') ? '' : 'Z')).toLocaleDateString(L === 'ar' ? 'ar-SA' : 'en-US', { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
-      let detail = '';
-      if (ev.event_type === 'items_edited' && ev.payload) {
-        const added   = ev.payload.added?.join(', ');
-        const removed = ev.payload.removed?.join(', ');
-        if (added)   detail += (L === 'ar' ? ` أُضيف: ${added}` : ` Added: ${added}`);
-        if (removed) detail += (L === 'ar' ? ` أُزيل: ${removed}` : ` Removed: ${removed}`);
-      }
-      return `<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:4px 0;font-size:12px;border-bottom:1px solid #f5f5f5;">
-        <div><span style="color:#333;">${escHtml(label)}</span>${detail ? `<span style="color:#888;"> —${escHtml(detail)}</span>` : ''}</div>
-        <span style="color:#aaa;white-space:nowrap;margin-left:10px;">${ts}</span>
+// ── Deliveries tab ─────────────────────────────────────────────────────────────
+function renderDeliveries() {
+  const L = currentLang;
+  const container = document.getElementById('cycles-list');
+  if (!STATE.cycles.length) {
+    container.innerHTML = `
+      <div class="no-cycles">
+        <div style="font-size:22px;margin-bottom:8px;">📦</div>
+        <div>${L === 'ar' ? 'لا توجد تسليمات قادمة خلال الـ 30 يوماً القادمة.' : 'No upcoming deliveries in the next 30 days.'}</div>
+        <div style="font-size:13px;margin-top:6px;color:var(--gray-4)">${L === 'ar' ? 'تحقق مجدداً قريباً.' : 'Check back soon.'}</div>
       </div>`;
-    }).join('');
+    return;
   }
+  container.innerHTML = STATE.cycles.map(cycle => renderCycleCard(cycle)).join('');
+}
 
-  // ── Edit order ────────────────────────────────────────────────────────────
-  function startEditOrder() {
-    const L = currentLang;
-    STATE.editMode = true;
-    document.getElementById('edit-order-btn').style.display = 'none';
-    document.getElementById('cancel-order-btn').style.display = 'none';
-    document.getElementById('edit-actions').style.display = 'flex';
-    document.getElementById('items-section-title').textContent =
-      L === 'ar' ? 'تعديل طلبك — اختر ما تحتاجه' : 'Edit your order — select what you need';
-    // Re-render items as checkboxes using bundle_categories for full list
-    renderEditableItems();
-  }
+function fmtDate(s) {
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  const months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const monthsAr = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const mi = parseInt(m);
+  return currentLang === 'ar'
+    ? `${parseInt(d)} ${monthsAr[mi]} ${y}`
+    : `${months[mi]} ${parseInt(d)}, ${y}`;
+}
 
-  function cancelEditOrder() {
-    const L = currentLang;
-    STATE.editMode = false;
-    document.getElementById('edit-actions').style.display = 'none';
-    document.getElementById('edit-msg').style.display = 'none';
-    if (STATE.canEdit) document.getElementById('edit-order-btn').style.display = 'inline-block';
-    if (STATE.canCancel) document.getElementById('cancel-order-btn').style.display = 'inline-block';
-    document.getElementById('items-section-title').textContent =
-      L === 'ar' ? 'محتويات طردك' : 'What\'s in your bundle';
-    // Restore read-only view
-    if (STATE.selectedCategories.length) renderConfirmedItems();
-    else renderConfirmedItems(STATE.bundleCategories);
-  }
+function renderCycleCard(cycle) {
+  const L   = currentLang;
+  const ord = cycle.order;
 
-  function renderEditableItems() {
-    const L = currentLang;
-    const container = document.getElementById('items-list');
-    const cats = STATE.bundleCategories;
-    // Build set of currently selected item IDs from selectedCategories names
-    const selectedNames = new Set();
-    (STATE.selectedCategories || []).forEach(cat => cat.items.forEach(i => selectedNames.add(i.name)));
-    // If no selectedCategories, default to all checked
-    const defaultAll = !STATE.selectedCategories.length;
-
-    if (!cats || !cats.length) {
-      container.innerHTML = `<p style="font-size:13px;color:#888;">${L === 'ar' ? 'لا توجد عناصر.' : 'No items available.'}</p>`;
-      return;
+  // Status badge
+  let badgeClass = 'badge-open', badgeText = '';
+  if (ord) {
+    const s = ord.status;
+    if (['confirmed','auto_confirmed','submitted','pending_confirmation'].includes(s)) {
+      badgeClass = 'badge-confirmed'; badgeText = L === 'ar' ? '✓ مؤكد' : '✓ Confirmed';
+    } else if (s === 'cancelled') {
+      badgeClass = 'badge-cancelled'; badgeText = L === 'ar' ? 'ملغي' : 'Cancelled';
+    } else if (s === 'skipped') {
+      badgeClass = 'badge-skipped'; badgeText = L === 'ar' ? 'تم التخطي' : 'Skipped';
+    } else {
+      badgeClass = 'badge-confirmed'; badgeText = s;
     }
-    container.innerHTML = cats.map(cat => `
-      <div class="item-category">${escHtml(cat.category)}</div>
-      ${cat.items.map(item => {
-        const checked = defaultAll || selectedNames.has(item.name);
-        return `<label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;border-bottom:1px solid #f5f5f5;">
-          <input type="checkbox" data-item-id="${escHtml(item.id)}" ${checked ? 'checked' : ''}
-            style="width:16px;height:16px;cursor:pointer;accent-color:#111;">
-          <span style="flex:1;font-size:14px;">${escHtml(item.name)}</span>
-          <span style="font-size:12px;color:#888;">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
-        </label>`;
-      }).join('')}
-    `).join('');
+  } else if (cycle.status === 'open') {
+    badgeClass = 'badge-open'; badgeText = L === 'ar' ? 'مفتوح' : 'Open';
+  } else if (cycle.status === 'shopping') {
+    badgeClass = 'badge-shopping'; badgeText = L === 'ar' ? 'جارٍ التسوق' : 'Shopping';
+  } else {
+    badgeClass = 'badge-upcoming'; badgeText = L === 'ar' ? 'قادم' : 'Upcoming';
   }
 
-  async function saveEditOrder() {
-    const L = currentLang;
-    const btn = document.getElementById('save-edit-btn');
-    const msg = document.getElementById('edit-msg');
-    btn.disabled = true;
-    btn.textContent = L === 'ar' ? 'جارٍ الحفظ…' : 'Saving…';
-    msg.style.display = 'none';
+  const dateStr = `${fmtDate(cycle.delivery_date_start)} – ${fmtDate(cycle.delivery_date_end)}`;
 
-    const selectedIds = Array.from(document.querySelectorAll('#items-list input[type=checkbox]:checked'))
-      .map(cb => cb.dataset.itemId);
+  let bodyHtml = '';
 
-    try {
-      const res = await fetch('/api/food-order/items', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: STATE.phone,
-          request_id: STATE.requestId,
-          selected_item_ids: selectedIds
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        msg.textContent = data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.');
-        msg.style.color = '#b00';
-        msg.style.display = 'inline';
-        btn.disabled = false;
-        btn.textContent = L === 'ar' ? 'حفظ التغييرات' : 'Save Changes';
-        return;
-      }
-      // Refresh from API to get updated selected_categories + events
-      const check = await fetch(`/api/food-order/check?phone=${encodeURIComponent(STATE.phone)}`);
-      const fresh = await check.json();
-      if (fresh.already_submitted) {
-        STATE.selectedCategories = fresh.selected_categories || [];
-        STATE.orderEvents        = fresh.order_events || [];
-        STATE.canEdit            = fresh.can_edit || false;
-        STATE.canCancel          = fresh.can_cancel || false;
-      }
-      cancelEditOrder();
-      renderOrderEvents();
-      msg.textContent = L === 'ar' ? '✓ تم حفظ التغييرات' : '✓ Changes saved';
-      msg.style.color = '#1a8754';
-      msg.style.display = 'inline';
-      document.getElementById('edit-actions').style.display = 'flex';
-      setTimeout(() => { msg.style.display = 'none'; }, 3000);
-    } catch(e) {
-      msg.textContent = L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.';
-      msg.style.color = '#b00';
-      msg.style.display = 'inline';
-      btn.disabled = false;
-      btn.textContent = L === 'ar' ? 'حفظ التغييرات' : 'Save Changes';
+  if (ord) {
+    bodyHtml = renderOrderBody(cycle.id, ord);
+  } else if (cycle.can_place_order) {
+    bodyHtml = renderPlaceOrderBody(cycle);
+  } else if (cycle.status === 'shopping') {
+    bodyHtml = `<div class="locked-note">${L === 'ar' ? '🛒 التسوق جارٍ الآن — لا يمكن قبول طلبات جديدة.' : '🛒 Shopping is in progress — orders are locked.'}</div>`;
+  } else {
+    bodyHtml = `<div class="coming-soon-note">${L === 'ar' ? 'سيفتح باب الطلبات قريباً.' : 'Ordering opens closer to the delivery date.'}</div>`;
+  }
+
+  return `
+    <div class="cycle-card" id="card-${escHtml(cycle.id)}">
+      <div class="cycle-card-header">
+        <div class="cycle-card-meta">
+          <div class="cycle-card-label">${L === 'ar' ? 'تسليم' : 'Delivery'}</div>
+          <div class="cycle-card-title">${escHtml(cycle.title)}</div>
+          <div class="cycle-card-dates">${escHtml(dateStr)}</div>
+        </div>
+        <span class="status-badge ${badgeClass}">${escHtml(badgeText)}</span>
+      </div>
+      <div class="cycle-card-body">${bodyHtml}</div>
+    </div>`;
+}
+
+// ── Place-order body (open cycle, no order) ────────────────────────────────────
+function renderPlaceOrderBody(cycle) {
+  const L    = currentLang;
+  const cid  = cycle.id;
+  const bLbl = BUNDLE_LABELS[L][STATE.bundleSize] || STATE.bundleSize || 'M';
+
+  const itemsHtml = cycle.items_for_selection.map(cat => `
+    <div class="item-category">${escHtml(cat.category)}</div>
+    ${cat.items.map(item => `
+      <div class="item-row selected" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}" onclick="toggleItem(this)">
+        <div class="item-check"></div>
+        <div class="item-name">${escHtml(item.name)}</div>
+        <div class="item-qty">${escHtml(item.quantity || '')} ${escHtml(item.unit || '')}</div>
+      </div>`).join('')}
+  `).join('');
+
+  return `
+    <div style="font-size:13px;color:var(--gray-4);margin-bottom:12px;">
+      ${L === 'ar' ? `حجم طردك: <strong>${escHtml(bLbl)}</strong>` : `Bundle: <strong>${escHtml(bLbl)}</strong>`}
+    </div>
+    <button class="place-order-btn" onclick="toggleOrderForm('${escHtml(cid)}')">
+      ${L === 'ar' ? '+ الطلب لهذا التسليم' : '+ Order for this delivery'}
+    </button>
+    <div class="order-form-panel" id="form-${escHtml(cid)}">
+      <div class="form-section-title">${L === 'ar' ? 'اختر ما تحتاجه' : 'Select what you need'}</div>
+      <div id="items-${escHtml(cid)}">${itemsHtml}</div>
+      <label class="notes-label" for="notes-${escHtml(cid)}">${L === 'ar' ? 'ملاحظات للمنسق (اختياري)' : 'Notes for coordinator (optional)'}</label>
+      <textarea class="order-notes" id="notes-${escHtml(cid)}" rows="2"
+        placeholder="${L === 'ar' ? 'مثال: لا نحتاج بيض هذه الدورة' : 'e.g. We don\'t need eggs this cycle'}"></textarea>
+      <div class="form-actions">
+        <button class="btn-confirm-order" onclick="placeOrder('${escHtml(cid)}')" id="place-btn-${escHtml(cid)}">
+          ${L === 'ar' ? 'تأكيد الطلب' : 'Confirm Order'}
+        </button>
+        <button class="btn-cancel-form" onclick="toggleOrderForm('${escHtml(cid)}')">
+          ${L === 'ar' ? 'إلغاء' : 'Cancel'}
+        </button>
+        <span class="form-msg" id="place-msg-${escHtml(cid)}"></span>
+      </div>
+    </div>`;
+}
+
+function toggleOrderForm(cid) {
+  const panel = document.getElementById(`form-${cid}`);
+  if (panel) panel.classList.toggle('open');
+}
+
+function toggleItem(row) { row.classList.toggle('selected'); }
+
+// ── Confirmed order body ───────────────────────────────────────────────────────
+function renderOrderBody(cid, ord) {
+  const L = currentLang;
+
+  // Items summary
+  let itemsHtml = '';
+  const cats = ord.selected_categories && ord.selected_categories.length
+    ? ord.selected_categories
+    : ord.bundle_categories || [];
+  const isTerminal = ['cancelled','skipped'].includes(ord.status);
+
+  if (cats.length && !isTerminal) {
+    itemsHtml = `
+      <div class="confirmed-items">
+        <div class="confirmed-items-label">${L === 'ar' ? 'محتويات طردك' : "What's in your bundle"}</div>
+        ${cats.map(cat => `
+          <div class="confirmed-item-cat">${escHtml(cat.category)}</div>
+          <div class="confirmed-item-list">
+            ${cat.items.map(i => `<span class="confirmed-item-chip">${escHtml(i.name)}${i.quantity ? ` · ${escHtml(i.quantity)} ${escHtml(i.unit||'')}` : ''}</span>`).join('')}
+          </div>`).join('')}
+      </div>`;
+  } else if (isTerminal) {
+    const msg = ord.status === 'cancelled'
+      ? (L === 'ar' ? 'لقد ألغيت هذا الطلب.' : 'You cancelled this order.')
+      : (L === 'ar' ? 'تم تخطي هذه الدورة.' : 'You skipped this cycle.');
+    itemsHtml = `<div class="locked-note" style="color:var(--gray-4)">${msg}</div>`;
+  }
+
+  // Actions
+  let actionsHtml = '';
+  if (!isTerminal) {
+    let changeBtn = '', cancelBtn = '';
+    if (ord.can_request_change && !ord.pending_change_request) {
+      changeBtn = `<button class="btn-request-change" onclick="showCRForm('${escHtml(cid)}')">${L === 'ar' ? 'طلب تعديل' : 'Request Change'}</button>`;
     }
-  }
-
-  function renderItemList() {
-    const L = currentLang;
-    const container = document.getElementById('items-list');
-    const cats = STATE.bundleCategories;
-
-    if (!cats || !cats.length) {
-      container.innerHTML = `<div class="items-loading">${L === 'ar' ? 'لا توجد عناصر متاحة.' : 'No items available.'}</div>`;
-      return;
+    if (ord.can_cancel) {
+      cancelBtn = `<button class="btn-cancel-order" onclick="cancelOrder('${escHtml(cid)}','${escHtml(ord.id)}')">${L === 'ar' ? 'إلغاء الطلب' : 'Cancel this order'}</button>`;
     }
-
-    container.innerHTML = cats.map(cat => `
-      <div class="item-category">${escHtml(cat.category)}</div>
-      ${cat.items.map(item => `
-        <div class="item-row selected" data-id="${item.id}" onclick="toggleItem(this)">
-          <div class="item-check"></div>
-          <div class="item-name">${escHtml(item.name)}</div>
-          <div class="item-qty">${escHtml(item.quantity || '')} ${escHtml(item.unit || '')}</div>
-        </div>`).join('')}
-    `).join('');
-  }
-
-  function toggleItem(row) {
-    row.classList.toggle('selected');
-  }
-
-  function getSelectedItemIds() {
-    return Array.from(document.querySelectorAll('#items-list .item-row.selected'))
-      .map(r => r.dataset.id);
-  }
-
-  // ── Confirm / Skip ────────────────────────────────────────────────────────
-  async function doConfirm() {
-    if (!STATE.cycle) return;
-    const L = currentLang;
-    const selectedItems = getSelectedItemIds();
-    try {
-      const res = await fetch('/api/food-order', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          family_id: STATE.familyId,
-          cycle_id: STATE.cycle.cycle_id,
-          action: 'confirm',
-          selected_items: selectedItems
-        })
-      });
-      const data = await res.json();
-      if (res.ok || data.ok) {
-        document.getElementById('cycle-actions').style.display = 'none';
-        document.getElementById('items-section').style.display = 'none';
-        document.getElementById('confirmed-banner').style.display = 'block';
-        document.getElementById('confirmed-banner').querySelector('span').textContent =
-          L === 'ar'
-            ? '✓ تم التأكيد — سيتم تسليم طلبك في الموعد المحدد.'
-            : '✓ Confirmed — your bundle will be delivered on the scheduled date.';
-      } else {
-        alert(data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.'));
-      }
-    } catch(e) {
-      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+    if (changeBtn || cancelBtn) {
+      actionsHtml = `<div class="order-actions">${changeBtn}${cancelBtn}</div>`;
     }
   }
 
-  async function doSkip() {
-    const L = currentLang;
-    const confirmed = confirm(L === 'ar'
-      ? 'هل أنت متأكد أنك تريد تخطي هذه الدورة؟'
-      : 'Are you sure you want to skip this delivery?');
-    if (!confirmed) return;
-    try {
-      await fetch('/api/food-order', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ family_id: STATE.familyId, cycle_id: STATE.cycle.cycle_id, action: 'skip', selected_items: [] })
-      });
-      document.getElementById('cycle-actions').style.display = 'none';
-      document.getElementById('skipped-banner').style.display = 'block';
-    } catch(e) {}
+  // Pending change request banner
+  let pendingCRHtml = '';
+  if (ord.pending_change_request) {
+    const notes = ord.pending_change_request.family_notes
+      ? `"${escHtml(ord.pending_change_request.family_notes)}"`
+      : (L === 'ar' ? 'لا توجد ملاحظات' : 'No notes added');
+    pendingCRHtml = `
+      <div class="pending-cr-banner" id="cr-banner-${escHtml(cid)}">
+        <div class="pending-cr-title">${L === 'ar' ? '⏳ طلب تعديل قيد المراجعة' : '⏳ Change Request Pending'}</div>
+        <div class="pending-cr-notes">${notes}</div>
+        <button class="btn-retract" onclick="retractRequest('${escHtml(cid)}','${escHtml(ord.pending_change_request.id)}','${escHtml(ord.id)}')">${L === 'ar' ? 'سحب الطلب' : 'Retract request'}</button>
+      </div>`;
   }
 
-  // ── Bundle size change ────────────────────────────────────────────────────
-  function toggleBundleForm() {
-    const form = document.getElementById('bundle-change-form');
-    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  // Change request form
+  const crFormHtml = renderCRForm(cid, ord);
+
+  // Event timeline
+  const eventsHtml = renderEventsSection(cid, ord.events || []);
+
+  return itemsHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
+}
+
+// ── Change request form ────────────────────────────────────────────────────────
+function renderCRForm(cid, ord) {
+  const L = currentLang;
+  if (!ord.can_request_change && !ord.pending_change_request) return '';
+
+  const cats = ord.bundle_categories || [];
+  const selectedNames = new Set();
+  (ord.selected_categories || []).forEach(c => c.items.forEach(i => selectedNames.add(i.name)));
+  const defaultAll = !ord.selected_categories || !ord.selected_categories.length;
+
+  const itemsHtml = cats.map(cat => `
+    <div class="item-category">${escHtml(cat.category)}</div>
+    ${cat.items.map(item => {
+      const checked = defaultAll || selectedNames.has(item.name);
+      return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-bottom:1px solid #f5f5f5;">
+        <input type="checkbox" data-item-id="${escHtml(item.id)}" ${checked ? 'checked' : ''}
+          style="width:16px;height:16px;cursor:pointer;accent-color:#111;">
+        <span style="flex:1;font-size:14px;">${escHtml(item.name)}</span>
+        <span style="font-size:12px;color:#888;">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
+      </label>`;
+    }).join('')}
+  `).join('');
+
+  return `
+    <div class="cr-form-panel" id="cr-form-${escHtml(cid)}">
+      <div class="form-section-title">${L === 'ar' ? 'طلب تعديل — اختر ما تحتاجه' : 'Request Change — select what you need'}</div>
+      <div id="cr-items-${escHtml(cid)}">${itemsHtml}</div>
+      <label class="notes-label" for="cr-notes-${escHtml(cid)}">${L === 'ar' ? 'ملاحظات (اختياري)' : 'Notes (optional)'}</label>
+      <textarea class="order-notes" id="cr-notes-${escHtml(cid)}" rows="2"
+        placeholder="${L === 'ar' ? 'مثال: لا نحتاج بيض هذه الدورة' : 'e.g. We don\'t need eggs this cycle'}"></textarea>
+      <div class="form-actions">
+        <button class="btn-confirm-order" onclick="submitCR('${escHtml(cid)}','${escHtml(ord.id)}')" id="cr-btn-${escHtml(cid)}">
+          ${L === 'ar' ? 'إرسال الطلب' : 'Submit Request'}
+        </button>
+        <button class="btn-cancel-form" onclick="hideCRForm('${escHtml(cid)}')">
+          ${L === 'ar' ? 'إلغاء' : 'Cancel'}
+        </button>
+        <span class="form-msg" id="cr-msg-${escHtml(cid)}"></span>
+      </div>
+    </div>`;
+}
+
+function showCRForm(cid) {
+  const panel = document.getElementById(`cr-form-${cid}`);
+  if (panel) panel.classList.add('open');
+}
+function hideCRForm(cid) {
+  const panel = document.getElementById(`cr-form-${cid}`);
+  if (panel) panel.classList.remove('open');
+}
+
+// ── Events section ─────────────────────────────────────────────────────────────
+function renderEventsSection(cid, events) {
+  const L = currentLang;
+  if (!events.length) return '';
+  const filtered = events.filter(ev => !(ev.payload && ev.payload.note && ev.payload.note.includes('backfilled')));
+  if (!filtered.length) return '';
+
+  const rowsHtml = filtered.map(ev => {
+    const label = EVENT_LABELS[ev.event_type]?.[L === 'ar' ? 'ar' : 'en'] || ev.event_type;
+    const ts    = ev.created_at
+      ? new Date(ev.created_at + (ev.created_at.endsWith('Z') ? '' : 'Z'))
+          .toLocaleDateString(L === 'ar' ? 'ar-SA' : 'en-US', {month:'short', day:'numeric', year:'numeric'})
+      : '';
+    let detail = '';
+    if (ev.event_type === 'items_edited' && ev.payload) {
+      const added   = ev.payload.added?.join(', ');
+      const removed = ev.payload.removed?.join(', ');
+      if (added)   detail += (L === 'ar' ? ` أُضيف: ${added}` : ` +${added}`);
+      if (removed) detail += (L === 'ar' ? ` أُزيل: ${removed}` : ` -${removed}`);
+    }
+    return `<div class="event-row">
+      <div><span class="event-label">${escHtml(label)}</span>${detail ? `<span class="event-detail"> — ${escHtml(detail)}</span>` : ''}</div>
+      <span class="event-time">${escHtml(ts)}</span>
+    </div>`;
+  }).join('');
+
+  return `
+    <div style="margin-top:10px;">
+      <button class="events-toggle" onclick="toggleEvents('${escHtml(cid)}')">
+        ${L === 'ar' ? 'عرض سجل الطلب' : 'View order activity'}
+      </button>
+      <div class="events-list" id="events-${escHtml(cid)}">${rowsHtml}</div>
+    </div>`;
+}
+
+function toggleEvents(cid) {
+  const el = document.getElementById(`events-${cid}`);
+  if (el) el.classList.toggle('open');
+}
+
+// ── History tab ────────────────────────────────────────────────────────────────
+function renderHistory() {
+  const L    = currentLang;
+  const list = document.getElementById('history-list');
+  const hist = STATE.history || [];
+
+  if (!hist.length) {
+    list.innerHTML = `<div class="no-history">${L === 'ar' ? 'لا توجد طلبات سابقة بعد.' : 'No delivery history yet.'}</div>`;
+    return;
   }
 
-  async function submitBundleChange() {
-    const L = currentLang;
-    const active = document.querySelector('#size-picker .size-btn.active');
-    if (!active) return;
-    const newSize = active.textContent.slice(-2, -1); // extract S/M/L from label
+  const pillClass = s => {
+    if (s === 'delivered') return 'pill-delivered';
+    if (['confirmed','auto_confirmed','submitted'].includes(s)) return 'pill-confirmed';
+    if (s === 'skipped')   return 'pill-skipped';
+    if (s === 'cancelled') return 'pill-cancelled';
+    return 'pill-confirmed';
+  };
+  const pillLabel = s => {
+    const labels = L === 'ar' ? STATUS_LABELS_AR : STATUS_LABELS_EN;
+    return labels[s] || s;
+  };
 
-    const res = await fetch(`/api/families/${STATE.familyId}/request-bundle-change`, {
+  list.innerHTML = hist.map(row => `
+    <div class="history-row">
+      <div>
+        <div class="history-cycle">${escHtml(row.cycle_title || '')}</div>
+        <div class="history-dates">${escHtml(fmtDate(row.delivery_date_start))} – ${escHtml(fmtDate(row.delivery_date_end || ''))}</div>
+      </div>
+      <span class="status-pill ${pillClass(row.status)}">${escHtml(pillLabel(row.status))}</span>
+    </div>`
+  ).join('');
+}
+
+// ── Place order ────────────────────────────────────────────────────────────────
+async function placeOrder(cid) {
+  const L    = currentLang;
+  const btn  = document.getElementById(`place-btn-${cid}`);
+  const msg  = document.getElementById(`place-msg-${cid}`);
+  const notes = (document.getElementById(`notes-${cid}`)?.value || '').trim();
+
+  const selectedIds = Array.from(
+    document.querySelectorAll(`#items-${cid} .item-row.selected`)
+  ).map(r => r.dataset.id);
+
+  btn.disabled    = true;
+  btn.textContent = L === 'ar' ? 'جارٍ الإرسال…' : 'Placing order…';
+  msg.style.display = 'none';
+
+  // Find cycle
+  const cycle = STATE.cycles.find(c => c.id === cid);
+  if (!cycle) { btn.disabled = false; return; }
+
+  try {
+    const res  = await fetch('/api/food-order', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ bundle_size: newSize })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        family_id: STATE.familyId,
+        cycle_id:  cid,
+        selected_items: selectedIds,
+        notes,
+      })
     });
     const data = await res.json();
-    const msgEl = document.getElementById('bundle-msg');
-    msgEl.textContent = data.message || (L === 'ar' ? 'تم إرسال الطلب.' : 'Request sent.');
-    msgEl.style.display = 'block';
+    if (!res.ok) {
+      msg.textContent   = data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.');
+      msg.style.color   = 'var(--red)';
+      msg.style.display = 'inline';
+      btn.disabled      = false;
+      btn.textContent   = L === 'ar' ? 'تأكيد الطلب' : 'Confirm Order';
+      return;
+    }
+    // Refresh full state
+    await refreshState();
+  } catch(e) {
+    msg.textContent   = L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.';
+    msg.style.color   = 'var(--red)';
+    msg.style.display = 'inline';
+    btn.disabled      = false;
+    btn.textContent   = L === 'ar' ? 'تأكيد الطلب' : 'Confirm Order';
   }
+}
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  function escHtml(s) {
-    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// ── Cancel order ───────────────────────────────────────────────────────────────
+async function cancelOrder(cid, requestId) {
+  const L = currentLang;
+  if (!confirm(L === 'ar'
+    ? 'هل تريد إلغاء طلبك؟ لن يتم تسليم أي طرد في هذه الدورة.'
+    : 'Cancel your order? You will not receive a bundle this cycle.')) return;
+  try {
+    const res  = await fetch('/api/food-order/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_id: STATE.familyId, request_id: requestId })
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Something went wrong.'); return; }
+    await refreshState();
+  } catch(e) {
+    alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
   }
+}
+
+// ── Change request ─────────────────────────────────────────────────────────────
+async function submitCR(cid, requestId) {
+  const L    = currentLang;
+  const btn  = document.getElementById(`cr-btn-${cid}`);
+  const msg  = document.getElementById(`cr-msg-${cid}`);
+  const notes = (document.getElementById(`cr-notes-${cid}`)?.value || '').trim();
+  const selectedIds = Array.from(
+    document.querySelectorAll(`#cr-items-${cid} input[type=checkbox]:checked`)
+  ).map(cb => cb.dataset.itemId);
+
+  btn.disabled      = true;
+  btn.textContent   = L === 'ar' ? 'جارٍ الإرسال…' : 'Sending…';
+  msg.style.display = 'none';
+  try {
+    const res  = await fetch('/api/family-request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        family_id: STATE.familyId,
+        request_id: requestId,
+        family_notes: notes,
+        selected_item_ids: selectedIds,
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent   = data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.');
+      msg.style.color   = 'var(--red)';
+      msg.style.display = 'inline';
+      btn.disabled      = false;
+      btn.textContent   = L === 'ar' ? 'إرسال الطلب' : 'Submit Request';
+      return;
+    }
+    await refreshState();
+  } catch(e) {
+    msg.textContent   = L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.';
+    msg.style.color   = 'var(--red)';
+    msg.style.display = 'inline';
+    btn.disabled      = false;
+    btn.textContent   = L === 'ar' ? 'إرسال الطلب' : 'Submit Request';
+  }
+}
+
+async function retractRequest(cid, crId, requestId) {
+  const L = currentLang;
+  if (!confirm(L === 'ar' ? 'هل تريد سحب طلب التعديل؟' : 'Retract this change request?')) return;
+  try {
+    const res  = await fetch(`/api/family-request/${crId}/retract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_id: STATE.familyId })
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Something went wrong.'); return; }
+    await refreshState();
+  } catch(e) {
+    alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+  }
+}
+
+// ── Refresh ────────────────────────────────────────────────────────────────────
+async function refreshState() {
+  try {
+    const res  = await fetch('/api/food-order/check?phone=' + encodeURIComponent(STATE.phone));
+    const data = await res.json();
+    if (data.registered) {
+      STATE.cycles  = data.cycles  || [];
+      STATE.history = data.history || [];
+      renderAll();
+    }
+  } catch(e) { /* silent */ }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 </script>
 </body>
 </html>

@@ -549,6 +549,7 @@ def bootstrap_db():
         ('confirmed_at',          'TEXT'),
         ('confirmation_sent_at',  'TEXT'),
         ('updated_at',            'TEXT'),
+        ('family_notes',          'TEXT'),
     ]:
         try:
             conn.execute(f'ALTER TABLE food_requests ADD COLUMN {_col} {_def}')
@@ -3559,22 +3560,29 @@ def handle_unhandled_exception(e):
 
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
-    """Check if a phone number is registered and if there's an open cycle."""
+    """Return family info + all delivery cycles within next 30 days with per-cycle order state."""
+    import json as _json
+    from datetime import timedelta, date as _date
     phone = _normalize_phone(request.args.get('phone') or '')
     if not phone:
         return jsonify({'error': 'Phone number required'}), 400
 
     db = get_db()
 
-    # Ensure all newer columns exist (guards for live DBs created before these were added)
+    # Column safety guards
     for _col, _def in [('bundle_size','TEXT'), ('pending_bundle_size','TEXT'),
-                       ('wa_phone','TEXT'), ('wa_apikey','TEXT'), ('updated_at','TEXT')]:
+                       ('wa_phone','TEXT'), ('wa_apikey','TEXT'), ('updated_at','TEXT'),
+                       ('family_notes','TEXT')]:
         try:
             db.execute(f'ALTER TABLE families ADD COLUMN {_col} {_def}')
         except Exception:
             pass
+    try:
+        db.execute('ALTER TABLE food_requests ADD COLUMN family_notes TEXT')
+    except Exception:
+        pass
 
-    # Look up family — active only; exact match first, then fuzzy last-10-digits fallback
+    # Family lookup — active only; exact match first, then fuzzy last-10-digits fallback
     family = None
     try:
         row = db.execute(
@@ -3597,7 +3605,6 @@ def check_food_order_eligibility():
         return jsonify({'error': f'DB error: {exc}'}), 500
 
     if not family:
-        # Log server-side only — never expose stored phone numbers to the client
         all_phones = db.execute("SELECT phone, status FROM families").fetchall()
         log.warning(f'PHONE MISS — searched={phone!r} stored={[(r["phone"],r["status"]) for r in all_phones]}')
         coord = db.execute(
@@ -3615,141 +3622,135 @@ def check_food_order_eligibility():
             )
         })
 
-    # Last order context (most recent completed order across all cycles)
-    last_order_row = db.execute(
-        '''SELECT fr.submitted_at, fr.status, fr.delivered_at, dc.title as cycle_title
-           FROM food_requests fr
-           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-           WHERE fr.family_id=?
-           ORDER BY fr.submitted_at DESC LIMIT 1''',
-        (family['id'],)
-    ).fetchone()
-    last_order = dict(last_order_row) if last_order_row else None
-
-    # Find the best cycle to show this family:
-    # 1. First, check if the family has an active order in any non-delivered, non-cancelled cycle
-    #    (upcoming, open, or shopping) — always show that so they can see their confirmed order.
-    # 2. Fall back to a delivered cycle with their most recent order (read-only history).
-    # 3. If no family order exists anywhere, show the open cycle for new submission (or nothing).
-    all_cycles = db.execute("SELECT id, title, status FROM delivery_cycles ORDER BY delivery_date_start DESC LIMIT 5").fetchall()
-    log.info(f'check_eligibility: family={family["name"]!r} cycles={[(r["title"],r["status"]) for r in all_cycles]}')
-
-    # Priority 1: family has an active (non-skipped, non-cancelled) order in an upcoming/open/shopping cycle
-    active_order_row = db.execute(
-        '''SELECT dc.* FROM food_requests fr
-           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-           WHERE fr.family_id=? AND fr.status NOT IN ('skipped','cancelled')
-             AND dc.status IN ('upcoming','open','shopping')
-           ORDER BY dc.delivery_date_start DESC LIMIT 1''',
-        (family['id'],)
-    ).fetchone()
-
-    if active_order_row:
-        cycle = active_order_row
-    else:
-        # Priority 2: open cycle for a fresh order submission
-        cycle = db.execute(
-            "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
+    # Resolve bundle size for this family
+    bundle_size = family['bundle_size'] or None
+    if not bundle_size:
+        sz = db.execute(
+            "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
+            (family['family_size'] or 1, family['family_size'] or 1)
         ).fetchone()
+        bundle_size = sz['bundle_size'] if sz else 'M'
 
-    if not cycle:
-        history_rows = db.execute(
-            '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
-                      dc.title as cycle_title, dc.delivery_date_start
-               FROM food_requests fr
-               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-               WHERE fr.family_id=?
-               ORDER BY dc.delivery_date_start DESC LIMIT 20''',
-            (family['id'],)
+    today   = _today_central()
+    cutoff  = today + timedelta(days=30)
+
+    # Cycles within next 30 days that are still active (not delivered)
+    upcoming_rows = db.execute(
+        """SELECT * FROM delivery_cycles
+           WHERE delivery_date_start >= ? AND delivery_date_start <= ?
+             AND status IN ('upcoming','open','shopping')
+           ORDER BY delivery_date_start""",
+        (today.isoformat(), cutoff.isoformat())
+    ).fetchall()
+
+    # Also include any cycle outside that window where the family has a non-terminal active order
+    extra_rows = db.execute(
+        """SELECT dc.* FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+           WHERE fr.family_id=? AND fr.status NOT IN ('skipped','cancelled','delivered')
+             AND dc.status IN ('upcoming','open','shopping')
+             AND (dc.delivery_date_start < ? OR dc.delivery_date_start > ?)
+           ORDER BY dc.delivery_date_start""",
+        (family['id'], today.isoformat(), cutoff.isoformat())
+    ).fetchall()
+
+    seen = {r['id'] for r in upcoming_rows}
+    all_cycles = list(upcoming_rows)
+    for r in extra_rows:
+        if r['id'] not in seen:
+            all_cycles.append(r)
+            seen.add(r['id'])
+    all_cycles.sort(key=lambda r: r['delivery_date_start'])
+
+    def _build_items_for_selection(bsize):
+        """Return bundle item list grouped by category for the order placement form."""
+        rows = db.execute(
+            '''SELECT fi.id, fi.name, fi.unit,
+                      fc.name as category, fc.display_order as cat_order,
+                      COALESCE(bq.quantity,'') as quantity
+               FROM food_items fi
+               JOIN food_categories fc ON fi.category_id=fc.id
+               LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
+               WHERE fi.is_active=1 AND fc.is_active=1
+               ORDER BY fc.display_order, fi.display_order''',
+            (bsize,)
         ).fetchall()
-        return jsonify({
-            'registered': True, 'family_name': family['name'],
-            'family_id': family['id'],
-            'bundle_size': family['bundle_size'],
-            'pending_bundle_size': family['pending_bundle_size'],
-            'open_cycle': False,
-            'last_order': last_order,
-            'history': [dict(r) for r in history_rows],
-            'message': 'There are no upcoming deliveries to confirm right now. Check back soon.'
-        })
+        cats = {}
+        for r in rows:
+            cats.setdefault(r['category'], []).append(
+                {'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']}
+            )
+        return [{'category': k, 'items': v} for k, v in cats.items()]
 
-    # Check if already submitted for this cycle
-    existing = db.execute(
-        "SELECT id, bundle_size, status FROM food_requests WHERE cycle_id=? AND family_id=?",
-        (cycle['id'], family['id'])
-    ).fetchone()
+    def _build_order_obj(existing, cycle):
+        """Build the full order object for a cycle where an order exists."""
+        bsize = existing['bundle_size'] or bundle_size
 
-    if existing:
-        bsize = existing['bundle_size'] or family['bundle_size'] or 'M'
-
-        # If this order has no item rows at all (scheduler ran before catalog was populated,
-        # or order was created via status-override only), backfill all active items as selected.
+        # Backfill items if the order has no item rows
         item_count = db.execute(
             "SELECT COUNT(*) FROM food_request_items WHERE request_id=?", (existing['id'],)
         ).fetchone()[0]
         if item_count == 0:
             all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
-            for item in all_items:
+            for it in all_items:
                 try:
                     db.execute(
-                        "INSERT OR IGNORE INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,1)",
-                        (str(uuid.uuid4()), existing['id'], item['id'])
+                        "INSERT OR IGNORE INTO food_request_items (id,request_id,food_item_id,selected) VALUES (?,?,?,1)",
+                        (str(uuid.uuid4()), existing['id'], it['id'])
                     )
                 except Exception:
                     pass
             db.commit()
-            log.info(f'check_eligibility: backfilled {len(all_items)} items for request {existing["id"]}')
 
-        # Return their selected items so /my-order can show a read-only summary
-        selected_items = db.execute(
-            '''SELECT fi.id, fi.name, fi.unit, fc.name as category,
-                      fc.display_order as cat_order, fi.display_order as item_order,
-                      COALESCE(bq.quantity,'') as quantity, fri.selected
+        # Selected items grouped by category
+        sel_rows = db.execute(
+            '''SELECT fi.name, fi.unit, fc.name as category,
+                      COALESCE(bq.quantity,'') as quantity
                FROM food_request_items fri
-               JOIN food_items fi ON fri.food_item_id = fi.id
-               JOIN food_categories fc ON fi.category_id = fc.id
+               JOIN food_items fi ON fri.food_item_id=fi.id
+               JOIN food_categories fc ON fi.category_id=fc.id
                LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
                WHERE fri.request_id=? AND fri.selected=1
                ORDER BY fc.display_order, fi.display_order''',
             (bsize, existing['id'])
         ).fetchall()
-        # Group by category
         sel_cats = {}
-        for r in selected_items:
-            cat = r['category']
-            if cat not in sel_cats:
-                sel_cats[cat] = []
-            sel_cats[cat].append({'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
-        history_rows2 = db.execute(
-            '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
-                      dc.title as cycle_title, dc.delivery_date_start
-               FROM food_requests fr JOIN delivery_cycles dc ON fr.cycle_id=dc.id
-               WHERE fr.family_id=? ORDER BY dc.delivery_date_start DESC LIMIT 20''',
-            (family['id'],)
+        for r in sel_rows:
+            sel_cats.setdefault(r['category'], []).append(
+                {'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']}
+            )
+
+        # Full bundle list (for change-request checklist)
+        full_rows = db.execute(
+            '''SELECT fi.id, fi.name, fi.unit, fc.name as category,
+                      COALESCE(bq.quantity,'') as quantity
+               FROM food_items fi
+               JOIN food_categories fc ON fi.category_id=fc.id
+               LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
+               ORDER BY fc.display_order, fi.display_order''',
+            (bsize,)
         ).fetchall()
-        # Cancellation: up to 24h before delivery (Central time)
-        # Change requests: allowed when cycle is open/upcoming and within 30 days, not shopping/delivered
+        full_cats = {}
+        for r in full_rows:
+            full_cats.setdefault(r['category'], []).append(
+                {'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']}
+            )
+
+        # Cancel / change-request eligibility
         try:
-            delivery_dt = cycle['delivery_date_start']
-            from datetime import date as _d2
-            _ddt = _d2.fromisoformat(delivery_dt)
-            days_until  = (_ddt - _today_central()).days
+            ddt = _date.fromisoformat(cycle['delivery_date_start'])
+            days_until  = (ddt - today).days
             _terminal   = existing['status'] in ('skipped', 'delivered', 'cancelled')
-            can_cancel  = (days_until >= 1 and not _terminal)
-            can_edit    = False  # Direct edit removed — use change request instead
+            can_cancel  = days_until >= 1 and not _terminal
             can_request_change = (
                 not _terminal
-                and days_until <= 30
-                and days_until >= 1
+                and 1 <= days_until <= 30
                 and cycle['status'] not in ('shopping', 'delivered')
             )
         except Exception:
-            can_cancel = False
-            can_edit   = False
-            can_request_change = False
+            can_cancel = can_request_change = False
 
-        # Pending change request for this order (max one active at a time)
-        import json as _json2
+        # Pending change request
         pending_cr = db.execute(
             "SELECT * FROM order_change_requests WHERE request_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1",
             (existing['id'],)
@@ -3757,161 +3758,118 @@ def check_food_order_eligibility():
         pending_change_request = None
         if pending_cr:
             try:
-                cr_payload = _json2.loads(pending_cr['payload'])
+                cr_payload = _json.loads(pending_cr['payload'])
             except Exception:
                 cr_payload = {}
             pending_change_request = {
-                'id': pending_cr['id'],
+                'id':           pending_cr['id'],
                 'family_notes': pending_cr['family_notes'],
-                'payload': cr_payload,
-                'created_at': pending_cr['created_at'],
+                'payload':      cr_payload,
+                'created_at':   pending_cr['created_at'],
             }
-            can_request_change = False  # Already have one pending
+            can_request_change = False
 
-        # Full bundle list as fallback — shown if selected_categories is empty.
-        # Query ALL items (no is_active filter) so the family always sees something even
-        # if items were later deactivated in the admin catalog.
-        bundle_item_rows = db.execute(
-            '''SELECT fi.id, fi.name, fi.unit,
-                      fc.name as category, fc.display_order as cat_order,
-                      fi.display_order as item_order,
-                      COALESCE(bq.quantity,'') as quantity
-               FROM food_items fi
-               JOIN food_categories fc ON fi.category_id = fc.id
-               LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
-               ORDER BY fc.display_order, fi.display_order''',
-            (bsize,)
-        ).fetchall()
-        bundle_cats = {}
-        for r in bundle_item_rows:
-            cat = r['category']
-            if cat not in bundle_cats:
-                bundle_cats[cat] = []
-            bundle_cats[cat].append({'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
-
-        # Order event history — for family's own timeline display
-        import json as _json
-        order_events = db.execute(
+        # Event timeline
+        ev_rows = db.execute(
             "SELECT event_type, actor, payload, created_at FROM food_request_events WHERE request_id=? ORDER BY created_at ASC",
             (existing['id'],)
         ).fetchall()
         events_list = []
-        for ev in order_events:
+        for ev in ev_rows:
             try:
-                payload = _json.loads(ev['payload'])
+                pl = _json.loads(ev['payload'])
             except Exception:
-                payload = {}
+                pl = {}
             events_list.append({
                 'event_type': ev['event_type'],
-                'actor': ev['actor'],
-                'payload': payload,
-                'created_at': ev['created_at']
+                'actor':      ev['actor'],
+                'payload':    pl,
+                'created_at': ev['created_at'],
             })
 
-        return jsonify({
-            'registered': True, 'family_name': family['name'],
-            'family_id': family['id'],
-            'bundle_size': family['bundle_size'],
-            'pending_bundle_size': family['pending_bundle_size'],
-            'open_cycle': True, 'already_submitted': True,
-            'order_status': existing['status'],
-            'request_id': existing['id'],
-            'can_cancel': can_cancel,
-            'can_edit': can_edit,
-            'can_request_change': can_request_change,
+        fn = None
+        try:
+            fn = existing['family_notes']
+        except Exception:
+            pass
+
+        return {
+            'id':                    existing['id'],
+            'status':                existing['status'],
+            'bundle_size':           bsize,
+            'family_notes':          fn,
+            'selected_categories':   [{'category': k, 'items': v} for k, v in sel_cats.items()],
+            'bundle_categories':     [{'category': k, 'items': v} for k, v in full_cats.items()],
+            'can_cancel':            can_cancel,
+            'can_request_change':    can_request_change,
             'pending_change_request': pending_change_request,
-            'last_order': last_order,
-            'delivery_start': cycle['delivery_date_start'],
-            'delivery_end': cycle['delivery_date_end'],
-            'cycle_title': cycle['title'],
-            'cycle_status': cycle['status'],
-            'selected_categories': [{'category': k, 'items': v} for k, v in sel_cats.items()],
-            'bundle_categories': [{'category': k, 'items': v} for k, v in bundle_cats.items()],
-            'order_events': events_list,
-            'history': [dict(r) for r in history_rows2],
-            'message': 'You have already submitted a request for this delivery cycle.'
-        })
+            'events':                events_list,
+        }
 
-    # Determine bundle size (family override → rule → default M)
-    bundle_size = family['bundle_size'] or None
-    if not bundle_size:
-        size = db.execute(
-            "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
-            (family['family_size'] or 1, family['family_size'] or 1)
+    cycles_data = []
+    for cycle in all_cycles:
+        existing = db.execute(
+            "SELECT id, bundle_size, status, family_notes FROM food_requests WHERE cycle_id=? AND family_id=?",
+            (cycle['id'], family['id'])
         ).fetchone()
-        bundle_size = size['bundle_size'] if size else 'M'
 
-    # Order history — all past requests for this family, newest first
+        cycle_obj = {
+            'id':                   cycle['id'],
+            'title':                cycle['title'],
+            'status':               cycle['status'],
+            'delivery_date_start':  cycle['delivery_date_start'],
+            'delivery_date_end':    cycle['delivery_date_end'],
+            'order':                None,
+            'can_place_order':      False,
+            'items_for_selection':  [],
+        }
+
+        if existing:
+            cycle_obj['order'] = _build_order_obj(existing, cycle)
+        elif cycle['status'] == 'open':
+            cycle_obj['can_place_order']     = True
+            cycle_obj['items_for_selection'] = _build_items_for_selection(bundle_size)
+
+        cycles_data.append(cycle_obj)
+
+    # History: all past orders (delivered cycles OR terminal order statuses)
     history_rows = db.execute(
-        '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
-                  dc.title as cycle_title, dc.delivery_date_start
+        """SELECT fr.id, fr.status, fr.bundle_size, fr.submitted_at,
+                  dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
            FROM food_requests fr
-           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-           WHERE fr.family_id=?
-           ORDER BY dc.delivery_date_start DESC
-           LIMIT 20''',
+           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+           WHERE fr.family_id=? AND (dc.status='delivered' OR fr.status IN ('delivered','cancelled','skipped'))
+           ORDER BY dc.delivery_date_start DESC LIMIT 30""",
         (family['id'],)
     ).fetchall()
-    history = [dict(r) for r in history_rows]
-
-    base = {
-        'registered': True,
-        'family_name': family['name'],
-        'family_id': family['id'],
-        'family_code': family['family_code'],
-        'bundle_size': bundle_size,
-        'pending_bundle_size': family['pending_bundle_size'],
-        'history': history,
-    }
-
-    # Get active food items with bundle quantities — grouped by category
-    item_rows = db.execute(
-        '''SELECT fi.id, fi.name, fi.unit,
-                  fc.name as category, fc.display_order as cat_order,
-                  fi.display_order as item_order,
-                  COALESCE(bq.quantity,'0') as quantity
-           FROM food_items fi
-           JOIN food_categories fc ON fi.category_id = fc.id
-           LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
-           WHERE fi.is_active=1 AND fc.is_active=1
-           ORDER BY fc.display_order, fi.display_order''',
-        (bundle_size,)
-    ).fetchall()
-    bundle_cats = {}
-    for r in item_rows:
-        cat = r['category']
-        if cat not in bundle_cats:
-            bundle_cats[cat] = []
-        bundle_cats[cat].append({'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
 
     return jsonify({
-        **base,
-        'open_cycle': True, 'already_submitted': False,
-        'last_order': last_order,
-        'cycle_id': cycle['id'],
-        'cycle_title': cycle['title'],
-        'delivery_start': cycle['delivery_date_start'],
-        'delivery_end': cycle['delivery_date_end'],
-        'request_close_at': cycle['request_close_at'],
-        'bundle_categories': [{'category': k, 'items': v} for k, v in bundle_cats.items()],
+        'registered':         True,
+        'family_name':        family['name'],
+        'family_id':          family['id'],
+        'bundle_size':        bundle_size,
+        'pending_bundle_size': family['pending_bundle_size'],
+        'cycles':             cycles_data,
+        'history':            [dict(r) for r in history_rows],
     })
 
 @app.route('/api/food-order', methods=['POST'])
 def submit_food_order():
+    """Place a food order for a family. Accepts optional notes field."""
     data = request.json or {}
-    # selected_items can be [] (family skips all items) — check key presence, not truthiness
+    # selected_items can be [] (family deselects all) — check key presence, not truthiness
     if not data.get('family_id') or not data.get('cycle_id') or 'selected_items' not in data:
         return jsonify({'error': 'family_id, cycle_id, and selected_items required'}), 422
 
     db = get_db()
     auto_update_cycle_statuses(db)
 
-    # Validate cycle is still open
+    # Validate cycle is open
     cycle = db.execute(
         "SELECT * FROM delivery_cycles WHERE id=? AND status='open'", (data['cycle_id'],)
     ).fetchone()
     if not cycle:
-        return jsonify({'error': 'This cycle is no longer accepting requests.'}), 409
+        return jsonify({'error': 'This delivery is not currently accepting orders.'}), 409
 
     # Validate family
     family = db.execute("SELECT * FROM families WHERE id=?", (data['family_id'],)).fetchone()
@@ -3921,26 +3879,36 @@ def submit_food_order():
     # Enforce one order per family per cycle
     if db.execute("SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
                   (data['cycle_id'], data['family_id'])).fetchone():
-        return jsonify({'error': 'You have already submitted a request for this cycle.'}), 409
+        return jsonify({'error': 'You have already placed an order for this delivery.'}), 409
 
     # Determine bundle size — family override takes priority over size rules
     bundle_size = family['bundle_size'] or None
     if not bundle_size:
         size = db.execute(
-            "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
+            "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
             (family['family_size'] or 1, family['family_size'] or 1)
         ).fetchone()
         bundle_size = size['bundle_size'] if size else 'M'
 
-    # Create food request
-    ts = now()
+    ts  = now()
     rid = str(uuid.uuid4())
-    db.execute(
-        '''INSERT INTO food_requests
-           (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmed_at)
-           VALUES (?,?,?,?,?,?,?)''',
-        (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts)
-    )
+    family_notes = (data.get('notes') or '').strip()
+
+    # Insert food request — try with family_notes, fallback for older schema
+    try:
+        db.execute(
+            '''INSERT INTO food_requests
+               (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmed_at, family_notes)
+               VALUES (?,?,?,?,?,?,?,?)''',
+            (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts, family_notes or None)
+        )
+    except Exception:
+        db.execute(
+            '''INSERT INTO food_requests
+               (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmed_at)
+               VALUES (?,?,?,?,?,?,?)''',
+            (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts)
+        )
 
     # Save item selections
     selected_ids = set(data.get('selected_items', []))
@@ -3951,16 +3919,37 @@ def submit_food_order():
             (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
         )
 
-    # Auto-create volunteer slots immediately — delivery dates are fixed
+    # Auto-create volunteer slots
     slots_created = _ensure_volunteer_slots(db, data['cycle_id'], data['family_id'])
-
     db.commit()
-    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]} — {slots_created} slots created')
+
+    # Audit log + coordinator notification (after commit, non-fatal)
+    try:
+        _log_order_event(db, rid, 'confirmed', 'family', {
+            'source': 'portal',
+            'items_count': len(selected_ids),
+            'notes': family_notes or None,
+        })
+    except Exception:
+        pass
+    try:
+        _notify_coordinators(db,
+            f"New order placed via portal:\n"
+            f"Family: {family['name']}\n"
+            f"Cycle: {cycle['title']}\n"
+            f"Items selected: {len(selected_ids)}"
+            + (f"\nNotes: {family_notes}" if family_notes else '')
+        )
+    except Exception:
+        pass
+
+    log.info(f'Food order placed: family {data["family_id"]} cycle {data["cycle_id"]} — {slots_created} slots created')
     return jsonify({
         'ok': True,
-        'message': 'Your request has been submitted.',
+        'request_id': rid,
+        'message': 'Your order has been placed.',
         'delivery_start': cycle['delivery_date_start'],
-        'delivery_end': cycle['delivery_date_end']
+        'delivery_end':   cycle['delivery_date_end'],
     }), 201
 
 @app.route('/api/food-order/cancel', methods=['POST'])
