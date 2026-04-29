@@ -3100,7 +3100,7 @@ async function renderDeliveries(filterStatus) {
     const url = filterStatus !== 'all' ? '/delivery-cycles?status=' + filterStatus : '/delivery-cycles';
     _cyclesCache = await GET(url);
     const statusColors = { upcoming:'badge-pending', open:'badge-active', shopping:'badge-approved', delivered:'badge-completed' };
-    const statusLabels = { upcoming:'Upcoming', open:'Open — Accepting Orders', shopping:'Shopping', delivered:'Delivered' };
+    const statusLabels = { upcoming:'Upcoming', open:'Accepting Orders', shopping:'Shopping', delivered:'Delivered' };
     document.getElementById('content').innerHTML = `
       <div style="margin-bottom:16px">
         <div class="filter-tabs">
@@ -3124,10 +3124,10 @@ async function renderDeliveries(filterStatus) {
                 <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
-                  ${c.status === 'upcoming'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Open for Orders</button>` : ''}
+                  ${c.status === 'upcoming'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Accepting Orders</button>` : ''}
                   ${c.status === 'open'      ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','open')">← Upcoming</button>
                                                <button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>` : ''}
-                  ${c.status === 'shopping'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','shopping')">← Open for Orders</button>
+                  ${c.status === 'shopping'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','shopping')">← Accepting Orders</button>
                                                <button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
                   ${c.status === 'delivered' ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','delivered')">← Shopping</button>` : ''}
                 </td>
@@ -3159,7 +3159,7 @@ async function loadConfirmationCount(cycleId) {
 
 async function advanceCycleStatus(id, current) {
   const next  = { upcoming:'open', open:'shopping', shopping:'delivered' };
-  const label = { upcoming:'Open for Family Orders', open:'Shopping', shopping:'Delivered' };
+  const label = { upcoming:'Accepting Orders', open:'Shopping', shopping:'Delivered' };
   const desc  = {
     upcoming: 'Families will be able to log in to My Order and confirm their bundle.',
     open:     'The order window closes. Volunteers will start shopping.',
@@ -3175,7 +3175,7 @@ async function advanceCycleStatus(id, current) {
 
 async function revertCycleStatus(id, current) {
   const prev  = { open:'upcoming', shopping:'open', delivered:'shopping' };
-  const label = { open:'Upcoming', shopping:'Open for Orders', delivered:'Shopping' };
+  const label = { open:'Upcoming', shopping:'Accepting Orders', delivered:'Shopping' };
   if (!prev[current]) return;
   if (!confirm(`Revert this cycle back to "${label[prev[current]]}"?\n\nThis will undo the status advance.`)) return;
   try {
@@ -3205,7 +3205,7 @@ function openCycleForm(id) {
     ${id ? `<div class="form-group">
       <label>Status</label>
       <select id="cy-status">
-        ${['upcoming','shopping','delivered'].map(s => `<option value="${s}" ${c?.status===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
+        ${[['upcoming','Upcoming'],['open','Accepting Orders'],['shopping','Shopping'],['delivered','Delivered']].map(([v,l]) => `<option value="${v}" ${c?.status===v?'selected':''}>${l}</option>`).join('')}
       </select>
     </div>` : `<p style="font-size:13px;color:#1a8754;background:#f0faf5;padding:10px 12px;border-radius:8px;margin-top:4px;">
       ✓ All active families will be automatically enrolled when the delivery is created.
