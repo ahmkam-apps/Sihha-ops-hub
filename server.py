@@ -3348,7 +3348,9 @@ def check_food_order_eligibility():
     ).fetchone()
     last_order = dict(last_order_row) if last_order_row else None
 
-    # Find open cycle
+    # Find open cycle — log all cycles so Railway logs can diagnose "no items" issues
+    all_cycles = db.execute("SELECT id, title, status FROM delivery_cycles ORDER BY delivery_date_start DESC LIMIT 5").fetchall()
+    log.info(f'check_eligibility: family={family["name"]!r} cycles={[(r["title"],r["status"]) for r in all_cycles]}')
     cycle = db.execute(
         "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
     ).fetchone()
@@ -3515,20 +3517,23 @@ def submit_food_order():
                   (data['cycle_id'], data['family_id'])).fetchone():
         return jsonify({'error': 'You have already submitted a request for this cycle.'}), 409
 
-    # Determine bundle size
-    size = db.execute(
-        "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
-        (family['family_size'] or 1, family['family_size'] or 1)
-    ).fetchone()
-    bundle_size = size['bundle_size'] if size else 'M'
+    # Determine bundle size — family override takes priority over size rules
+    bundle_size = family['bundle_size'] or None
+    if not bundle_size:
+        size = db.execute(
+            "SELECT bundle_size FROM bundle_size_rules WHERE min_household <= ? AND (max_household IS NULL OR max_household >= ?) ORDER BY min_household DESC LIMIT 1",
+            (family['family_size'] or 1, family['family_size'] or 1)
+        ).fetchone()
+        bundle_size = size['bundle_size'] if size else 'M'
 
     # Create food request
+    ts = now()
     rid = str(uuid.uuid4())
     db.execute(
         '''INSERT INTO food_requests
-           (id, cycle_id, family_id, bundle_size, submitted_at, status)
-           VALUES (?,?,?,?,?,?)''',
-        (rid, data['cycle_id'], data['family_id'], bundle_size, now(), 'confirmed')
+           (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmed_at)
+           VALUES (?,?,?,?,?,?,?)''',
+        (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts)
     )
 
     # Save item selections
