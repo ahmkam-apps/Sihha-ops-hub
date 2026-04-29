@@ -542,6 +542,19 @@ def bootstrap_db():
 
     # ── Phase 4A migrations ───────────────────────────────────────────────────
 
+    # Ensure food_requests has all expected columns (safety net in case table recreation failed)
+    for _col, _def in [
+        ('confirmation_token',    'TEXT'),
+        ('confirmed_at',          'TEXT'),
+        ('confirmation_sent_at',  'TEXT'),
+        ('updated_at',            'TEXT'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE food_requests ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added food_requests.{_col}')
+        except sqlite3.OperationalError:
+            pass  # Already exists
+
     # Add slot_id to receipts (links a portal-submitted receipt to a volunteer slot)
     try:
         conn.execute('ALTER TABLE receipts ADD COLUMN slot_id TEXT')
@@ -2602,12 +2615,81 @@ def update_food_request_status(rid):
     status = d.get('status')
     if status not in ('confirmed', 'skipped', 'pending_confirmation'):
         return jsonify({'error': 'status must be confirmed, skipped, or pending_confirmation'}), 422
-    db.execute(
-        "UPDATE food_requests SET status=?, confirmed_at=?, updated_at=? WHERE id=?",
-        (status, now() if status == 'confirmed' else None, now(), rid)
-    )
+    ts = now()
+    try:
+        db.execute(
+            "UPDATE food_requests SET status=?, confirmed_at=?, updated_at=? WHERE id=?",
+            (status, ts if status == 'confirmed' else None, ts, rid)
+        )
+    except Exception:
+        # Fallback: confirmed_at/updated_at columns may not exist yet on old DB
+        db.execute("UPDATE food_requests SET status=? WHERE id=?", (status, rid))
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM food_requests WHERE id=?", (rid,)).fetchone()))
+
+
+@app.route('/api/families/<fid>/manual-confirm', methods=['POST'])
+@require_auth(roles=['admin'])
+def manual_confirm_family(fid):
+    """Coordinator manually adds a family to the current open cycle as confirmed."""
+    db = get_db()
+    family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+    if not family:
+        return jsonify({'error': 'Family not found'}), 404
+
+    # Find open or shopping cycle (coordinator may be confirming mid-cycle)
+    cycle = db.execute(
+        "SELECT * FROM delivery_cycles WHERE status IN ('open','shopping') ORDER BY delivery_date_start LIMIT 1"
+    ).fetchone()
+    if not cycle:
+        return jsonify({'error': 'No active delivery cycle (open or shopping). Create or open a cycle first.'}), 409
+
+    # Don't duplicate
+    existing = db.execute(
+        "SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
+        (cycle['id'], fid)
+    ).fetchone()
+    if existing:
+        return jsonify({'error': 'Family already has an order for this cycle.', 'request_id': existing['id']}), 409
+
+    # Determine bundle size
+    bundle_size = family['bundle_size'] or None
+    if not bundle_size:
+        size = db.execute(
+            "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
+            (family['family_size'] or 1, family['family_size'] or 1)
+        ).fetchone()
+        bundle_size = size['bundle_size'] if size else 'M'
+
+    ts  = now()
+    rid = str(uuid.uuid4())
+    try:
+        db.execute(
+            '''INSERT INTO food_requests
+               (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmed_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)''',
+            (rid, cycle['id'], fid, bundle_size, ts, 'confirmed', ts, ts)
+        )
+    except Exception:
+        # Fallback if extra columns don't exist
+        db.execute(
+            '''INSERT INTO food_requests
+               (id, cycle_id, family_id, bundle_size, submitted_at, status)
+               VALUES (?,?,?,?,?,?)''',
+            (rid, cycle['id'], fid, bundle_size, ts, 'confirmed')
+        )
+
+    # Record all items as selected by default
+    all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
+    for item in all_items:
+        db.execute(
+            "INSERT OR IGNORE INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,1)",
+            (str(uuid.uuid4()), rid, item['id'])
+        )
+
+    db.commit()
+    log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} by coordinator')
+    return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size}), 201
 
 @app.route('/api/delivery-cycles/<cid>/shopping-list', methods=['GET'])
 @require_auth()
@@ -3935,7 +4017,13 @@ def family_history(fid):
 
         result.append(o)
 
-    return jsonify({'family': dict(family), 'orders': result})
+    # Current active cycle (open or shopping) — used by admin UI to show "Add to Cycle" button
+    active_cycle = db.execute(
+        "SELECT id, title, status, delivery_date_start FROM delivery_cycles WHERE status IN ('open','shopping') ORDER BY delivery_date_start LIMIT 1"
+    ).fetchone()
+    active_cycle_data = dict(active_cycle) if active_cycle else None
+
+    return jsonify({'family': dict(family), 'orders': result, 'active_cycle': active_cycle_data})
 
 
 @app.route('/api/volunteers/<vid>/history')

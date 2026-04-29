@@ -1797,9 +1797,10 @@ async function viewFamily(id) {
       GET('/task-types')
     ]);
 
-    const orders  = hist.orders || [];
-    const fid     = r.id;
-    const activeTT = taskTypes.filter(t => t.is_active);
+    const orders     = hist.orders || [];
+    const activeCycle = hist.active_cycle || null;
+    const fid        = r.id;
+    const activeTT   = taskTypes.filter(t => t.is_active);
 
     document.getElementById('page-title').textContent = r.name;
 
@@ -1841,28 +1842,48 @@ async function viewFamily(id) {
       </div>`;
 
     // ── Current cycle status ───────────────────────────────────────────────────
-    const latestOrder = orders[0];
+    // Find the order specifically for the active cycle (not just the most recent order)
+    const currentOrder = activeCycle
+      ? orders.find(o => o.cycle_id === activeCycle.id)
+      : orders[0];
     let cycleStrip = '';
-    if (latestOrder) {
-      const scMap = {
-        confirmed:            { bg:'#e8f5e9', color:'#1a5e34', label:'Confirmed ✓' },
-        auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed ✓' },
-        skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
-        pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Awaiting Response' },
-        cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
-      };
-      const sc = scMap[latestOrder.status] || { bg:'#f5f5f0', color:'#888', label:latestOrder.status };
-      const overrideBtns = latestOrder.status === 'confirmed'
-        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${latestOrder.id}','skipped','${latestOrder.cycle_id}','${fid}')">Mark Skipped</button>`
-        : latestOrder.status === 'skipped'
-        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${latestOrder.id}','confirmed','${latestOrder.cycle_id}','${fid}')">Mark Confirmed</button>`
-        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;margin-right:4px;" onclick="overrideFoodRequest('${latestOrder.id}','confirmed','${latestOrder.cycle_id}','${fid}')">✓ Confirm</button>
-           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${latestOrder.id}','skipped','${latestOrder.cycle_id}','${fid}')">Skip</button>`;
+
+    if (activeCycle && !currentOrder) {
+      // Family has no order yet for the active cycle — show "Add to Cycle" button
       cycleStrip = `
         <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
-          <span style="font-size:13px;font-weight:700;">${latestOrder.cycle_title}</span>
-          ${latestOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(latestOrder.delivery_date_start)}</span>` : ''}
+          <span style="font-size:13px;font-weight:700;">${activeCycle.title}</span>
+          <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:var(--gray-1);color:var(--gray-4);">No order yet</span>
+          <div style="margin-left:auto;display:flex;gap:6px;">
+            <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;"
+              onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Confirm for This Cycle</button>
+          </div>
+        </div>`;
+    } else if (currentOrder) {
+      const scMap = {
+        confirmed:            { bg:'#e8f5e9', color:'#1a5e34', label:'Confirmed ✓' },
+        auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed ✓' },
+        submitted:            { bg:'#fff8e1', color:'#7a5200', label:'Submitted' },
+        skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
+        pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Awaiting Response' },
+        delivered:            { bg:'#e3f2fd', color:'#0d47a1', label:'Delivered ✓' },
+        cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
+      };
+      const sc = scMap[currentOrder.status] || { bg:'#f5f5f0', color:'#888', label:currentOrder.status };
+      const overrideBtns = currentOrder.status === 'confirmed' || currentOrder.status === 'auto_confirmed'
+        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${currentOrder.id}','skipped','${currentOrder.cycle_id}','${fid}')">Mark Skipped</button>`
+        : currentOrder.status === 'skipped'
+        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${currentOrder.id}','confirmed','${currentOrder.cycle_id}','${fid}')">Mark Confirmed</button>`
+        : currentOrder.status === 'delivered'
+        ? ''
+        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;margin-right:4px;" onclick="overrideFoodRequest('${currentOrder.id}','confirmed','${currentOrder.cycle_id}','${fid}')">✓ Confirm</button>
+           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${currentOrder.id}','skipped','${currentOrder.cycle_id}','${fid}')">Skip</button>`;
+      cycleStrip = `
+        <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
+          <span style="font-size:13px;font-weight:700;">${currentOrder.cycle_title}</span>
+          ${currentOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(currentOrder.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
           <div style="display:flex;gap:6px;margin-left:auto;">${overrideBtns}</div>
         </div>`;
@@ -3390,6 +3411,15 @@ async function overrideFoodRequest(requestId, newStatus, cycleId, fromFamilyId) 
     if (fromFamilyId) viewFamily(fromFamilyId);
     else viewCycleDetail(cycleId);
   } catch(e) { alert('Failed to update: ' + e.message); }
+}
+
+async function manualConfirmFamily(familyId, familyName) {
+  if (!confirm(`Manually add ${familyName} to the current cycle as Confirmed?\n\nAll bundle items will be selected by default. You can adjust in the cycle detail view.`)) return;
+  try {
+    const data = await POST('/families/' + familyId + '/manual-confirm', {});
+    alert(`Done — ${familyName} confirmed for "${data.cycle_title}" (${data.bundle_size} bundle).`);
+    viewFamily(familyId);
+  } catch(e) { alert('Could not add to cycle: ' + e.message); }
 }
 
 async function viewShoppingList(cycleId) {
