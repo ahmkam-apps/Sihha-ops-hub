@@ -3523,6 +3523,26 @@ def check_food_order_eligibility():
     ).fetchone()
 
     if existing:
+        bsize = existing['bundle_size'] or family['bundle_size'] or 'M'
+
+        # If this order has no item rows at all (scheduler ran before catalog was populated,
+        # or order was created via status-override only), backfill all active items as selected.
+        item_count = db.execute(
+            "SELECT COUNT(*) FROM food_request_items WHERE request_id=?", (existing['id'],)
+        ).fetchone()[0]
+        if item_count == 0:
+            all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
+            for item in all_items:
+                try:
+                    db.execute(
+                        "INSERT OR IGNORE INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,1)",
+                        (str(uuid.uuid4()), existing['id'], item['id'])
+                    )
+                except Exception:
+                    pass
+            db.commit()
+            log.info(f'check_eligibility: backfilled {len(all_items)} items for request {existing["id"]}')
+
         # Return their selected items so /my-order can show a read-only summary
         selected_items = db.execute(
             '''SELECT fi.id, fi.name, fi.unit, fc.name as category,
@@ -3534,7 +3554,7 @@ def check_food_order_eligibility():
                LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
                WHERE fri.request_id=? AND fri.selected=1
                ORDER BY fc.display_order, fi.display_order''',
-            (existing['bundle_size'] or 'M', existing['id'])
+            (bsize, existing['id'])
         ).fetchall()
         # Group by category
         sel_cats = {}
@@ -3559,9 +3579,9 @@ def check_food_order_eligibility():
         except Exception:
             can_cancel = False
 
-        # Always include the full bundle list as fallback — shown if selected_categories is empty
-        # (e.g. orders confirmed before per-item tracking was added, or manually confirmed)
-        bsize = existing['bundle_size'] or family['bundle_size'] or 'M'
+        # Full bundle list as fallback — shown if selected_categories is empty.
+        # Query ALL items (no is_active filter) so the family always sees something even
+        # if items were later deactivated in the admin catalog.
         bundle_item_rows = db.execute(
             '''SELECT fi.id, fi.name, fi.unit,
                       fc.name as category, fc.display_order as cat_order,
@@ -3570,7 +3590,6 @@ def check_food_order_eligibility():
                FROM food_items fi
                JOIN food_categories fc ON fi.category_id = fc.id
                LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
-               WHERE fi.is_active=1 AND fc.is_active=1
                ORDER BY fc.display_order, fi.display_order''',
             (bsize,)
         ).fetchall()
