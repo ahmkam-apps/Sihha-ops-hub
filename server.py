@@ -511,6 +511,20 @@ def bootstrap_db():
     except sqlite3.OperationalError:
         pass  # Already exists
 
+    # Add columns that exist in CREATE TABLE but were missing from live DBs
+    for _col, _def in [
+        ('bundle_size',         'TEXT'),
+        ('updated_at',          'TEXT'),
+        ('pending_bundle_size', 'TEXT'),
+        ('wa_phone',            'TEXT'),
+        ('wa_apikey',           'TEXT'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE families ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added families.{_col}')
+        except sqlite3.OperationalError:
+            pass  # Already exists
+
     # ── Phase 4A migrations ───────────────────────────────────────────────────
 
     # Add slot_id to receipts (links a portal-submitted receipt to a volunteer slot)
@@ -3192,11 +3206,13 @@ def check_food_order_eligibility():
 
     db = get_db()
 
-    # Ensure pending_bundle_size column exists
-    try:
-        db.execute('ALTER TABLE families ADD COLUMN pending_bundle_size TEXT')
-    except Exception:
-        pass  # already exists
+    # Ensure all newer columns exist (guards for live DBs created before these were added)
+    for _col, _def in [('bundle_size','TEXT'), ('pending_bundle_size','TEXT'),
+                       ('wa_phone','TEXT'), ('wa_apikey','TEXT'), ('updated_at','TEXT')]:
+        try:
+            db.execute(f'ALTER TABLE families ADD COLUMN {_col} {_def}')
+        except Exception:
+            pass
 
     # Look up family — exact match first, then fuzzy (handles un-normalised stored phones)
     family = None
