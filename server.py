@@ -3204,6 +3204,41 @@ def pwa_icons(filename):
 
 # ── Public Food Order (no auth) ───────────────────────────────────────────────
 
+@app.route('/api/public/bundle-items', methods=['GET'])
+def public_bundle_items():
+    """Public — return active food items with bundle quantities for a given size.
+    Used by the family My Order portal so families can select/deselect items."""
+    size = (request.args.get('size') or 'M').upper()
+    if size not in ('S', 'M', 'L'):
+        size = 'M'
+    db = get_db()
+    rows = db.execute(
+        '''SELECT fi.id, fi.name, fi.unit,
+                  fc.name as category, fc.display_order as cat_order,
+                  fi.display_order as item_order,
+                  COALESCE(bq.quantity, '0') as quantity
+           FROM food_items fi
+           JOIN food_categories fc ON fi.category_id = fc.id
+           LEFT JOIN bundle_quantities bq
+                  ON bq.food_item_id = fi.id AND bq.bundle_size = ?
+           WHERE fi.is_active = 1 AND fc.is_active = 1
+           ORDER BY fc.display_order, fi.display_order''',
+        (size,)
+    ).fetchall()
+    # Group by category
+    cats = {}
+    for r in rows:
+        cat = r['category']
+        if cat not in cats:
+            cats[cat] = []
+        cats[cat].append({
+            'id': r['id'],
+            'name': r['name'],
+            'unit': r['unit'],
+            'quantity': r['quantity']
+        })
+    return jsonify([{'category': k, 'items': v} for k, v in cats.items()])
+
 @app.errorhandler(Exception)
 def handle_unhandled_exception(e):
     """Return JSON for unhandled Python exceptions; pass HTTP exceptions through normally."""

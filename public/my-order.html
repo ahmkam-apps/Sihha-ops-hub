@@ -256,6 +256,74 @@
     display: none;
   }
 
+  /* Item list */
+  .items-section {
+    background: var(--white);
+    border: 1px solid var(--gray-2);
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+  .items-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--gray-4);
+    margin-bottom: 14px;
+    font-weight: 700;
+  }
+  [lang="ar"] .items-section-title { text-transform: none; letter-spacing: 0; font-size: 12px; }
+  .item-category {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--gray-5);
+    margin: 14px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--gray-2);
+  }
+  [lang="ar"] .item-category { text-transform: none; letter-spacing: 0; font-size: 13px; }
+  .item-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--gray-1);
+    cursor: pointer;
+  }
+  .item-row:last-child { border-bottom: none; }
+  .item-check {
+    width: 20px; height: 20px;
+    border: 2px solid var(--gray-3);
+    border-radius: 4px;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.12s;
+    background: var(--white);
+  }
+  .item-row.selected .item-check {
+    background: var(--green);
+    border-color: var(--green);
+  }
+  .item-row.selected .item-check::after {
+    content: '';
+    width: 5px; height: 9px;
+    border-right: 2px solid white;
+    border-bottom: 2px solid white;
+    transform: rotate(45deg) translate(-1px, -1px);
+    display: block;
+  }
+  .item-name { flex: 1; font-size: 14px; }
+  .item-qty {
+    font-size: 12px;
+    color: var(--gray-4);
+    white-space: nowrap;
+    background: var(--gray-1);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .items-loading { font-size: 13px; color: var(--gray-4); padding: 8px 0; }
+
   /* Bundle change request */
   .bundle-change-row {
     margin-top: 12px;
@@ -431,6 +499,14 @@
 
     </div>
 
+    <!-- Item selection (shown when there is an open cycle & not yet submitted) -->
+    <div id="items-section" style="display:none">
+      <div class="items-section">
+        <div class="items-section-title" data-en="Your Bundle Items — select what you need" data-ar="محتويات طردك — اختر ما تحتاجه">Your Bundle Items — select what you need</div>
+        <div id="items-list"><div class="items-loading" data-en="Loading items…" data-ar="جارٍ التحميل…">Loading items…</div></div>
+      </div>
+    </div>
+
     <!-- Order history -->
     <div id="history-section" style="margin-top:8px">
       <div class="section-title" data-en="Delivery History" data-ar="سجل التسليمات">Delivery History</div>
@@ -470,7 +546,8 @@
     cycle: null,
     familyId: null,
     bundleSize: null,
-    pendingBundleSize: null
+    pendingBundleSize: null,
+    bundleCategories: []   // [{category, items:[{id,name,unit,quantity}]}]
   };
 
   const BUNDLE_LABELS = {
@@ -518,6 +595,16 @@
       STATE.history   = data.history || [];
       STATE.bundleSize = data.bundle_size;
       STATE.pendingBundleSize = data.pending_bundle_size;
+      STATE.bundleCategories = [];
+
+      // Fetch bundle items if there's an open cycle and order not yet submitted
+      if (data.open_cycle && !data.already_submitted) {
+        try {
+          const size = data.bundle_size || 'M';
+          const itemRes = await fetch('/api/public/bundle-items?size=' + size);
+          if (itemRes.ok) STATE.bundleCategories = await itemRes.json();
+        } catch(_) {}
+      }
 
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
@@ -590,11 +677,17 @@
       if (d.already_submitted) {
         document.getElementById('cycle-actions').style.display = 'none';
         document.getElementById('confirmed-banner').style.display = 'block';
+        document.getElementById('items-section').style.display = 'none';
+      } else {
+        // Show item selection
+        document.getElementById('items-section').style.display = 'block';
+        renderItemList();
       }
 
     } else {
       cycleCard.style.display   = 'none';
       noCycleCard.style.display = 'block';
+      document.getElementById('items-section').style.display = 'none';
     }
 
     // Apply lang to dynamic elements
@@ -634,10 +727,42 @@
     }).join('');
   }
 
+  // ── Item list ─────────────────────────────────────────────────────────────
+  function renderItemList() {
+    const L = currentLang;
+    const container = document.getElementById('items-list');
+    const cats = STATE.bundleCategories;
+
+    if (!cats || !cats.length) {
+      container.innerHTML = `<div class="items-loading">${L === 'ar' ? 'لا توجد عناصر متاحة.' : 'No items available.'}</div>`;
+      return;
+    }
+
+    container.innerHTML = cats.map(cat => `
+      <div class="item-category">${escHtml(cat.category)}</div>
+      ${cat.items.map(item => `
+        <div class="item-row selected" data-id="${item.id}" onclick="toggleItem(this)">
+          <div class="item-check"></div>
+          <div class="item-name">${escHtml(item.name)}</div>
+          <div class="item-qty">${escHtml(item.quantity || '')} ${escHtml(item.unit || '')}</div>
+        </div>`).join('')}
+    `).join('');
+  }
+
+  function toggleItem(row) {
+    row.classList.toggle('selected');
+  }
+
+  function getSelectedItemIds() {
+    return Array.from(document.querySelectorAll('#items-list .item-row.selected'))
+      .map(r => r.dataset.id);
+  }
+
   // ── Confirm / Skip ────────────────────────────────────────────────────────
   async function doConfirm() {
     if (!STATE.cycle) return;
     const L = currentLang;
+    const selectedItems = getSelectedItemIds();
     try {
       const res = await fetch('/api/food-order', {
         method: 'POST',
@@ -646,17 +771,20 @@
           family_id: STATE.familyId,
           cycle_id: STATE.cycle.cycle_id,
           action: 'confirm',
-          selected_items: []
+          selected_items: selectedItems
         })
       });
       const data = await res.json();
       if (res.ok || data.ok) {
         document.getElementById('cycle-actions').style.display = 'none';
+        document.getElementById('items-section').style.display = 'none';
         document.getElementById('confirmed-banner').style.display = 'block';
         document.getElementById('confirmed-banner').querySelector('span').textContent =
-          STATUS_LABELS[L].received === 'Received'
-            ? '✓ Confirmed — your bundle will be delivered on the scheduled date.'
-            : '✓ تم التأكيد — سيتم تسليم طلبك في الموعد المحدد.';
+          L === 'ar'
+            ? '✓ تم التأكيد — سيتم تسليم طلبك في الموعد المحدد.'
+            : '✓ Confirmed — your bundle will be delivered on the scheduled date.';
+      } else {
+        alert(data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.'));
       }
     } catch(e) {
       alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
