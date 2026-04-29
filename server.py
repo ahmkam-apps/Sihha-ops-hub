@@ -3251,7 +3251,10 @@ def check_food_order_eligibility():
     family = dict(family_row) if family_row else None
 
     if not family:
-        # Look up coordinator WA number for the helpful message
+        # DEBUG: log all stored phones to help diagnose mismatch
+        all_phones = db.execute("SELECT phone, status FROM families").fetchall()
+        log.warning(f'PHONE LOOKUP MISS — searched: {phone!r} — stored phones: {[(r["phone"], r["status"]) for r in all_phones]}')
+
         coord = db.execute(
             "SELECT wa_phone FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
         ).fetchone()
@@ -3260,6 +3263,8 @@ def check_food_order_eligibility():
         return jsonify({
             'registered': False,
             'coordinator_wa': wa_link,
+            '_debug_searched': phone,
+            '_debug_stored': [(r['phone'], r['status']) for r in all_phones],
             'message': (
                 'We could not find a record for that phone number. '
                 'If you are already enrolled, make sure you are using the same number you registered with. '
