@@ -2398,7 +2398,9 @@ def auto_update_cycle_statuses(db):
 
 def _ensure_volunteer_slots(db, cycle_id, family_id):
     """Create shopping + delivery slots for a family the moment their order is confirmed.
-    Safe to call multiple times — uses INSERT OR IGNORE (idempotent).
+    Idempotent — checks for an existing non-cancelled slot before inserting.
+    The UNIQUE constraint was removed from volunteer_slots, so INSERT OR IGNORE has no effect;
+    we must SELECT-first to guarantee exactly one open slot per family+task.
     Returns the number of new slots created (0 if they already existed).
     """
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
@@ -2408,11 +2410,17 @@ def _ensure_volunteer_slots(db, cycle_id, family_id):
     created = 0
     for task_type, task_date in [('shopping', None), ('delivery', delivery_date)]:
         try:
-            db.execute(
-                "INSERT OR IGNORE INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
-                (str(uuid.uuid4()), cycle_id, family_id, task_type, task_date, 'open', now())
-            )
-            created += db.execute("SELECT changes()").fetchone()[0]
+            # Only insert if no slot exists at all for this family+task in this cycle
+            existing = db.execute(
+                "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND status!='cancelled'",
+                (cycle_id, family_id, task_type)
+            ).fetchone()
+            if not existing:
+                db.execute(
+                    "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), cycle_id, family_id, task_type, task_date, 'open', now())
+                )
+                created += 1
         except Exception as e:
             log.warning(f'_ensure_volunteer_slots: could not create {task_type} slot for family {family_id}: {e}')
     return created
@@ -2644,7 +2652,7 @@ def update_food_request_status(rid):
             "UPDATE food_requests SET status=?, confirmed_at=?, updated_at=? WHERE id=?",
             (status, ts if status == 'confirmed' else None, ts, rid)
         )
-    except Exception:
+    except sqlite3.OperationalError:
         # Fallback: confirmed_at/updated_at columns may not exist yet on old DB
         db.execute("UPDATE food_requests SET status=? WHERE id=?", (status, rid))
 
@@ -4255,23 +4263,15 @@ def generate_cycle_slots(cid):
     if not cycle:
         return jsonify({'error': 'Cycle not found'}), 404
     requests = db.execute(
-        "SELECT * FROM food_requests WHERE cycle_id=?", (cid,)
+        "SELECT * FROM food_requests WHERE cycle_id=? AND status IN ('confirmed','auto_confirmed','submitted')", (cid,)
     ).fetchall()
     created = 0
     for req in requests:
-        for task_type in ['shopping', 'delivery']:
-            task_date = cycle['delivery_date_start'] if task_type == 'delivery' else None
-            try:
-                db.execute(
-                    "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), cid, req['family_id'], task_type, task_date, 'open', now())
-                )
-                created += 1
-            except sqlite3.IntegrityError:
-                pass  # Slot already exists for this family+task
+        # Delegate to _ensure_volunteer_slots — it SELECT-firsts to prevent duplicates
+        created += _ensure_volunteer_slots(db, cid, req['family_id'])
     db.commit()
     total_slots = db.execute(
-        "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=?", (cid,)
+        "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status!='cancelled'", (cid,)
     ).fetchone()[0]
     return jsonify({'ok': True, 'slots_created': created, 'slots_total': total_slots, 'total_requests': len(requests)})
 
@@ -4443,6 +4443,9 @@ def portal_get_families(cycle_id):
     result = []
     for fam in families:
         fam_dict = dict(fam)
+        # Ensure open slots exist — families confirmed before _ensure_volunteer_slots was
+        # introduced won't have any. This is idempotent (SELECT-first inside).
+        _ensure_volunteer_slots(db, cycle_id, fam['id'])
         slots = db.execute(
             '''SELECT vs.id, vs.task_type, vs.claimed_by, vs.status,
                       v.name as claimed_by_name
@@ -4472,6 +4475,8 @@ def portal_get_families(cycle_id):
             fam_dict['address'] = None
             fam_dict['city']    = None
         result.append(fam_dict)
+
+    db.commit()  # Persist any slots created by _ensure_volunteer_slots above
 
     return jsonify({
         'cycle':      dict(cycle),
@@ -4875,12 +4880,16 @@ def _send_family_confirmation_reminders():
     conn.row_factory = sqlite3.Row
     try:
         target = (datetime.utcnow() + timedelta(days=7)).strftime('%Y-%m-%d')
-        cutoff_date = (datetime.utcnow() + timedelta(days=5)).strftime('%Y-%m-%d')
+        # Cutoff = T-5 (when _skip_nonresponding_families fires) = today + 2 days from now
+        # We tell families to respond within 2 days, matching the actual auto-skip deadline
+        cutoff_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
         base_url = os.environ.get('APP_URL', 'https://sihha-ops-hub-production.up.railway.app')
 
         # Find the cycle(s) with delivery_date_start = target
+        # Include 'open' (Accepting Orders) as well as 'upcoming' — coordinator may have already
+        # advanced the cycle before T-7, which is the normal flow
         cycles = conn.execute(
-            "SELECT * FROM delivery_cycles WHERE delivery_date_start = ? AND status = 'upcoming'",
+            "SELECT * FROM delivery_cycles WHERE delivery_date_start = ? AND status IN ('upcoming','open')",
             (target,)
         ).fetchall()
 
