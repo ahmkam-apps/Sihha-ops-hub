@@ -547,7 +547,8 @@
     familyId: null,
     bundleSize: null,
     pendingBundleSize: null,
-    bundleCategories: []   // [{category, items:[{id,name,unit,quantity}]}]
+    bundleCategories: [],    // [{category, items:[{id,name,unit,quantity}]}] — pre-submit
+    selectedCategories: []   // [{category, items:[{name,unit,quantity}]}]   — post-submit (read-only)
   };
 
   const BUNDLE_LABELS = {
@@ -556,8 +557,8 @@
   };
 
   const STATUS_LABELS = {
-    en: { received: 'Received', upcoming: 'Upcoming', skipped: 'Not this cycle', pending: 'Pending' },
-    ar: { received: 'تم الاستلام', upcoming: 'قادم', skipped: 'تم التخطي', pending: 'قيد الانتظار' }
+    en: { received: 'Received', upcoming: 'Upcoming', skipped: 'Not this cycle', pending: 'Pending', confirmed: 'Confirmed' },
+    ar: { received: 'تم الاستلام', upcoming: 'قادم', skipped: 'تم التخطي', pending: 'قيد الانتظار', confirmed: 'تم التأكيد' }
   };
 
   // ── Login ─────────────────────────────────────────────────────────────────
@@ -595,16 +596,9 @@
       STATE.history   = data.history || [];
       STATE.bundleSize = data.bundle_size;
       STATE.pendingBundleSize = data.pending_bundle_size;
-      STATE.bundleCategories = [];
-
-      // Fetch bundle items if there's an open cycle and order not yet submitted
-      if (data.open_cycle && !data.already_submitted) {
-        try {
-          const size = data.bundle_size || 'M';
-          const itemRes = await fetch('/api/public/bundle-items?size=' + size);
-          if (itemRes.ok) STATE.bundleCategories = await itemRes.json();
-        } catch(_) {}
-      }
+      // Bundle categories already come from the check response (no second API call needed)
+      STATE.bundleCategories   = data.bundle_categories   || [];
+      STATE.selectedCategories = data.selected_categories || []; // when already_submitted
 
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
@@ -677,9 +671,15 @@
       if (d.already_submitted) {
         document.getElementById('cycle-actions').style.display = 'none';
         document.getElementById('confirmed-banner').style.display = 'block';
-        document.getElementById('items-section').style.display = 'none';
+        // Show read-only summary of what they selected
+        if (STATE.selectedCategories.length) {
+          document.getElementById('items-section').style.display = 'block';
+          renderConfirmedItems();
+        } else {
+          document.getElementById('items-section').style.display = 'none';
+        }
       } else {
-        // Show item selection
+        // Show item selection checklist
         document.getElementById('items-section').style.display = 'block';
         renderItemList();
       }
@@ -709,9 +709,10 @@
     }
 
     list.innerHTML = history.map(row => {
-      const statusKey = row.status === 'delivered' ? 'received'
-                      : row.status === 'upcoming'  ? 'upcoming'
-                      : row.status === 'skipped'   ? 'skipped'
+      const statusKey = row.status === 'delivered'                                       ? 'received'
+                      : ['confirmed','auto_confirmed','submitted'].includes(row.status)  ? 'confirmed'
+                      : row.status === 'skipped'                                         ? 'skipped'
+                      : row.status === 'upcoming'                                        ? 'upcoming'
                       : 'pending';
       const statusClass = `status-${statusKey}`;
       const statusLabel = STATUS_LABELS[L][statusKey];
@@ -728,6 +729,27 @@
   }
 
   // ── Item list ─────────────────────────────────────────────────────────────
+  function renderConfirmedItems() {
+    const L = currentLang;
+    const container = document.getElementById('items-list');
+    const cats = STATE.selectedCategories;
+    const titleEl = document.querySelector('.items-section-title');
+    if (titleEl) titleEl.textContent = L === 'ar' ? 'العناصر التي طلبتها' : 'Your confirmed items';
+    if (!cats || !cats.length) {
+      container.innerHTML = `<div class="items-loading">${L === 'ar' ? 'لا توجد عناصر محددة.' : 'No items recorded.'}</div>`;
+      return;
+    }
+    container.innerHTML = cats.map(cat => `
+      <div class="item-category">${escHtml(cat.category)}</div>
+      ${cat.items.map(item => `
+        <div class="item-row selected" style="cursor:default;pointer-events:none">
+          <div class="item-check"></div>
+          <div class="item-name">${escHtml(item.name)}</div>
+          <div class="item-qty">${escHtml(item.quantity || '')} ${escHtml(item.unit || '')}</div>
+        </div>`).join('')}
+    `).join('');
+  }
+
   function renderItemList() {
     const L = currentLang;
     const container = document.getElementById('items-list');

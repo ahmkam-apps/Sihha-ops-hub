@@ -1508,7 +1508,7 @@ async function renderFamilies(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.city||'—'}</td>
                 <td>${r.family_size||'—'}</td>
-                <td>${badge(r.status)}</td>
+                <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}</td>
                 ${hasActiveCycle ? `<td onclick="event.stopPropagation()">${orderBadge(r.id)}</td>` : ''}
                 <td style="font-size:12px;color:${r.last_delivery_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_delivery_volunteer?'600':'400'}">
                   ${r.last_delivery_volunteer||'—'}
@@ -3087,7 +3087,7 @@ async function loadOrdersForCycle(cycleId) {
     wrap.innerHTML = `
       <div style="padding:32px;text-align:center;color:var(--gray-4);">
         No orders for this delivery yet.<br>
-        <a href="/order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order form →</a>
+        <a href="/my-order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order portal →</a>
       </div>`;
     return;
   }
@@ -3191,12 +3191,13 @@ async function loadConfirmationCount(cycleId) {
   try {
     const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
     const total     = orders.length;
-    const confirmed = orders.filter(o => ['confirmed','auto_confirmed'].includes(o.status)).length;
+    // 'submitted' treated as confirmed (legacy records pre-fix + any edge cases)
+    const confirmed = orders.filter(o => ['confirmed','auto_confirmed','submitted'].includes(o.status)).length;
     const skipped   = orders.filter(o => o.status === 'skipped').length;
     const pending   = orders.filter(o => o.status === 'pending_confirmation').length;
     const el = document.getElementById('conf-' + cycleId);
     if (el) el.innerHTML = total
-      ? `<span style="color:#1a8754">${confirmed} confirmed</span> · ${pending} pending · ${skipped} skip`
+      ? `<span style="color:#1a8754;font-weight:600">${confirmed}/${total}</span> confirmed${skipped ? ` · ${skipped} skip` : ''}${pending ? ` · ${pending} pending` : ''}`
       : `<span style="color:#aaa">0 enrolled</span>`;
   } catch(e) {}
 }
@@ -3213,6 +3214,17 @@ async function advanceCycleStatus(id, current) {
   if (!confirm(`Move to "${label[next[current]]}"?\n\n${desc[current]}`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: next[current] });
+    // When advancing to Shopping, prompt to generate volunteer slots immediately
+    if (next[current] === 'shopping') {
+      try {
+        const orders = await GET('/delivery-cycles/' + id + '/orders');
+        const confirmed = orders.filter(o => ['confirmed','auto_confirmed','submitted'].includes(o.status)).length;
+        if (confirmed > 0 && confirm(`${confirmed} confirmed families.\n\nGenerate shopping and delivery slots for them now?`)) {
+          const res = await POST('/delivery-cycles/' + id + '/generate-slots', {});
+          alert(`Done — ${res.slots_created} slots created for ${confirmed} families.`);
+        }
+      } catch(_) {}
+    }
     renderDeliveries();
   } catch(e) { alert(e.message); }
 }

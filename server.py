@@ -3045,6 +3045,21 @@ def public_intake():
     )
     db.commit()
     log.info(f'New intake: {data["name"]} ({phone})')
+    # Notify coordinator via WhatsApp
+    try:
+        coord = db.execute(
+            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if coord and coord['wa_phone'] and coord['wa_apikey']:
+            msg = (f"New family intake submitted:\n"
+                   f"Name: {data['name']}\n"
+                   f"Phone: {phone}\n"
+                   f"City: {data.get('city') or '—'}\n"
+                   f"Family size: {data.get('family_size') or '—'}\n"
+                   f"Please log in to review and approve.")
+            _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
+    except Exception as _e:
+        log.warning(f'Intake WA notify failed: {_e}')
     return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
 
 @app.route('/api/volunteer-signup', methods=['POST'])
@@ -3076,6 +3091,21 @@ def public_volunteer_signup():
     )
     db.commit()
     log.info(f'New volunteer signup: {data["name"]} ({phone})')
+    # Notify coordinator via WhatsApp
+    try:
+        coord = db.execute(
+            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if coord and coord['wa_phone'] and coord['wa_apikey']:
+            role_label = {'shopper':'Shopper','delivery':'Delivery','both':'Shopper + Delivery','general':'General'}.get(data.get('role',''), data.get('role',''))
+            msg = (f"New volunteer signed up:\n"
+                   f"Name: {data['name']}\n"
+                   f"Phone: {phone}\n"
+                   f"Role: {role_label}\n"
+                   f"Please log in to review and activate.")
+            _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
+    except Exception as _e:
+        log.warning(f'Volunteer signup WA notify failed: {_e}')
     return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
 
 # ── Static Pages ──────────────────────────────────────────────────────────────
@@ -3094,11 +3124,13 @@ def intake_page():
 
 @app.route('/volunteer')
 def volunteer_page():
-    return send_from_directory('public', 'volunteer.html')
+    from flask import redirect
+    return redirect('/portal', code=301)
 
 @app.route('/order')
 def order_page():
-    return send_from_directory('public', 'order.html')
+    from flask import redirect
+    return redirect('/intake', code=301)
 
 @app.route('/confirm/<token>')
 def confirm_page(token):
@@ -3264,12 +3296,12 @@ def check_food_order_eligibility():
         except Exception:
             pass
 
-    # Look up family — exact match first, then fuzzy (handles un-normalised stored phones)
+    # Look up family — active only; exact match first, then fuzzy last-10-digits fallback
     family = None
     try:
         row = db.execute(
             "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
-            "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
+            "FROM families WHERE phone=? AND status='active'", (phone,)
         ).fetchone()
         if row:
             family = dict(row)
@@ -3277,7 +3309,7 @@ def check_food_order_eligibility():
             last10 = phone[-10:] if len(phone) >= 10 else phone
             for r in db.execute(
                 "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
-                "FROM families WHERE status != 'inactive'"
+                "FROM families WHERE status='active'"
             ).fetchall():
                 if _normalize_phone(r['phone'] or '')[-10:] == last10:
                     family = dict(r)
@@ -3287,6 +3319,7 @@ def check_food_order_eligibility():
         return jsonify({'error': f'DB error: {exc}'}), 500
 
     if not family:
+        # Log server-side only — never expose stored phone numbers to the client
         all_phones = db.execute("SELECT phone, status FROM families").fetchall()
         log.warning(f'PHONE MISS — searched={phone!r} stored={[(r["phone"],r["status"]) for r in all_phones]}')
         coord = db.execute(
@@ -3297,12 +3330,10 @@ def check_food_order_eligibility():
         return jsonify({
             'registered': False,
             'coordinator_wa': wa_link,
-            '_debug_searched': phone,
-            '_debug_stored': [(r['phone'], r['status']) for r in all_phones],
             'message': (
-                'We could not find a record for that phone number. '
-                'If you are already enrolled, make sure you are using the same number you registered with. '
-                'If you need help, please send a WhatsApp message to your coordinator.'
+                'We could not find an active record for that phone number. '
+                'Make sure you are using the same number you registered with, '
+                'or send a WhatsApp message to your coordinator for help.'
             )
         })
 
@@ -3345,18 +3376,51 @@ def check_food_order_eligibility():
 
     # Check if already submitted for this cycle
     existing = db.execute(
-        "SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
+        "SELECT id, bundle_size, status FROM food_requests WHERE cycle_id=? AND family_id=?",
         (cycle['id'], family['id'])
     ).fetchone()
 
     if existing:
+        # Return their selected items so /my-order can show a read-only summary
+        selected_items = db.execute(
+            '''SELECT fi.id, fi.name, fi.unit, fc.name as category,
+                      fc.display_order as cat_order, fi.display_order as item_order,
+                      COALESCE(bq.quantity,'') as quantity, fri.selected
+               FROM food_request_items fri
+               JOIN food_items fi ON fri.food_item_id = fi.id
+               JOIN food_categories fc ON fi.category_id = fc.id
+               LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
+               WHERE fri.request_id=? AND fri.selected=1
+               ORDER BY fc.display_order, fi.display_order''',
+            (existing['bundle_size'] or 'M', existing['id'])
+        ).fetchall()
+        # Group by category
+        sel_cats = {}
+        for r in selected_items:
+            cat = r['category']
+            if cat not in sel_cats:
+                sel_cats[cat] = []
+            sel_cats[cat].append({'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
+        history_rows2 = db.execute(
+            '''SELECT fr.status, fr.bundle_size, fr.submitted_at,
+                      dc.title as cycle_title, dc.delivery_date_start
+               FROM food_requests fr JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+               WHERE fr.family_id=? ORDER BY dc.delivery_date_start DESC LIMIT 20''',
+            (family['id'],)
+        ).fetchall()
         return jsonify({
             'registered': True, 'family_name': family['name'],
             'family_id': family['id'],
+            'bundle_size': family['bundle_size'],
+            'pending_bundle_size': family['pending_bundle_size'],
             'open_cycle': True, 'already_submitted': True,
+            'order_status': existing['status'],
             'last_order': last_order,
             'delivery_start': cycle['delivery_date_start'],
             'delivery_end': cycle['delivery_date_end'],
+            'cycle_title': cycle['title'],
+            'selected_categories': [{'category': k, 'items': v} for k, v in sel_cats.items()],
+            'history': [dict(r) for r in history_rows2],
             'message': 'You have already submitted a request for this delivery cycle.'
         })
 
@@ -3392,14 +3456,25 @@ def check_food_order_eligibility():
         'history': history,
     }
 
-    # Get active food items
-    items = db.execute(
-        '''SELECT fi.id, fi.name, fi.unit, fi.display_order,
-                  fc.id as category_id, fc.name as category_name, fc.display_order as cat_order
+    # Get active food items with bundle quantities — grouped by category
+    item_rows = db.execute(
+        '''SELECT fi.id, fi.name, fi.unit,
+                  fc.name as category, fc.display_order as cat_order,
+                  fi.display_order as item_order,
+                  COALESCE(bq.quantity,'0') as quantity
            FROM food_items fi
            JOIN food_categories fc ON fi.category_id = fc.id
+           LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
            WHERE fi.is_active=1 AND fc.is_active=1
-           ORDER BY fc.display_order, fi.display_order''').fetchall()
+           ORDER BY fc.display_order, fi.display_order''',
+        (bundle_size,)
+    ).fetchall()
+    bundle_cats = {}
+    for r in item_rows:
+        cat = r['category']
+        if cat not in bundle_cats:
+            bundle_cats[cat] = []
+        bundle_cats[cat].append({'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
 
     return jsonify({
         **base,
@@ -3410,7 +3485,7 @@ def check_food_order_eligibility():
         'delivery_start': cycle['delivery_date_start'],
         'delivery_end': cycle['delivery_date_end'],
         'request_close_at': cycle['request_close_at'],
-        'food_items': [dict(i) for i in items]
+        'bundle_categories': [{'category': k, 'items': v} for k, v in bundle_cats.items()],
     })
 
 @app.route('/api/food-order', methods=['POST'])
@@ -3453,7 +3528,7 @@ def submit_food_order():
         '''INSERT INTO food_requests
            (id, cycle_id, family_id, bundle_size, submitted_at, status)
            VALUES (?,?,?,?,?,?)''',
-        (rid, data['cycle_id'], data['family_id'], bundle_size, now(), 'submitted')
+        (rid, data['cycle_id'], data['family_id'], bundle_size, now(), 'confirmed')
     )
 
     # Save item selections
