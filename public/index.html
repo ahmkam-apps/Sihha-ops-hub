@@ -1965,11 +1965,37 @@ async function viewFamily(id) {
         </td>`;
       }).join('');
 
+      // Build event log HTML for this order
+      const evRows = (o.events||[]).filter(ev => !ev.payload?.note?.includes('backfilled'));
+      const evLabels = { confirmed:'✓ Confirmed', items_edited:'✏ Items updated',
+                         cancelled:'✕ Cancelled', auto_skipped:'— Auto-skipped',
+                         admin_override:'⚙ Admin override' };
+      const evHtml = evRows.length ? `
+        <details style="margin-top:6px;">
+          <summary style="font-size:11px;cursor:pointer;color:#555;user-select:none;">
+            ${evRows.length} event${evRows.length===1?'':'s'}
+          </summary>
+          <div style="margin-top:6px;border-left:2px solid #e0e0e0;padding-left:8px;">
+            ${evRows.map(ev => {
+              const lbl = evLabels[ev.event_type] || ev.event_type;
+              const ts  = ev.created_at ? new Date(ev.created_at+(ev.created_at.endsWith('Z')?'':'Z')).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+              let detail = '';
+              if (ev.event_type==='items_edited' && ev.payload) {
+                if (ev.payload.added?.length)   detail += ` +${ev.payload.added.join(', ')}`;
+                if (ev.payload.removed?.length) detail += ` −${ev.payload.removed.join(', ')}`;
+              }
+              if (ev.event_type==='admin_override' && ev.payload?.new_status) detail = ` → ${ev.payload.new_status}`;
+              return `<div style="font-size:11px;padding:2px 0;color:#444;">${lbl}${detail?`<span style="color:#888">${detail}</span>`:''} <span style="color:#bbb">${ts}</span></div>`;
+            }).join('')}
+          </div>
+        </details>` : '';
+
       return `<tr style="border-bottom:1px solid var(--gray-1);">
         <td style="padding:10px 10px 10px 0;font-weight:600;white-space:nowrap;">${o.cycle_title}</td>
         <td style="padding:10px;color:var(--gray-5);white-space:nowrap;">${o.delivery_date_start?fmtDateShort(o.delivery_date_start):'—'}</td>
         <td style="padding:10px;white-space:nowrap;">
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
+          ${evHtml}
         </td>
         <td style="padding:10px;color:var(--gray-5);">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
         <td style="padding:10px;">

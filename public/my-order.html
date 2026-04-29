@@ -478,9 +478,17 @@
         <div class="skipped-banner" id="skipped-banner">
           <span data-en="You have skipped this cycle. See you next time." data-ar="لقد تخطيت هذه الدورة. نراك في المرة القادمة.">You have skipped this cycle. See you next time.</span>
         </div>
-        <div id="cancel-order-row" style="display:none;margin-top:10px;">
-          <button onclick="doCancelOrder()" style="background:none;border:none;color:#b00;font-size:13px;cursor:pointer;text-decoration:underline;padding:0;"
+        <div id="order-actions-row" style="display:none;margin-top:12px;display:none;gap:12px;align-items:center;flex-wrap:wrap;">
+          <button id="edit-order-btn" onclick="startEditOrder()" style="background:#111;color:#fff;border:none;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;display:none;"
+            data-en="Edit Order" data-ar="تعديل الطلب">Edit Order</button>
+          <button onclick="doCancelOrder()" id="cancel-order-btn" style="background:none;border:none;color:#b00;font-size:13px;cursor:pointer;text-decoration:underline;padding:0;display:none;"
             data-en="Cancel this order" data-ar="إلغاء هذا الطلب">Cancel this order</button>
+        </div>
+        <!-- Event timeline -->
+        <div id="order-events-section" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:8px;"
+            data-en="Order Activity" data-ar="سجل الطلب">Order Activity</div>
+          <div id="order-events-list"></div>
         </div>
 
         <!-- Bundle size change -->
@@ -506,8 +514,16 @@
     <!-- Item selection (shown when there is an open cycle & not yet submitted) -->
     <div id="items-section" style="display:none">
       <div class="items-section">
-        <div class="items-section-title" data-en="Your Bundle Items — select what you need" data-ar="محتويات طردك — اختر ما تحتاجه">Your Bundle Items — select what you need</div>
+        <div class="items-section-title" id="items-section-title" data-en="Your Bundle Items — select what you need" data-ar="محتويات طردك — اختر ما تحتاجه">Your Bundle Items — select what you need</div>
         <div id="items-list"><div class="items-loading" data-en="Loading items…" data-ar="جارٍ التحميل…">Loading items…</div></div>
+        <!-- Edit mode controls (hidden until Edit Order clicked) -->
+        <div id="edit-actions" style="display:none;margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;display:none;">
+          <button onclick="saveEditOrder()" id="save-edit-btn" style="background:#111;color:#fff;border:none;padding:10px 20px;font-size:13px;cursor:pointer;font-family:inherit;"
+            data-en="Save Changes" data-ar="حفظ التغييرات">Save Changes</button>
+          <button onclick="cancelEditOrder()" style="background:none;color:#555;border:1px solid #ccc;padding:10px 16px;font-size:13px;cursor:pointer;font-family:inherit;"
+            data-en="Cancel" data-ar="إلغاء">Cancel</button>
+          <div id="edit-msg" style="font-size:13px;color:#1a8754;display:none;align-self:center;"></div>
+        </div>
       </div>
     </div>
 
@@ -600,10 +616,15 @@
       STATE.history            = data.history || [];
       STATE.bundleSize         = data.bundle_size;
       STATE.pendingBundleSize  = data.pending_bundle_size;
-      STATE.requestId          = data.request_id   || null;   // for cancel
+      STATE.requestId          = data.request_id   || null;
       STATE.canCancel          = data.can_cancel   || false;
+      STATE.canEdit            = data.can_edit     || false;
+      STATE.orderEvents        = data.order_events || [];
+      STATE.cycleStatus        = data.cycle_status || '';
+      STATE.phone              = document.getElementById('phone-input').value.trim();
       STATE.bundleCategories   = data.bundle_categories   || [];
       STATE.selectedCategories = data.selected_categories || [];
+      STATE.editMode           = false;
 
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
@@ -686,15 +707,21 @@
           if (STATE.selectedCategories.length) {
             renderConfirmedItems();
           } else if (STATE.bundleCategories.length) {
-            // No item-level tracking yet — show the full bundle as a preview
             renderConfirmedItems(STATE.bundleCategories);
           } else {
             renderConfirmedItems([]);
           }
-          // Show cancel button if within window
-          if (STATE.canCancel) {
-            document.getElementById('cancel-order-row').style.display = 'block';
+          // Show action buttons
+          const actionsRow = document.getElementById('order-actions-row');
+          actionsRow.style.display = 'flex';
+          if (STATE.canEdit) {
+            document.getElementById('edit-order-btn').style.display = 'inline-block';
           }
+          if (STATE.canCancel) {
+            document.getElementById('cancel-order-btn').style.display = 'inline-block';
+          }
+          // Render event timeline
+          renderOrderEvents();
         }
       } else {
         // Show item selection checklist
@@ -790,6 +817,150 @@
       document.getElementById('skipped-banner').style.display = 'block';
     } catch(e) {
       alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+    }
+  }
+
+  // ── Order event timeline ─────────────────────────────────────────────────
+  function renderOrderEvents() {
+    const events = STATE.orderEvents || [];
+    if (!events.length) return;
+    const L = currentLang;
+    const section = document.getElementById('order-events-section');
+    const list    = document.getElementById('order-events-list');
+    section.style.display = 'block';
+
+    const EVENT_LABELS = {
+      confirmed:      { en: '✓ Order confirmed',       ar: '✓ تم تأكيد الطلب' },
+      items_edited:   { en: '✏ Items updated',          ar: '✏ تم تعديل العناصر' },
+      cancelled:      { en: '✕ Order cancelled',        ar: '✕ تم إلغاء الطلب' },
+      auto_skipped:   { en: '— No response — skipped',  ar: '— لم يستجب — تم التخطي' },
+      admin_override: { en: '⚙ Updated by coordinator', ar: '⚙ تم التحديث من المنسق' },
+    };
+
+    list.innerHTML = events.filter(ev => !ev.payload?.note?.includes('backfilled')).map(ev => {
+      const label = EVENT_LABELS[ev.event_type]?.[L === 'ar' ? 'ar' : 'en'] || ev.event_type;
+      const ts = ev.created_at ? new Date(ev.created_at + (ev.created_at.endsWith('Z') ? '' : 'Z')).toLocaleDateString(L === 'ar' ? 'ar-SA' : 'en-US', { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+      let detail = '';
+      if (ev.event_type === 'items_edited' && ev.payload) {
+        const added   = ev.payload.added?.join(', ');
+        const removed = ev.payload.removed?.join(', ');
+        if (added)   detail += (L === 'ar' ? ` أُضيف: ${added}` : ` Added: ${added}`);
+        if (removed) detail += (L === 'ar' ? ` أُزيل: ${removed}` : ` Removed: ${removed}`);
+      }
+      return `<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:4px 0;font-size:12px;border-bottom:1px solid #f5f5f5;">
+        <div><span style="color:#333;">${escHtml(label)}</span>${detail ? `<span style="color:#888;"> —${escHtml(detail)}</span>` : ''}</div>
+        <span style="color:#aaa;white-space:nowrap;margin-left:10px;">${ts}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ── Edit order ────────────────────────────────────────────────────────────
+  function startEditOrder() {
+    const L = currentLang;
+    STATE.editMode = true;
+    document.getElementById('edit-order-btn').style.display = 'none';
+    document.getElementById('cancel-order-btn').style.display = 'none';
+    document.getElementById('edit-actions').style.display = 'flex';
+    document.getElementById('items-section-title').textContent =
+      L === 'ar' ? 'تعديل طلبك — اختر ما تحتاجه' : 'Edit your order — select what you need';
+    // Re-render items as checkboxes using bundle_categories for full list
+    renderEditableItems();
+  }
+
+  function cancelEditOrder() {
+    const L = currentLang;
+    STATE.editMode = false;
+    document.getElementById('edit-actions').style.display = 'none';
+    document.getElementById('edit-msg').style.display = 'none';
+    if (STATE.canEdit) document.getElementById('edit-order-btn').style.display = 'inline-block';
+    if (STATE.canCancel) document.getElementById('cancel-order-btn').style.display = 'inline-block';
+    document.getElementById('items-section-title').textContent =
+      L === 'ar' ? 'محتويات طردك' : 'What\'s in your bundle';
+    // Restore read-only view
+    if (STATE.selectedCategories.length) renderConfirmedItems();
+    else renderConfirmedItems(STATE.bundleCategories);
+  }
+
+  function renderEditableItems() {
+    const L = currentLang;
+    const container = document.getElementById('items-list');
+    const cats = STATE.bundleCategories;
+    // Build set of currently selected item IDs from selectedCategories names
+    const selectedNames = new Set();
+    (STATE.selectedCategories || []).forEach(cat => cat.items.forEach(i => selectedNames.add(i.name)));
+    // If no selectedCategories, default to all checked
+    const defaultAll = !STATE.selectedCategories.length;
+
+    if (!cats || !cats.length) {
+      container.innerHTML = `<p style="font-size:13px;color:#888;">${L === 'ar' ? 'لا توجد عناصر.' : 'No items available.'}</p>`;
+      return;
+    }
+    container.innerHTML = cats.map(cat => `
+      <div class="item-category">${escHtml(cat.category)}</div>
+      ${cat.items.map(item => {
+        const checked = defaultAll || selectedNames.has(item.name);
+        return `<label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;border-bottom:1px solid #f5f5f5;">
+          <input type="checkbox" data-item-id="${escHtml(item.id)}" ${checked ? 'checked' : ''}
+            style="width:16px;height:16px;cursor:pointer;accent-color:#111;">
+          <span style="flex:1;font-size:14px;">${escHtml(item.name)}</span>
+          <span style="font-size:12px;color:#888;">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
+        </label>`;
+      }).join('')}
+    `).join('');
+  }
+
+  async function saveEditOrder() {
+    const L = currentLang;
+    const btn = document.getElementById('save-edit-btn');
+    const msg = document.getElementById('edit-msg');
+    btn.disabled = true;
+    btn.textContent = L === 'ar' ? 'جارٍ الحفظ…' : 'Saving…';
+    msg.style.display = 'none';
+
+    const selectedIds = Array.from(document.querySelectorAll('#items-list input[type=checkbox]:checked'))
+      .map(cb => cb.dataset.itemId);
+
+    try {
+      const res = await fetch('/api/food-order/items', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: STATE.phone,
+          request_id: STATE.requestId,
+          selected_item_ids: selectedIds
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        msg.textContent = data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.');
+        msg.style.color = '#b00';
+        msg.style.display = 'inline';
+        btn.disabled = false;
+        btn.textContent = L === 'ar' ? 'حفظ التغييرات' : 'Save Changes';
+        return;
+      }
+      // Refresh from API to get updated selected_categories + events
+      const check = await fetch(`/api/food-order/check?phone=${encodeURIComponent(STATE.phone)}`);
+      const fresh = await check.json();
+      if (fresh.already_submitted) {
+        STATE.selectedCategories = fresh.selected_categories || [];
+        STATE.orderEvents        = fresh.order_events || [];
+        STATE.canEdit            = fresh.can_edit || false;
+        STATE.canCancel          = fresh.can_cancel || false;
+      }
+      cancelEditOrder();
+      renderOrderEvents();
+      msg.textContent = L === 'ar' ? '✓ تم حفظ التغييرات' : '✓ Changes saved';
+      msg.style.color = '#1a8754';
+      msg.style.display = 'inline';
+      document.getElementById('edit-actions').style.display = 'flex';
+      setTimeout(() => { msg.style.display = 'none'; }, 3000);
+    } catch(e) {
+      msg.textContent = L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.';
+      msg.style.color = '#b00';
+      msg.style.display = 'inline';
+      btn.disabled = false;
+      btn.textContent = L === 'ar' ? 'حفظ التغييرات' : 'Save Changes';
     }
   }
 
