@@ -725,7 +725,8 @@ function nav(page) {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     payments: 'Payments', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', catalog: 'Food Catalog',
-    cycle_detail: 'Delivery Detail', orders: 'Food Orders'
+    cycle_detail: 'Delivery Detail', orders: 'Food Orders',
+    wa_setup: '📵 WhatsApp Setup'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   closeDrawer();
@@ -734,7 +735,7 @@ function nav(page) {
     volunteers: renderVolunteers,
     payments: renderPayments, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, catalog: renderCatalog,
-    orders: renderOrders
+    orders: renderOrders, wa_setup: renderWASetup
   };
   if (renders[page]) renders[page]();
 }
@@ -866,6 +867,13 @@ async function renderDashboard() {
     if (s.families_pending  > 0) alerts.push({ label: `${s.families_pending} famil${s.families_pending>1?'ies':'y'} pending approval`, nav: 'families', color: '#e0a800' });
     if (s.volunteers_pending> 0) alerts.push({ label: `${s.volunteers_pending} volunteer${s.volunteers_pending>1?'s':''} pending approval`, nav: 'volunteers', color: '#e0a800' });
     if (s.reimb_pending_count > 0) alerts.push({ label: `${s.reimb_pending_count} payment${s.reimb_pending_count>1?'s':''} pending — ${fmtMoney(s.reimb_pending_amount)}`, nav: 'payments', color: '#c0392b' });
+    const totalNoWA = (s.families_no_wa||0) + (s.volunteers_no_wa||0);
+    if (totalNoWA > 0) {
+      const parts = [];
+      if (s.families_no_wa > 0)   parts.push(`${s.families_no_wa} famil${s.families_no_wa>1?'ies':'y'}`);
+      if (s.volunteers_no_wa > 0) parts.push(`${s.volunteers_no_wa} volunteer${s.volunteers_no_wa>1?'s':''}`);
+      alerts.push({ label: `📵 ${parts.join(' + ')} without WhatsApp`, nav: 'wa_setup', color: '#92400e' });
+    }
 
     const attentionHTML = alerts.length > 0 ? `
       <div style="background:#fffbec;border:1.5px solid #f0c040;border-radius:8px;padding:14px 18px;margin-bottom:20px;">
@@ -1475,7 +1483,7 @@ async function renderFamilies(filter, search) {
       return `<span style="font-size:11px;color:var(--gray-4)">${s}</span>`;
     }
 
-    const colCount = hasActiveCycle ? 11 : 10;
+    const colCount = hasActiveCycle ? 12 : 11;
 
     document.getElementById('content').innerHTML = `
       <div class="table-card">
@@ -1499,7 +1507,7 @@ async function renderFamilies(filter, search) {
         <table>
           <thead><tr>
             <th>ID</th><th>Name</th><th>Phone</th><th>City</th>
-            <th>Size</th><th>Status</th>
+            <th>Size</th><th>Status</th><th title="WhatsApp credentials">WA</th>
             ${hasActiveCycle ? '<th>Order</th>' : ''}
             <th>Delivered By</th><th>Shopped By</th><th>Added</th><th></th>
           </tr></thead>
@@ -1511,8 +1519,13 @@ async function renderFamilies(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.city||'—'}</td>
                 <td>${r.family_size||'—'}</td>
-                <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}${r.status==='active'&&(!r.wa_phone||!r.wa_apikey)?` <span title="WhatsApp not configured — family won't receive notifications" style="display:inline-block;font-size:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ WA</span>`:''}
-                </td>
+                <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}</td>
+                <td>${r.status==='active'
+                  ? (r.wa_phone && r.wa_apikey
+                    ? `<span title="WhatsApp configured" style="font-size:12px;font-weight:700;color:#1a8754;">✓</span>`
+                    : `<span title="WhatsApp not configured — family won't receive delivery notifications" style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;padding:1px 6px;border-radius:3px;cursor:pointer" onclick="event.stopPropagation();nav('wa_setup')">⚠ No WA</span>`)
+                  : `<span style="color:var(--gray-3);font-size:12px;">—</span>`
+                }</td>
                 ${hasActiveCycle ? `<td onclick="event.stopPropagation()">${orderBadge(r.id)}</td>` : ''}
                 <td style="font-size:12px;color:${r.last_delivery_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_delivery_volunteer?'600':'400'}">
                   ${r.last_delivery_volunteer||'—'}
@@ -2084,6 +2097,88 @@ function switchDrawerTab(tab, context) {
   document.getElementById('dpane-' + tab)?.classList.add('active');
 }
 
+// ── WhatsApp Setup ────────────────────────────────────────────────────────────
+async function renderWASetup() {
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="nav('dashboard')">← Dashboard</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const [families, volunteers] = await Promise.all([
+      GET('/families?status=needs_wa'),
+      GET('/volunteers?status=needs_wa')
+    ]);
+
+    const instrBox = `
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;padding:14px 18px;margin-bottom:24px;font-size:13px;color:#78350f;line-height:1.7;">
+        <strong style="display:block;margin-bottom:4px;color:#92400e;">How to set up CallMeBot for a contact</strong>
+        Ask them to open WhatsApp and send this message to <strong>+34 644 49 25 64</strong>:<br>
+        <code style="background:#fef9c3;padding:2px 8px;border-radius:4px;font-size:12px;display:inline-block;margin:4px 0;">I allow callmebot to send me messages</code><br>
+        CallMeBot will reply with their API key. Enter the phone number (with country code) and the API key in the fields below, then click Save.
+      </div>`;
+
+    const waInp = (id, field, val, ph) =>
+      `<input id="wa-${id}-${field}" value="${val||''}" placeholder="${ph}"
+         style="border:1px solid var(--gray-2);padding:5px 8px;font-size:13px;font-family:var(--font);width:100%;border-radius:3px;outline:none;"
+         onfocus="this.style.borderColor='var(--black)'" onblur="this.style.borderColor='var(--gray-2)'">`;
+
+    const saveWA = async (type, id) => {
+      const phone  = document.getElementById(`wa-${id}-phone`).value.trim();
+      const apikey = document.getElementById(`wa-${id}-apikey`).value.trim();
+      if (!phone || !apikey) { alert('Enter both phone and API key before saving.'); return; }
+      const btn = document.getElementById(`wa-save-${id}`);
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const endpoint = type === 'family' ? `/families/${id}` : `/volunteers/${id}`;
+        await PUT(endpoint, { wa_phone: phone, wa_apikey: apikey });
+        const row = document.getElementById(`wa-row-${id}`);
+        if (row) { row.style.background='#f0faf5'; row.style.opacity='0.5'; setTimeout(()=>row.remove(),600); }
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Save';
+        alert('Error: ' + e.message);
+      }
+    };
+    window._saveWA = saveWA;
+
+    const buildRows = (items, type) => items.map(r => `
+      <tr id="wa-row-${r.id}" style="transition:all 0.4s;">
+        <td><strong>${r.name}</strong><div style="font-size:11px;color:var(--gray-4)">${r.phone||'—'}</div></td>
+        <td style="min-width:170px;">${waInp(r.id,'phone',r.wa_phone,'+1XXXXXXXXXX')}</td>
+        <td style="min-width:140px;">${waInp(r.id,'apikey',r.wa_apikey,'API key from CallMeBot')}</td>
+        <td><button id="wa-save-${r.id}" class="btn btn-sm" style="background:#1a8754;color:#fff;white-space:nowrap" onclick="_saveWA('${type}','${r.id}')">Save</button></td>
+      </tr>`).join('');
+
+    const familySection = `
+      <div class="table-card" style="margin-bottom:20px;">
+        <div class="table-header">
+          <span class="table-title">Families Missing WhatsApp</span>
+          <span style="font-size:13px;color:var(--gray-4)">${families.length} total</span>
+        </div>
+        ${families.length ? `
+        <table>
+          <thead><tr><th>Name / Phone</th><th>WA Phone</th><th>API Key</th><th></th></tr></thead>
+          <tbody>${buildRows(families,'family')}</tbody>
+        </table>` : `<div style="padding:20px 24px;font-size:13px;color:#1a8754;">✓ All active families have WhatsApp configured.</div>`}
+      </div>`;
+
+    const volunteerSection = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Volunteers Missing WhatsApp</span>
+          <span style="font-size:13px;color:var(--gray-4)">${volunteers.length} total</span>
+        </div>
+        ${volunteers.length ? `
+        <table>
+          <thead><tr><th>Name / Phone</th><th>WA Phone</th><th>API Key</th><th></th></tr></thead>
+          <tbody>${buildRows(volunteers,'volunteer')}</tbody>
+        </table>` : `<div style="padding:20px 24px;font-size:13px;color:#1a8754;">✓ All active volunteers have WhatsApp configured.</div>`}
+      </div>`;
+
+    document.getElementById('content').innerHTML = instrBox + familySection + volunteerSection;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
 // ── Volunteers ────────────────────────────────────────────────────────────────
 async function renderVolunteers(filter, search) {
   filter = filter || STATE.filter || 'all';
@@ -2123,7 +2218,7 @@ async function renderVolunteers(filter, search) {
         <table>
           <thead><tr>
             <th>Name</th><th>Phone</th><th>Email</th><th>Role</th>
-            <th>Status</th><th>Added</th><th></th>
+            <th>Status</th><th title="WhatsApp credentials">WA</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -2132,7 +2227,13 @@ async function renderVolunteers(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.email||'—'}</td>
                 <td><span style="font-size:11px;text-transform:capitalize">${r.role||'—'}</span></td>
-                <td>${badge(r.status)}${r.status==='active'&&(!r.wa_phone||!r.wa_apikey)?` <span title="WhatsApp not configured — volunteer won't receive task notifications" style="display:inline-block;font-size:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ WA</span>`:''}</td>
+                <td>${badge(r.status)}</td>
+                <td>${r.status==='active'
+                  ? (r.wa_phone && r.wa_apikey
+                    ? `<span title="WhatsApp configured" style="font-size:12px;font-weight:700;color:#1a8754;">✓</span>`
+                    : `<span title="WhatsApp not configured — volunteer won't receive task notifications" style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;padding:1px 6px;border-radius:3px;cursor:pointer" onclick="nav('wa_setup')">⚠ No WA</span>`)
+                  : `<span style="color:var(--gray-3);font-size:12px;">—</span>`
+                }</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap">
                   ${r.status==='pending' ? `
@@ -2144,7 +2245,7 @@ async function renderVolunteers(filter, search) {
                   `}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="7">No volunteers found</td></tr>'}
+              '<tr class="empty-row"><td colspan="8">No volunteers found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -3397,19 +3498,25 @@ async function viewCycleDetail(cycleId) {
     const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
 
     // Tally confirmation statuses
+    const hasWA = o => !!(o.family_wa_phone && o.family_wa_apikey);
     const confirmed      = orders.filter(o => o.status === 'confirmed').length;
     const skipped        = orders.filter(o => o.status === 'skipped').length;
-    const noResponse     = orders.filter(o => o.status === 'pending_confirmation').length;
+    const noWA           = orders.filter(o => o.status === 'pending_confirmation' && !hasWA(o)).length;
+    const noResponse     = orders.filter(o => o.status === 'pending_confirmation' && hasWA(o)).length;
     const total          = orders.length;
 
     const confColor  = confirmed  ? 'color:#1a5e34;background:#e8f5e9' : 'color:var(--gray-4);background:var(--gray-1)';
     const skipColor  = skipped    ? 'color:#7a6000;background:#fffbec' : 'color:var(--gray-4);background:var(--gray-1)';
     const nrColor    = noResponse ? 'color:#721c24;background:#f8d7da' : 'color:var(--gray-4);background:var(--gray-1)';
+    const noWAColor  = noWA       ? 'color:#92400e;background:#fef3c7' : 'color:var(--gray-4);background:var(--gray-1)';
 
     const confStatusBadge = o => {
       if (o.status === 'confirmed')           return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ Confirmed</span>`;
       if (o.status === 'skipped')             return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fffbec;color:#7a6000">✗ Declined</span>`;
-      if (o.status === 'pending_confirmation')return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#f8d7da;color:#721c24">⏳ No Response</span>`;
+      if (o.status === 'pending_confirmation') {
+        if (!hasWA(o)) return `<span title="No WhatsApp credentials — notification was never sent" style="font-size:11px;font-weight:700;padding:2px 8px;background:#fef3c7;color:#92400e;cursor:pointer" onclick="nav('wa_setup')">📵 No WA</span>`;
+        return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#f8d7da;color:#721c24">⏳ No Response</span>`;
+      }
       return badge(o.status);
     };
 
@@ -3438,8 +3545,13 @@ async function viewCycleDetail(cycleId) {
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">No Response</div>
           <div style="font-size:28px;font-weight:700;${nrColor.split(';')[0]}">${noResponse}</div>
         </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2);${noWA?'border-color:#fcd34d;background:#fffbeb;cursor:pointer':''}" ${noWA?`onclick="nav('wa_setup')" title="Click to set up WA credentials"`:''}>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:${noWA?'#92400e':'var(--gray-4)'};margin-bottom:4px">No WA Set Up</div>
+          <div style="font-size:28px;font-weight:700;${noWAColor.split(';')[0]}">${noWA}</div>
+          ${noWA?`<div style="font-size:10px;color:#92400e;margin-top:3px;">Notification never sent</div>`:''}
+        </div>
         <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Total Notified</div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Total Families</div>
           <div style="font-size:28px;font-weight:700">${total}</div>
         </div>
       </div>

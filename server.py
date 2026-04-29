@@ -1443,10 +1443,16 @@ def dashboard_stats():
         'families_total':    db.execute("SELECT COUNT(*) FROM families").fetchone()[0],
         'families_active':   db.execute("SELECT COUNT(*) FROM families WHERE status='active'").fetchone()[0],
         'families_pending':  db.execute("SELECT COUNT(*) FROM families WHERE status='pending'").fetchone()[0],
+        'families_no_wa':    db.execute(
+            "SELECT COUNT(*) FROM families WHERE status='active' AND (wa_phone IS NULL OR TRIM(wa_phone)='' OR wa_apikey IS NULL OR TRIM(wa_apikey)='')"
+        ).fetchone()[0],
         # Volunteers
         'volunteers_total':  db.execute("SELECT COUNT(*) FROM volunteers").fetchone()[0],
         'volunteers_active': db.execute("SELECT COUNT(*) FROM volunteers WHERE status='active'").fetchone()[0],
         'volunteers_pending':db.execute("SELECT COUNT(*) FROM volunteers WHERE status='pending'").fetchone()[0],
+        'volunteers_no_wa':  db.execute(
+            "SELECT COUNT(*) FROM volunteers WHERE status='active' AND (wa_phone IS NULL OR TRIM(wa_phone)='' OR wa_apikey IS NULL OR TRIM(wa_apikey)='')"
+        ).fetchone()[0],
         # Receipts
         'receipts_pending':  db.execute("SELECT COUNT(*) FROM receipts WHERE status='pending'").fetchone()[0],
         # Reimbursements
@@ -2703,7 +2709,7 @@ def get_cycle_orders(cid):
     orders = db.execute(
         '''SELECT fr.*, f.name as family_name, f.phone as family_phone,
                   f.address as family_address, f.city as family_city,
-                  f.family_code
+                  f.family_code, f.wa_phone as family_wa_phone, f.wa_apikey as family_wa_apikey
            FROM food_requests fr
            JOIN families f ON fr.family_id = f.id
            WHERE fr.cycle_id=?
