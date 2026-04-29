@@ -577,14 +577,17 @@
       </div>
 
       <div class="nav-section">Public Links</div>
-      <div class="nav-item" onclick="window.open('/order','_blank')" style="font-size:12px;">
-        <span class="icon">⇗</span> Family Order Form
+      <div class="nav-item" onclick="window.open('/my-order','_blank')" style="font-size:12px;">
+        <span class="icon">⇗</span> My Order (Families)
       </div>
       <div class="nav-item" onclick="window.open('/intake','_blank')" style="font-size:12px;">
         <span class="icon">⇗</span> Family Registration
       </div>
       <div class="nav-item" onclick="window.open('/portal','_blank')" style="font-size:12px;">
         <span class="icon">⇗</span> Volunteer Portal
+      </div>
+      <div class="nav-item" onclick="window.open('/volunteer-signup','_blank')" style="font-size:12px;">
+        <span class="icon">⇗</span> Volunteer Sign Up
       </div>
     </div><!-- /sidebar-nav -->
 
@@ -722,7 +725,8 @@ function nav(page) {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     payments: 'Payments', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', catalog: 'Food Catalog',
-    cycle_detail: 'Delivery Detail', orders: 'Food Orders'
+    cycle_detail: 'Delivery Detail', orders: 'Food Orders',
+    wa_setup: '📵 WhatsApp Setup', requests: '📋 Change Requests'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   closeDrawer();
@@ -731,7 +735,7 @@ function nav(page) {
     volunteers: renderVolunteers,
     payments: renderPayments, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, catalog: renderCatalog,
-    orders: renderOrders
+    orders: renderOrders, wa_setup: renderWASetup, requests: renderRequests
   };
   if (renders[page]) renders[page]();
 }
@@ -781,7 +785,8 @@ function downloadPDF(path) {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function renderDashboard() {
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>`;
+    `<button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>
+     <button class="btn btn-outline" onclick="dbDebug()" style="margin-left:8px;font-size:11px;">DB Debug</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const [s, cycles] = await Promise.all([
@@ -851,6 +856,7 @@ async function renderDashboard() {
           <span style="color:#888;font-size:14px;">No active delivery cycle</span>
           <div style="display:flex;gap:8px;">
             <button class="btn btn-outline" onclick="seedCycles2026()">Seed 2026 Deliveries</button>
+            <button class="btn btn-outline" onclick="dbDebug()" style="margin-left:8px;font-size:11px;">DB Debug</button>
             <button class="btn" onclick="openCycleForm()">+ New Delivery</button>
           </div>
         </div>`;
@@ -861,6 +867,17 @@ async function renderDashboard() {
     if (s.families_pending  > 0) alerts.push({ label: `${s.families_pending} famil${s.families_pending>1?'ies':'y'} pending approval`, nav: 'families', color: '#e0a800' });
     if (s.volunteers_pending> 0) alerts.push({ label: `${s.volunteers_pending} volunteer${s.volunteers_pending>1?'s':''} pending approval`, nav: 'volunteers', color: '#e0a800' });
     if (s.reimb_pending_count > 0) alerts.push({ label: `${s.reimb_pending_count} payment${s.reimb_pending_count>1?'s':''} pending — ${fmtMoney(s.reimb_pending_amount)}`, nav: 'payments', color: '#c0392b' });
+    const totalNoWA = (s.families_no_wa||0) + (s.volunteers_no_wa||0);
+    if (totalNoWA > 0) {
+      const parts = [];
+      if (s.families_no_wa > 0)   parts.push(`${s.families_no_wa} famil${s.families_no_wa>1?'ies':'y'}`);
+      if (s.volunteers_no_wa > 0) parts.push(`${s.volunteers_no_wa} volunteer${s.volunteers_no_wa>1?'s':''}`);
+      alerts.push({ label: `📵 ${parts.join(' + ')} without WhatsApp`, nav: 'wa_setup', color: '#92400e' });
+    }
+    if ((s.pending_change_requests||0) > 0) {
+      const n = s.pending_change_requests;
+      alerts.push({ label: `📋 ${n} change request${n>1?'s':''} awaiting review`, nav: 'requests', color: '#1a5f8a' });
+    }
 
     const attentionHTML = alerts.length > 0 ? `
       <div style="background:#fffbec;border:1.5px solid #f0c040;border-radius:8px;padding:14px 18px;margin-bottom:20px;">
@@ -1341,12 +1358,78 @@ async function triggerRemindersFromDash() {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
-async function seedCycles2026() {
+async function dbDebug() {
   try {
-    const res = await POST('/admin/seed-cycles-2026', {});
-    alert(`Done! Created: ${res.created} cycles · Skipped (already existed): ${res.skipped}`);
-    renderDashboard();
-  } catch(e) { alert('Error: ' + e.message); }
+    const d = await GET('/admin/db-debug');
+    const lines = [
+      `Schema has 'upcoming': ${d.schema?.includes('upcoming') ? 'YES ✓' : 'NO ✗'}`,
+      `Upcoming insert test: ${d.upcoming_insert_test}`,
+      `Total cycles in DB: ${d.cycle_count}`,
+      '',
+      'Cycles by status:'
+    ];
+    const byStatus = {};
+    (d.cycles||[]).forEach(c => { byStatus[c.status] = (byStatus[c.status]||0)+1; });
+    Object.entries(byStatus).forEach(([s,n]) => lines.push(`  ${s}: ${n}`));
+    lines.push('', 'All cycle dates:');
+    (d.cycles||[]).forEach(c => lines.push(`  ${c.delivery_date_start} [${c.status}] ${c.title}`));
+    alert(lines.join('\n'));
+  } catch(e) { alert('Debug error: ' + e.message); }
+}
+
+async function seedCycles2026() {
+  // Build all 17 bi-weekly Sat-Sun cycles for 2026 (May 9 → Dec 19-20)
+  const cycles = [];
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let sat = new Date('2026-05-09');
+  while (sat <= new Date('2026-12-31')) {
+    const sun = new Date(sat); sun.setDate(sat.getDate() + 1);
+    const close = new Date(sat); close.setDate(sat.getDate() - 7);
+    const open  = new Date(sat); open.setDate(sat.getDate() - 13);
+    const fmt = d => d.toISOString().slice(0,10);
+    cycles.push({
+      title: `${months[sat.getMonth()]} ${sat.getDate()}–${sun.getDate()}, 2026`,
+      delivery_date_start: fmt(sat),
+      delivery_date_end:   fmt(sun),
+      request_open_at:     fmt(open)  + 'T08:00:00',
+      request_close_at:    fmt(close) + 'T23:59:00',
+      status: 'upcoming',
+      notes: 'Auto-seeded'
+    });
+    sat.setDate(sat.getDate() + 14);
+  }
+
+  // First try the bulk endpoint
+  try {
+    const res = await fetch('/api/admin/seed-cycles-2026', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      alert(`Done! Created ${data.created} delivery cycles for 2026.${data.deleted > 0 ? ` (Replaced ${data.deleted} old entries.)` : ''}`);
+      renderDashboard();
+      return;
+    }
+    const txt = await res.text();
+    console.warn('Bulk seed failed (' + res.status + '):', txt);
+  } catch(e) { console.warn('Bulk seed threw:', e); }
+
+  // Fallback: create each cycle via the standard endpoint
+  if (!confirm(`Creating ${cycles.length} delivery cycles one by one. Continue?`)) return;
+  let created = 0, skipped = 0;
+  for (const c of cycles) {
+    try {
+      await POST('/delivery-cycles', c);
+      created++;
+    } catch(e) {
+      if (e.message && e.message.toLowerCase().includes('exist')) skipped++;
+      else console.warn('Skipped', c.title, e.message);
+      skipped++;
+    }
+  }
+  alert(`Done! Created: ${created} · Skipped: ${skipped}`);
+  renderDashboard();
 }
 
 // ── Families ──────────────────────────────────────────────────────────────────
@@ -1358,13 +1441,54 @@ async function renderFamilies(filter, search) {
 
   let url = '/families';
   const params = [];
-  if (filter !== 'all') params.push('status=' + filter);
+  const statusParam = filter === 'needs-wa' ? 'needs_wa' : filter;
+  if (statusParam !== 'all') params.push('status=' + statusParam);
   if (search) params.push('search=' + encodeURIComponent(search));
   if (params.length) url += '?' + params.join('&');
 
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const rows = await GET(url);
+    // Fetch families + active cycle orders in parallel
+    const [rows, openCycles, shoppingCycles] = await Promise.all([
+      GET(url),
+      GET('/delivery-cycles?status=open').catch(() => []),
+      GET('/delivery-cycles?status=shopping').catch(() => [])
+    ]);
+
+    // Pick the most relevant active cycle: open first, then shopping
+    const activeCycle = openCycles[0] || shoppingCycles[0] || null;
+
+    // Build family_id → order map for the active cycle
+    let orderMap = {};
+    if (activeCycle) {
+      try {
+        const orders = await GET('/delivery-cycles/' + activeCycle.id + '/orders');
+        orders.forEach(o => { orderMap[o.family_id] = o; });
+      } catch(_) {}
+    }
+
+    const hasActiveCycle = !!activeCycle;
+    const cycleLabel = hasActiveCycle
+      ? `${activeCycle.title} <span style="font-size:11px;font-weight:400;color:var(--gray-4)">(${activeCycle.status})</span>`
+      : '';
+
+    function orderBadge(familyId) {
+      const o = orderMap[familyId];
+      if (!o) return `<span style="font-size:11px;color:var(--gray-3)">—</span>`;
+      const s = o.status;
+      if (s === 'confirmed')
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#1a8754;background:#f0faf5;padding:2px 7px;border-radius:10px;border:1px solid #b7e0ca">✓ Confirmed</span>`;
+      if (s === 'submitted')
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#b45309;background:#fffbeb;padding:2px 7px;border-radius:10px;border:1px solid #f6d58a">● Submitted</span>`;
+      if (s === 'skipped')
+        return `<span style="font-size:11px;color:var(--gray-3);font-style:italic">Skipped</span>`;
+      if (s === 'delivered')
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#2e86c1;background:#eaf4fb;padding:2px 7px;border-radius:10px;border:1px solid #aad4f0">✓ Delivered</span>`;
+      return `<span style="font-size:11px;color:var(--gray-4)">${s}</span>`;
+    }
+
+    const colCount = hasActiveCycle ? 12 : 11;
+
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header">
@@ -1374,17 +1498,22 @@ async function renderFamilies(filter, search) {
               id="family-search" value="${search||''}"
               oninput="renderFamilies('${filter}', this.value)">
             <div class="filter-tabs">
-              ${['all','pending','active','inactive','paused'].map(f =>
+              ${['all','pending','active','inactive','paused','needs-wa'].map(f =>
                 `<div class="filter-tab ${filter===f?'active':''}"
-                  onclick="renderFamilies('${f}', document.getElementById('family-search').value)">${f}</div>`
+                  onclick="renderFamilies('${f}', document.getElementById('family-search').value)"
+                  style="${f==='needs-wa'?'color:#b45309;border-color:#f0a500;':''}"
+                  >${f==='needs-wa'?'⚠ Needs WA':f}</div>`
               ).join('')}
             </div>
           </div>
         </div>
+        ${hasActiveCycle ? `<div style="padding:8px 16px 4px;font-size:12px;color:var(--gray-4)">Showing order status for: <strong>${cycleLabel}</strong></div>` : ''}
         <table>
           <thead><tr>
             <th>ID</th><th>Name</th><th>Phone</th><th>City</th>
-            <th>Size</th><th>Status</th><th>Delivered By</th><th>Shopped By</th><th>Added</th><th></th>
+            <th>Size</th><th>Status</th><th title="WhatsApp credentials">WA</th>
+            ${hasActiveCycle ? '<th>Order</th>' : ''}
+            <th>Delivered By</th><th>Shopped By</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -1394,13 +1523,21 @@ async function renderFamilies(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.city||'—'}</td>
                 <td>${r.family_size||'—'}</td>
-                <td>${badge(r.status)}</td>
+                <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}</td>
+                <td>${r.status==='active'
+                  ? (r.wa_phone && r.wa_apikey
+                    ? `<span title="WhatsApp configured" style="font-size:12px;font-weight:700;color:#1a8754;">✓</span>`
+                    : `<span title="WhatsApp not configured — family won't receive delivery notifications" style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;padding:1px 6px;border-radius:3px;cursor:pointer" onclick="event.stopPropagation();nav('wa_setup')">⚠ No WA</span>`)
+                  : `<span style="color:var(--gray-3);font-size:12px;">—</span>`
+                }</td>
+                ${hasActiveCycle ? `<td onclick="event.stopPropagation()">${orderBadge(r.id)}</td>` : ''}
                 <td style="font-size:12px;color:${r.last_delivery_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_delivery_volunteer?'600':'400'}">
                   ${r.last_delivery_volunteer||'—'}
                   ${r.last_delivery_date?`<div style="font-size:10px;color:var(--gray-4);font-weight:400">${fmtDateShort(r.last_delivery_date)}</div>`:''}
                 </td>
                 <td style="font-size:12px;color:${r.last_shopping_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_shopping_volunteer?'600':'400'}">
                   ${r.last_shopping_volunteer||'—'}
+                  ${r.last_shopping_date?`<div style="font-size:10px;color:var(--gray-4);font-weight:400">${fmtDateShort(r.last_shopping_date)}</div>`:''}
                 </td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
@@ -1410,7 +1547,7 @@ async function renderFamilies(filter, search) {
                   ` : ''}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="10">No families found</td></tr>'}
+              `<tr class="empty-row"><td colspan="${colCount}">No families found</td></tr>`}
           </tbody>
         </table>
       </div>`;
@@ -1424,7 +1561,12 @@ async function quickStatusFamily(id, status) {
   if (row) row.style.opacity = '0.4';
   try {
     await PUT('/families/' + id, { status });
-    renderFamilies(STATE.filter, document.getElementById('family-search')?.value);
+    if (status === 'active') {
+      // Go straight to profile — coordinator should set up WA credentials right away
+      viewFamily(id);
+    } else {
+      renderFamilies(STATE.filter, document.getElementById('family-search')?.value);
+    }
   } catch(e) {
     if (row) row.style.opacity = '1';
     alert(e.message);
@@ -1490,12 +1632,22 @@ function familyFormHTML(r) {
     </div>
 
     <div class="form-section">Status & Notes</div>
-    <div class="form-group">
-      <label>Status</label>
-      <select id="f-status">
-        ${['pending','active','inactive','paused'].map(v =>
-          `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
-      </select>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Status</label>
+        <select id="f-status">
+          ${['pending','active','inactive','paused'].map(v =>
+            `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Bundle Size</label>
+        <select id="f-bundle">
+          <option value="">— Auto —</option>
+          ${[['S','Small (S)'],['M','Medium (M)'],['L','Large (L)']].map(([v,l]) =>
+            `<option value="${v}" ${r.bundle_size===v?'selected':''}>${l}</option>`).join('')}
+        </select>
+      </div>
     </div>
     <div class="form-group">
       <label>Admin Notes</label>
@@ -1535,6 +1687,7 @@ async function saveFamily() {
     frequency: document.getElementById('f-frequency').value,
     income_range: document.getElementById('f-income').value,
     status: document.getElementById('f-status').value,
+    bundle_size: document.getElementById('f-bundle')?.value || null,
     notes: document.getElementById('f-notes').value.trim()
   };
   try {
@@ -1670,9 +1823,10 @@ async function viewFamily(id) {
       GET('/task-types')
     ]);
 
-    const orders  = hist.orders || [];
-    const fid     = r.id;
-    const activeTT = taskTypes.filter(t => t.is_active);
+    const orders     = hist.orders || [];
+    const activeCycle = hist.active_cycle || null;
+    const fid        = r.id;
+    const activeTT   = taskTypes.filter(t => t.is_active);
 
     document.getElementById('page-title').textContent = r.name;
 
@@ -1699,6 +1853,21 @@ async function viewFamily(id) {
          ${content}
        </div>`;
 
+    // ── WA setup banner ───────────────────────────────────────────────────────
+    const waBanner = (r.status === 'active' && (!r.wa_phone || !r.wa_apikey)) ? `
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:10px;padding:14px 20px;margin-bottom:14px;display:flex;gap:14px;align-items:flex-start;">
+        <span style="font-size:20px;line-height:1;flex-shrink:0;">⚠️</span>
+        <div>
+          <div style="font-weight:700;font-size:13px;color:#92400e;margin-bottom:4px;">WhatsApp Not Configured</div>
+          <div style="font-size:12px;color:#78350f;line-height:1.6;">
+            This family won't receive delivery notifications until their WhatsApp is set up.<br>
+            <strong>Steps:</strong> Ask them to text <span style="font-family:monospace;background:#fef9c3;padding:1px 5px;border-radius:3px;">I allow callmebot to send me messages</span>
+            to <span style="font-family:monospace;font-weight:700;">+34 644 49 25 64</span>.
+            They'll receive an API key by WhatsApp. Enter both their WhatsApp number and API key in the <strong>Profile</strong> section below.
+          </div>
+        </div>
+      </div>` : '';
+
     // ── Summary strip ─────────────────────────────────────────────────────────
     const bundleLabel = {S:'Small',M:'Medium',L:'Large'};
     const summaryStrip = `
@@ -1714,30 +1883,52 @@ async function viewFamily(id) {
       </div>`;
 
     // ── Current cycle status ───────────────────────────────────────────────────
-    const latestOrder = orders[0];
+    // Find the order specifically for the active cycle (not just the most recent order)
+    const currentOrder = activeCycle
+      ? orders.find(o => o.cycle_id === activeCycle.id)
+      : orders[0];
     let cycleStrip = '';
-    if (latestOrder) {
-      const scMap = {
-        confirmed:            { bg:'#e8f5e9', color:'#1a5e34', label:'Confirmed ✓' },
-        auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed ✓' },
-        skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
-        pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Awaiting Response' },
-        cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
-      };
-      const sc = scMap[latestOrder.status] || { bg:'#f5f5f0', color:'#888', label:latestOrder.status };
-      const overrideBtns = latestOrder.status === 'confirmed'
-        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${latestOrder.id}','skipped','${latestOrder.cycle_id}','${fid}')">Mark Skipped</button>`
-        : latestOrder.status === 'skipped'
-        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${latestOrder.id}','confirmed','${latestOrder.cycle_id}','${fid}')">Mark Confirmed</button>`
-        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;margin-right:4px;" onclick="overrideFoodRequest('${latestOrder.id}','confirmed','${latestOrder.cycle_id}','${fid}')">✓ Confirm</button>
-           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${latestOrder.id}','skipped','${latestOrder.cycle_id}','${fid}')">Skip</button>`;
+
+    if (activeCycle && !currentOrder) {
+      // Family has no order yet for the active cycle — show "Add to Cycle" button
       cycleStrip = `
         <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
-          <span style="font-size:13px;font-weight:700;">${latestOrder.cycle_title}</span>
-          ${latestOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(latestOrder.delivery_date_start)}</span>` : ''}
+          <span style="font-size:13px;font-weight:700;">${activeCycle.title}</span>
+          <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:var(--gray-1);color:var(--gray-4);">No order yet</span>
+          <div style="margin-left:auto;display:flex;gap:6px;">
+            <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;"
+              onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Confirm for This Cycle</button>
+          </div>
+        </div>`;
+    } else if (currentOrder) {
+      const scMap = {
+        confirmed:            { bg:'#e8f5e9', color:'#1a5e34', label:'Confirmed ✓' },
+        auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed ✓' },
+        submitted:            { bg:'#fff8e1', color:'#7a5200', label:'Submitted' },
+        skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
+        pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Awaiting Response' },
+        delivered:            { bg:'#e3f2fd', color:'#0d47a1', label:'Delivered ✓' },
+        cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
+      };
+      const sc = scMap[currentOrder.status] || { bg:'#f5f5f0', color:'#888', label:currentOrder.status };
+      const overrideBtns = currentOrder.status === 'confirmed' || currentOrder.status === 'auto_confirmed'
+        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${currentOrder.id}','skipped','${currentOrder.cycle_id}','${fid}')">Mark Skipped</button>`
+        : currentOrder.status === 'skipped'
+        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${currentOrder.id}','confirmed','${currentOrder.cycle_id}','${fid}')">Mark Confirmed</button>`
+        : currentOrder.status === 'delivered'
+        ? ''
+        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;margin-right:4px;" onclick="overrideFoodRequest('${currentOrder.id}','confirmed','${currentOrder.cycle_id}','${fid}')">✓ Confirm</button>
+           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${currentOrder.id}','skipped','${currentOrder.cycle_id}','${fid}')">Skip</button>`;
+      cycleStrip = `
+        <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
+          <span style="font-size:13px;font-weight:700;">${currentOrder.cycle_title}</span>
+          ${currentOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(currentOrder.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
-          <div style="display:flex;gap:6px;margin-left:auto;">${overrideBtns}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">${overrideBtns}
+            ${currentOrder.status !== 'delivered' ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
+          </div>
         </div>`;
     }
 
@@ -1817,11 +2008,65 @@ async function viewFamily(id) {
         </td>`;
       }).join('');
 
+      // Build event log HTML for this order
+      const evRows = (o.events||[]).filter(ev => !ev.payload?.note?.includes('backfilled'));
+      const fmtEvTs = ts => ts ? new Date(ts+(ts.endsWith('Z')?'':'Z')).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+
+      // Find the most recent items_edited event for the inline callout
+      const lastEdit = [...evRows].reverse().find(ev => ev.event_type === 'items_edited');
+      const lastCancel = evRows.find(ev => ev.event_type === 'cancelled');
+
+      // Inline callout: shown prominently when items were edited or order cancelled by family
+      let inlineCallout = '';
+      if (lastEdit) {
+        const added   = lastEdit.payload?.added?.length   ? `<span style="color:#1a7a3c">+${lastEdit.payload.added.join(', ')}</span>`   : '';
+        const removed = lastEdit.payload?.removed?.length ? `<span style="color:#c00">−${lastEdit.payload.removed.join(', ')}</span>` : '';
+        const diff    = [added, removed].filter(Boolean).join(' &nbsp;');
+        inlineCallout = `
+          <div style="margin-top:5px;padding:5px 8px;background:#fff8e1;border:1px solid #ffc107;border-left:3px solid #e0a800;border-radius:3px;font-size:11px;">
+            <span style="font-weight:700;color:#7a5200;">✏ Order edited</span>
+            <span style="color:#888;margin-left:4px;">${fmtEvTs(lastEdit.created_at)}</span>
+            ${diff ? `<div style="margin-top:3px;">${diff}</div>` : ''}
+          </div>`;
+      } else if (lastCancel) {
+        inlineCallout = `
+          <div style="margin-top:5px;padding:5px 8px;background:#fdecea;border:1px solid #ef9a9a;border-left:3px solid #c00;border-radius:3px;font-size:11px;">
+            <span style="font-weight:700;color:#c00;">✕ Cancelled by family</span>
+            <span style="color:#888;margin-left:4px;">${fmtEvTs(lastCancel.created_at)}</span>
+          </div>`;
+      }
+
+      // Full audit trail in collapsible (all events)
+      const evLabels = { confirmed:'✓ Confirmed', items_edited:'✏ Edited',
+                         cancelled:'✕ Cancelled', auto_skipped:'— Auto-skipped',
+                         admin_override:'⚙ Admin override' };
+      const evHtml = evRows.length ? `
+        <details style="margin-top:6px;">
+          <summary style="font-size:10px;cursor:pointer;color:#aaa;user-select:none;letter-spacing:.4px;">
+            FULL LOG (${evRows.length})
+          </summary>
+          <div style="margin-top:5px;border-left:2px solid #e0e0e0;padding-left:8px;">
+            ${evRows.map(ev => {
+              const lbl = evLabels[ev.event_type] || ev.event_type;
+              const ts  = fmtEvTs(ev.created_at);
+              let detail = '';
+              if (ev.event_type==='items_edited' && ev.payload) {
+                if (ev.payload.added?.length)   detail += ` <span style="color:#1a7a3c">+${ev.payload.added.join(', ')}</span>`;
+                if (ev.payload.removed?.length) detail += ` <span style="color:#c00">−${ev.payload.removed.join(', ')}</span>`;
+              }
+              if (ev.event_type==='admin_override' && ev.payload?.new_status) detail = ` <span style="color:#888">→ ${ev.payload.new_status}</span>`;
+              return `<div style="font-size:11px;padding:2px 0;color:#555;">${lbl}${detail||''} <span style="color:#ccc">${ts}</span></div>`;
+            }).join('')}
+          </div>
+        </details>` : '';
+
       return `<tr style="border-bottom:1px solid var(--gray-1);">
         <td style="padding:10px 10px 10px 0;font-weight:600;white-space:nowrap;">${o.cycle_title}</td>
         <td style="padding:10px;color:var(--gray-5);white-space:nowrap;">${o.delivery_date_start?fmtDateShort(o.delivery_date_start):'—'}</td>
-        <td style="padding:10px;white-space:nowrap;">
+        <td style="padding:10px;min-width:180px;">
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
+          ${inlineCallout}
+          ${evHtml}
         </td>
         <td style="padding:10px;color:var(--gray-5);">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
         <td style="padding:10px;">
@@ -1861,7 +2106,7 @@ async function viewFamily(id) {
         }
       </div>`;
 
-    document.getElementById('content').innerHTML = summaryStrip + cycleStrip + editGrid + historySection;
+    document.getElementById('content').innerHTML = waBanner + summaryStrip + cycleStrip + editGrid + historySection;
     // Show Save button now that fields are rendered
     const saveBtn = document.getElementById('fam-save-btn');
     if (saveBtn) saveBtn.style.display = 'inline-flex';
@@ -1886,6 +2131,88 @@ function switchDrawerTab(tab, context) {
   document.getElementById('dpane-' + tab)?.classList.add('active');
 }
 
+// ── WhatsApp Setup ────────────────────────────────────────────────────────────
+async function renderWASetup() {
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="nav('dashboard')">← Dashboard</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const [families, volunteers] = await Promise.all([
+      GET('/families?status=needs_wa'),
+      GET('/volunteers?status=needs_wa')
+    ]);
+
+    const instrBox = `
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;padding:14px 18px;margin-bottom:24px;font-size:13px;color:#78350f;line-height:1.7;">
+        <strong style="display:block;margin-bottom:4px;color:#92400e;">How to set up CallMeBot for a contact</strong>
+        Ask them to open WhatsApp and send this message to <strong>+34 644 49 25 64</strong>:<br>
+        <code style="background:#fef9c3;padding:2px 8px;border-radius:4px;font-size:12px;display:inline-block;margin:4px 0;">I allow callmebot to send me messages</code><br>
+        CallMeBot will reply with their API key. Enter the phone number (with country code) and the API key in the fields below, then click Save.
+      </div>`;
+
+    const waInp = (id, field, val, ph) =>
+      `<input id="wa-${id}-${field}" value="${val||''}" placeholder="${ph}"
+         style="border:1px solid var(--gray-2);padding:5px 8px;font-size:13px;font-family:var(--font);width:100%;border-radius:3px;outline:none;"
+         onfocus="this.style.borderColor='var(--black)'" onblur="this.style.borderColor='var(--gray-2)'">`;
+
+    const saveWA = async (type, id) => {
+      const phone  = document.getElementById(`wa-${id}-phone`).value.trim();
+      const apikey = document.getElementById(`wa-${id}-apikey`).value.trim();
+      if (!phone || !apikey) { alert('Enter both phone and API key before saving.'); return; }
+      const btn = document.getElementById(`wa-save-${id}`);
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const endpoint = type === 'family' ? `/families/${id}` : `/volunteers/${id}`;
+        await PUT(endpoint, { wa_phone: phone, wa_apikey: apikey });
+        const row = document.getElementById(`wa-row-${id}`);
+        if (row) { row.style.background='#f0faf5'; row.style.opacity='0.5'; setTimeout(()=>row.remove(),600); }
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Save';
+        alert('Error: ' + e.message);
+      }
+    };
+    window._saveWA = saveWA;
+
+    const buildRows = (items, type) => items.map(r => `
+      <tr id="wa-row-${r.id}" style="transition:all 0.4s;">
+        <td><strong>${r.name}</strong><div style="font-size:11px;color:var(--gray-4)">${r.phone||'—'}</div></td>
+        <td style="min-width:170px;">${waInp(r.id,'phone',r.wa_phone,'+1XXXXXXXXXX')}</td>
+        <td style="min-width:140px;">${waInp(r.id,'apikey',r.wa_apikey,'API key from CallMeBot')}</td>
+        <td><button id="wa-save-${r.id}" class="btn btn-sm" style="background:#1a8754;color:#fff;white-space:nowrap" onclick="_saveWA('${type}','${r.id}')">Save</button></td>
+      </tr>`).join('');
+
+    const familySection = `
+      <div class="table-card" style="margin-bottom:20px;">
+        <div class="table-header">
+          <span class="table-title">Families Missing WhatsApp</span>
+          <span style="font-size:13px;color:var(--gray-4)">${families.length} total</span>
+        </div>
+        ${families.length ? `
+        <table>
+          <thead><tr><th>Name / Phone</th><th>WA Phone</th><th>API Key</th><th></th></tr></thead>
+          <tbody>${buildRows(families,'family')}</tbody>
+        </table>` : `<div style="padding:20px 24px;font-size:13px;color:#1a8754;">✓ All active families have WhatsApp configured.</div>`}
+      </div>`;
+
+    const volunteerSection = `
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Volunteers Missing WhatsApp</span>
+          <span style="font-size:13px;color:var(--gray-4)">${volunteers.length} total</span>
+        </div>
+        ${volunteers.length ? `
+        <table>
+          <thead><tr><th>Name / Phone</th><th>WA Phone</th><th>API Key</th><th></th></tr></thead>
+          <tbody>${buildRows(volunteers,'volunteer')}</tbody>
+        </table>` : `<div style="padding:20px 24px;font-size:13px;color:#1a8754;">✓ All active volunteers have WhatsApp configured.</div>`}
+      </div>`;
+
+    document.getElementById('content').innerHTML = instrBox + familySection + volunteerSection;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
 // ── Volunteers ────────────────────────────────────────────────────────────────
 async function renderVolunteers(filter, search) {
   filter = filter || STATE.filter || 'all';
@@ -1896,7 +2223,8 @@ async function renderVolunteers(filter, search) {
 
   let url = '/volunteers';
   const params = [];
-  if (filter !== 'all') params.push('status=' + filter);
+  const volStatusParam = filter === 'needs-wa' ? 'needs_wa' : filter;
+  if (volStatusParam !== 'all') params.push('status=' + volStatusParam);
   if (search) params.push('search=' + encodeURIComponent(search));
   if (params.length) url += '?' + params.join('&');
 
@@ -1912,9 +2240,11 @@ async function renderVolunteers(filter, search) {
               id="vol-search" value="${search||''}"
               oninput="renderVolunteers('${filter}', this.value)">
             <div class="filter-tabs">
-              ${['all','pending','active','inactive'].map(f =>
+              ${['all','pending','active','inactive','needs-wa'].map(f =>
                 `<div class="filter-tab ${filter===f?'active':''}"
-                  onclick="renderVolunteers('${f}', document.getElementById('vol-search').value)">${f}</div>`
+                  onclick="renderVolunteers('${f}', document.getElementById('vol-search').value)"
+                  style="${f==='needs-wa'?'color:#b45309;border-color:#f0a500;':''}"
+                  >${f==='needs-wa'?'⚠ Needs WA':f}</div>`
               ).join('')}
             </div>
           </div>
@@ -1922,7 +2252,7 @@ async function renderVolunteers(filter, search) {
         <table>
           <thead><tr>
             <th>Name</th><th>Phone</th><th>Email</th><th>Role</th>
-            <th>Status</th><th>Added</th><th></th>
+            <th>Status</th><th title="WhatsApp credentials">WA</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -1932,6 +2262,12 @@ async function renderVolunteers(filter, search) {
                 <td>${r.email||'—'}</td>
                 <td><span style="font-size:11px;text-transform:capitalize">${r.role||'—'}</span></td>
                 <td>${badge(r.status)}</td>
+                <td>${r.status==='active'
+                  ? (r.wa_phone && r.wa_apikey
+                    ? `<span title="WhatsApp configured" style="font-size:12px;font-weight:700;color:#1a8754;">✓</span>`
+                    : `<span title="WhatsApp not configured — volunteer won't receive task notifications" style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;padding:1px 6px;border-radius:3px;cursor:pointer" onclick="nav('wa_setup')">⚠ No WA</span>`)
+                  : `<span style="color:var(--gray-3);font-size:12px;">—</span>`
+                }</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap">
                   ${r.status==='pending' ? `
@@ -1943,7 +2279,7 @@ async function renderVolunteers(filter, search) {
                   `}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="7">No volunteers found</td></tr>'}
+              '<tr class="empty-row"><td colspan="8">No volunteers found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -2036,7 +2372,12 @@ async function quickStatusVolunteer(id, status) {
   if (row) row.style.opacity = '0.4';
   try {
     await PUT('/volunteers/' + id, { status });
-    renderVolunteers(STATE.filter, document.getElementById('vol-search')?.value);
+    if (status === 'active') {
+      // Go straight to volunteer profile — coordinator should set up WA credentials right away
+      viewVolunteer(id);
+    } else {
+      renderVolunteers(STATE.filter, document.getElementById('vol-search')?.value);
+    }
   } catch(e) {
     if (row) row.style.opacity = '1';
     alert(e.message);
@@ -2177,7 +2518,14 @@ async function viewVolunteer(id) {
         ${v}
       </button>`).join('');
 
-    const detailsHTML = `
+    const volWaBanner = (r.status === 'active' && (!r.wa_phone || !r.wa_apikey)) ? `
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12px;color:#78350f;line-height:1.6;">
+        <strong style="color:#92400e;display:block;margin-bottom:3px;">⚠️ WhatsApp Not Configured</strong>
+        Ask them to text <span style="font-family:monospace;background:#fef9c3;padding:1px 4px;border-radius:3px;">I allow callmebot to send me messages</span>
+        to <strong>+34 644 49 25 64</strong>. They'll receive an API key. Then click <strong>Edit</strong> to enter their WA phone and API key.
+      </div>` : '';
+
+    const detailsHTML = volWaBanner + `
       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
       <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
@@ -2960,7 +3308,7 @@ async function loadOrdersForCycle(cycleId) {
     wrap.innerHTML = `
       <div style="padding:32px;text-align:center;color:var(--gray-4);">
         No orders for this delivery yet.<br>
-        <a href="/order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order form →</a>
+        <a href="/my-order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order portal →</a>
       </div>`;
     return;
   }
@@ -3016,13 +3364,13 @@ async function renderDeliveries(filterStatus) {
   try {
     const url = filterStatus !== 'all' ? '/delivery-cycles?status=' + filterStatus : '/delivery-cycles';
     _cyclesCache = await GET(url);
-    const statusColors = { upcoming:'badge-pending', shopping:'badge-approved', delivered:'badge-completed' };
-    const statusLabels = { upcoming:'Upcoming', shopping:'Shopping', delivered:'Delivered' };
+    const statusColors = { upcoming:'badge-pending', open:'badge-active', shopping:'badge-approved', delivered:'badge-completed' };
+    const statusLabels = { upcoming:'Upcoming', open:'Accepting Orders', shopping:'Shopping', delivered:'Delivered' };
     document.getElementById('content').innerHTML = `
       <div style="margin-bottom:16px">
         <div class="filter-tabs">
-          ${['all','upcoming','shopping','delivered'].map(s =>
-            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]}</div>`
+          ${['all','upcoming','open','shopping','delivered'].map(s =>
+            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]||s}</div>`
           ).join('')}
         </div>
       </div>
@@ -3041,8 +3389,12 @@ async function renderDeliveries(filterStatus) {
                 <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
-                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Shopping</button>` : ''}
-                  ${c.status === 'shopping' ? `<button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
+                  ${c.status === 'upcoming'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Accepting Orders</button>` : ''}
+                  ${c.status === 'open'      ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','open')">← Upcoming</button>
+                                               <button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>` : ''}
+                  ${c.status === 'shopping'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','shopping')">← Accepting Orders</button>
+                                               <button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
+                  ${c.status === 'delivered' ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','delivered')">← Shopping</button>` : ''}
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="5">No deliveries found</td></tr>'}
@@ -3060,23 +3412,51 @@ async function loadConfirmationCount(cycleId) {
   try {
     const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
     const total     = orders.length;
-    const confirmed = orders.filter(o => ['confirmed','auto_confirmed'].includes(o.status)).length;
+    // 'submitted' treated as confirmed (legacy records pre-fix + any edge cases)
+    const confirmed = orders.filter(o => ['confirmed','auto_confirmed','submitted'].includes(o.status)).length;
     const skipped   = orders.filter(o => o.status === 'skipped').length;
     const pending   = orders.filter(o => o.status === 'pending_confirmation').length;
     const el = document.getElementById('conf-' + cycleId);
     if (el) el.innerHTML = total
-      ? `<span style="color:#1a8754">${confirmed} confirmed</span> · ${pending} pending · ${skipped} skip`
+      ? `<span style="color:#1a8754;font-weight:600">${confirmed}/${total}</span> confirmed${skipped ? ` · ${skipped} skip` : ''}${pending ? ` · ${pending} pending` : ''}`
       : `<span style="color:#aaa">0 enrolled</span>`;
   } catch(e) {}
 }
 
 async function advanceCycleStatus(id, current) {
-  const next = { upcoming:'shopping', shopping:'delivered' };
+  const next  = { upcoming:'open', open:'shopping', shopping:'delivered' };
+  const label = { upcoming:'Accepting Orders', open:'Shopping', shopping:'Delivered' };
+  const desc  = {
+    upcoming: 'Families will be able to log in to My Order and confirm their bundle.',
+    open:     'The order window closes. Volunteers will start shopping.',
+    shopping: 'Mark this cycle as fully delivered.'
+  };
   if (!next[current]) return;
-  const label = { upcoming:'Shopping', shopping:'Delivered' };
-  if (!confirm(`Mark this delivery as "${label[next[current]]}"?`)) return;
+  if (!confirm(`Move to "${label[next[current]]}"?\n\n${desc[current]}`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: next[current] });
+    // When advancing to Shopping, prompt to generate volunteer slots immediately
+    if (next[current] === 'shopping') {
+      try {
+        const orders = await GET('/delivery-cycles/' + id + '/orders');
+        const confirmed = orders.filter(o => ['confirmed','auto_confirmed','submitted'].includes(o.status)).length;
+        if (confirmed > 0 && confirm(`${confirmed} confirmed families.\n\nGenerate shopping and delivery slots for them now?`)) {
+          const res = await POST('/delivery-cycles/' + id + '/generate-slots', {});
+          alert(`Done — ${res.slots_created} slots created for ${confirmed} families.`);
+        }
+      } catch(_) {}
+    }
+    renderDeliveries();
+  } catch(e) { alert(e.message); }
+}
+
+async function revertCycleStatus(id, current) {
+  const prev  = { open:'upcoming', shopping:'open', delivered:'shopping' };
+  const label = { open:'Upcoming', shopping:'Accepting Orders', delivered:'Shopping' };
+  if (!prev[current]) return;
+  if (!confirm(`Revert this cycle back to "${label[prev[current]]}"?\n\nThis will undo the status advance.`)) return;
+  try {
+    await PUT('/delivery-cycles/' + id, { status: prev[current] });
     renderDeliveries();
   } catch(e) { alert(e.message); }
 }
@@ -3102,7 +3482,7 @@ function openCycleForm(id) {
     ${id ? `<div class="form-group">
       <label>Status</label>
       <select id="cy-status">
-        ${['upcoming','shopping','delivered'].map(s => `<option value="${s}" ${c?.status===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
+        ${[['upcoming','Upcoming'],['open','Accepting Orders'],['shopping','Shopping'],['delivered','Delivered']].map(([v,l]) => `<option value="${v}" ${c?.status===v?'selected':''}>${l}</option>`).join('')}
       </select>
     </div>` : `<p style="font-size:13px;color:#1a8754;background:#f0faf5;padding:10px 12px;border-radius:8px;margin-top:4px;">
       ✓ All active families will be automatically enrolled when the delivery is created.
@@ -3152,19 +3532,25 @@ async function viewCycleDetail(cycleId) {
     const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
 
     // Tally confirmation statuses
+    const hasWA = o => !!(o.family_wa_phone && o.family_wa_apikey);
     const confirmed      = orders.filter(o => o.status === 'confirmed').length;
     const skipped        = orders.filter(o => o.status === 'skipped').length;
-    const noResponse     = orders.filter(o => o.status === 'pending_confirmation').length;
+    const noWA           = orders.filter(o => o.status === 'pending_confirmation' && !hasWA(o)).length;
+    const noResponse     = orders.filter(o => o.status === 'pending_confirmation' && hasWA(o)).length;
     const total          = orders.length;
 
     const confColor  = confirmed  ? 'color:#1a5e34;background:#e8f5e9' : 'color:var(--gray-4);background:var(--gray-1)';
     const skipColor  = skipped    ? 'color:#7a6000;background:#fffbec' : 'color:var(--gray-4);background:var(--gray-1)';
     const nrColor    = noResponse ? 'color:#721c24;background:#f8d7da' : 'color:var(--gray-4);background:var(--gray-1)';
+    const noWAColor  = noWA       ? 'color:#92400e;background:#fef3c7' : 'color:var(--gray-4);background:var(--gray-1)';
 
     const confStatusBadge = o => {
       if (o.status === 'confirmed')           return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ Confirmed</span>`;
       if (o.status === 'skipped')             return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fffbec;color:#7a6000">✗ Declined</span>`;
-      if (o.status === 'pending_confirmation')return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#f8d7da;color:#721c24">⏳ No Response</span>`;
+      if (o.status === 'pending_confirmation') {
+        if (!hasWA(o)) return `<span title="No WhatsApp credentials — notification was never sent" style="font-size:11px;font-weight:700;padding:2px 8px;background:#fef3c7;color:#92400e;cursor:pointer" onclick="nav('wa_setup')">📵 No WA</span>`;
+        return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#f8d7da;color:#721c24">⏳ No Response</span>`;
+      }
       return badge(o.status);
     };
 
@@ -3193,8 +3579,13 @@ async function viewCycleDetail(cycleId) {
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">No Response</div>
           <div style="font-size:28px;font-weight:700;${nrColor.split(';')[0]}">${noResponse}</div>
         </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2);${noWA?'border-color:#fcd34d;background:#fffbeb;cursor:pointer':''}" ${noWA?`onclick="nav('wa_setup')" title="Click to set up WA credentials"`:''}>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:${noWA?'#92400e':'var(--gray-4)'};margin-bottom:4px">No WA Set Up</div>
+          <div style="font-size:28px;font-weight:700;${noWAColor.split(';')[0]}">${noWA}</div>
+          ${noWA?`<div style="font-size:10px;color:#92400e;margin-top:3px;">Notification never sent</div>`:''}
+        </div>
         <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Total Notified</div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Total Families</div>
           <div style="font-size:28px;font-weight:700">${total}</div>
         </div>
       </div>
@@ -3231,6 +3622,107 @@ async function overrideFoodRequest(requestId, newStatus, cycleId, fromFamilyId) 
     if (fromFamilyId) viewFamily(fromFamilyId);
     else viewCycleDetail(cycleId);
   } catch(e) { alert('Failed to update: ' + e.message); }
+}
+
+async function manualConfirmFamily(familyId, familyName) {
+  if (!confirm(`Manually add ${familyName} to the current cycle as Confirmed?\n\nAll bundle items will be selected by default. You can adjust in the cycle detail view.`)) return;
+  try {
+    const data = await POST('/families/' + familyId + '/manual-confirm', {});
+    alert(`Done — ${familyName} confirmed for "${data.cycle_title}" (${data.bundle_size} bundle).`);
+    viewFamily(familyId);
+  } catch(e) { alert('Could not add to cycle: ' + e.message); }
+}
+
+async function resetFamilyOrder(familyId, familyName) {
+  if (!confirm(`Reset ${familyName}'s current order?\n\nThis clears their order back to pending and cancels any open change requests. No notification will be sent to the family.`)) return;
+  try {
+    await POST('/families/' + familyId + '/reset-order', {});
+    viewFamily(familyId);
+  } catch(e) { alert('Could not reset order: ' + e.message); }
+}
+
+// ── Change Requests Inbox ─────────────────────────────────────────────────────
+async function renderRequests() {
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4);padding:20px">Loading…</p>';
+  try {
+    const [pending, recent] = await Promise.all([
+      GET('/admin/change-requests?status=pending'),
+      GET('/admin/change-requests?status=all').catch(() => [])
+    ]);
+    const resolved = recent.filter(r => r.status !== 'pending' && r.status !== 'retracted').slice(0, 20);
+
+    const fmtTs = ts => ts ? new Date(ts + (ts.endsWith('Z')?'':'Z')).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+    const statusBadge = s => ({
+      pending:   '<span style="background:#fff8e6;color:#7a4a00;font-size:10px;font-weight:700;padding:2px 7px;">PENDING</span>',
+      approved:  '<span style="background:#e8f5ee;color:#1a5e34;font-size:10px;font-weight:700;padding:2px 7px;">APPROVED</span>',
+      rejected:  '<span style="background:#fdecea;color:#b00;font-size:10px;font-weight:700;padding:2px 7px;">REJECTED</span>',
+      retracted: '<span style="background:#f5f5f5;color:#888;font-size:10px;font-weight:700;padding:2px 7px;">RETRACTED</span>',
+    })[s] || s;
+
+    const renderRow = (cr, showActions) => {
+      const itemList = (cr.selected_items||[]).map(i => `<span style="display:inline-block;background:#f5f5f5;border-radius:3px;padding:1px 6px;margin:2px;font-size:11px;">${i.name}</span>`).join('');
+      return `
+        <div style="background:#fff;border:1px solid #eee;border-left:3px solid ${cr.status==='pending'?'#f0c040':cr.status==='approved'?'#1a8754':'#ccc'};padding:14px 16px;margin-bottom:10px;">
+          <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <div style="flex:1;min-width:200px;">
+              <div style="font-weight:700;font-size:14px;">${cr.family_name} <span style="font-weight:400;font-size:12px;color:#888;font-family:monospace;">${cr.family_code||''}</span></div>
+              <div style="font-size:12px;color:#555;margin-top:2px;">${cr.cycle_title} · ${fmtDate(cr.delivery_date_start)}</div>
+              <div style="font-size:12px;color:#888;margin-top:2px;">Submitted ${fmtTs(cr.created_at)}</div>
+            </div>
+            <div>${statusBadge(cr.status)}</div>
+          </div>
+          ${cr.family_notes ? `<div style="background:#f9f9f9;border-left:2px solid #ddd;padding:6px 10px;font-size:13px;margin-bottom:8px;color:#333;">💬 "${cr.family_notes}"</div>` : ''}
+          ${itemList ? `<div style="margin-bottom:8px;"><div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Requested items:</div>${itemList}</div>` : ''}
+          ${cr.admin_notes ? `<div style="background:#f0faf5;border-left:2px solid #1a8754;padding:6px 10px;font-size:12px;color:#1a5e34;margin-bottom:8px;">📝 Admin note: "${cr.admin_notes}"</div>` : ''}
+          ${showActions && cr.status === 'pending' ? `
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+              <input type="text" id="note-${cr.id}" placeholder="Admin note (optional)" style="flex:1;min-width:200px;border:1px solid #ddd;padding:5px 8px;font-size:12px;font-family:inherit;">
+              <button onclick="approveRequest('${cr.id}')" style="background:#1a8754;color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✓ Approve</button>
+              <button onclick="rejectRequest('${cr.id}')" style="background:#c00;color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✕ Reject</button>
+              <button onclick="viewFamily('${cr.family_id}')" style="background:none;border:1px solid #ccc;color:#555;padding:6px 12px;font-size:12px;cursor:pointer;font-family:inherit;">View Family →</button>
+            </div>` : ''}
+        </div>`;
+    };
+
+    document.getElementById('content').innerHTML = `
+      <div style="max-width:780px;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+          <h2 style="font-size:18px;font-weight:800;">Change Requests</h2>
+          ${pending.length > 0 ? `<span style="background:#f0c040;color:#7a4a00;font-size:12px;font-weight:700;padding:3px 10px;">${pending.length} pending</span>` : '<span style="background:#e8f5ee;color:#1a8754;font-size:12px;padding:3px 10px;">All clear</span>'}
+        </div>
+
+        ${pending.length === 0 ? `
+          <div style="background:#f9f9f9;border:1px solid #eee;padding:24px;text-align:center;color:#888;margin-bottom:20px;">
+            No pending change requests
+          </div>` : pending.map(cr => renderRow(cr, true)).join('')}
+
+        ${resolved.length > 0 ? `
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#aaa;margin:24px 0 10px;">Recent — Resolved</div>
+          ${resolved.map(cr => renderRow(cr, false)).join('')}
+        ` : ''}
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00;padding:20px">${e.message}</p>`;
+  }
+}
+
+async function approveRequest(crId) {
+  const note = (document.getElementById('note-' + crId)?.value || '').trim();
+  if (!confirm('Approve this change request? The family\'s item selection will be applied automatically.')) return;
+  try {
+    await POST('/admin/change-requests/' + crId + '/approve', { admin_notes: note });
+    renderRequests();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function rejectRequest(crId) {
+  const note = (document.getElementById('note-' + crId)?.value || '').trim();
+  if (!note && !confirm('Reject without adding a note? The family will be notified via WhatsApp.')) return;
+  if (!confirm('Reject this change request?')) return;
+  try {
+    await POST('/admin/change-requests/' + crId + '/reject', { admin_notes: note });
+    renderRequests();
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 async function viewShoppingList(cycleId) {
@@ -3388,11 +3880,12 @@ async function renderCatalog() {
             </tr></thead>
             <tbody>
               ${items.length ? items.map(item => {
-                const bqs = item.bundle_quantities || {};
                 return `<tr>
                   <td><strong>${item.name}</strong></td>
-                  <td style="font-size:12px;color:var(--gray-4)">${item.unit}</td>
-                  <td style="font-size:12px">—</td><td style="font-size:12px">—</td><td style="font-size:12px">—</td>
+                  <td style="font-size:12px;color:var(--gray-4)">${item.unit||'—'}</td>
+                  <td style="font-size:12px" data-bq="${item.id}_S">—</td>
+                  <td style="font-size:12px" data-bq="${item.id}_M">—</td>
+                  <td style="font-size:12px" data-bq="${item.id}_L">—</td>
                   <td><span class="badge ${item.is_active?'badge-active':'badge-inactive'}">${item.is_active?'Active':'Hidden'}</span></td>
                   <td><button class="btn btn-outline btn-sm" onclick="openItemForm('${item.id}')">Edit</button></td>
                 </tr>`;
@@ -3413,22 +3906,11 @@ async function renderCatalog() {
 async function loadBundleQtysIntoTable() {
   try {
     const bqs = await GET('/bundle-quantities');
-    // Map bqs by item_id + size
     const map = {};
     bqs.forEach(bq => { map[bq.food_item_id + '_' + bq.bundle_size] = bq.quantity; });
-
-    // Update all table cells for S/M/L
-    _catalogItems.forEach(item => {
-      const row = document.querySelector(`tr[data-item="${item.id}"]`);
-      // Since we used template literals, let's just find cells by traversal
-      // Re-render with quantities inline instead
-    });
-
-    // Simpler: re-render the quantities directly in cells
-    const tds = document.querySelectorAll('td[data-bq]');
-    tds.forEach(td => {
-      const key = td.getAttribute('data-bq');
-      td.textContent = map[key] || '—';
+    document.querySelectorAll('td[data-bq]').forEach(td => {
+      const val = map[td.getAttribute('data-bq')];
+      td.textContent = (val !== undefined && val !== null && val !== '') ? val : '—';
     });
   } catch(e) {}
 }
@@ -3476,12 +3958,28 @@ async function saveCategory() {
   } catch(e) { showErr(e.message); }
 }
 
-function openItemForm(id, defaultCatId) {
+async function openItemForm(id, defaultCatId) {
   STATE.editId = id || null;
   const item = id ? _catalogItems.find(i => i.id === id) : null;
   const catOptions = _catalogCats.map(c =>
     `<option value="${c.id}" ${(item?.category_id||defaultCatId)===c.id?'selected':''}>${c.name}</option>`
   ).join('');
+
+  // Pre-load existing quantities if editing
+  let qtyS = '', qtyM = '', qtyL = '';
+  if (id) {
+    try {
+      const bqs = await GET('/bundle-quantities');
+      bqs.forEach(bq => {
+        if (bq.food_item_id === id) {
+          if (bq.bundle_size === 'S') qtyS = bq.quantity;
+          else if (bq.bundle_size === 'M') qtyM = bq.quantity;
+          else if (bq.bundle_size === 'L') qtyL = bq.quantity;
+        }
+      });
+    } catch(e) {}
+  }
+
   openDrawer(id ? 'Edit Food Item' : 'Add Food Item', `
     <div class="form-group">
       <label>Category *</label>
@@ -3504,7 +4002,23 @@ function openItemForm(id, defaultCatId) {
         </select>
       </div>
     </div>
-    <p style="font-size:11px;color:var(--gray-4);margin-top:4px">After saving, use "Edit Quantities" to set S/M/L amounts for this item.</p>
+    <div style="margin-top:12px;margin-bottom:4px">
+      <label style="font-size:12px;font-weight:600;color:var(--gray-5)">Quantity per Bundle Size</label>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Small</label>
+        <input type="number" id="item-qty-s" min="0" step="0.5" placeholder="—" value="${qtyS}" style="text-align:center">
+      </div>
+      <div class="form-group">
+        <label>Medium</label>
+        <input type="number" id="item-qty-m" min="0" step="0.5" placeholder="—" value="${qtyM}" style="text-align:center">
+      </div>
+      <div class="form-group">
+        <label>Large</label>
+        <input type="number" id="item-qty-l" min="0" step="0.5" placeholder="—" value="${qtyL}" style="text-align:center">
+      </div>
+    </div>
     <div class="alert alert-error" id="item-err"></div>`,
     `<button class="btn" onclick="saveItem()">Save</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
@@ -3523,8 +4037,27 @@ async function saveItem() {
     is_active: parseInt(document.getElementById('item-active').value)
   };
   try {
-    if (STATE.editId) await PUT('/food-items/' + STATE.editId, payload);
-    else await POST('/food-items', payload);
+    let itemId = STATE.editId;
+    if (itemId) {
+      await PUT('/food-items/' + itemId, payload);
+    } else {
+      const res = await POST('/food-items', payload);
+      itemId = res.id;
+    }
+
+    // Save S/M/L quantities (batch PUT expects an array)
+    const qtyEntries = [
+      { size: 'S', val: document.getElementById('item-qty-s').value },
+      { size: 'M', val: document.getElementById('item-qty-m').value },
+      { size: 'L', val: document.getElementById('item-qty-l').value },
+    ];
+    const bqPayload = qtyEntries
+      .filter(({ val }) => val !== '' && !isNaN(parseFloat(val)))
+      .map(({ size, val }) => ({ food_item_id: itemId, bundle_size: size, quantity: parseFloat(val) }));
+    if (bqPayload.length > 0) {
+      await PUT('/bundle-quantities', bqPayload).catch(() => {}); // non-fatal
+    }
+
     closeDrawer(); renderCatalog();
   } catch(e) { showErr(e.message); }
 }
