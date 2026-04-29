@@ -3099,13 +3099,13 @@ async function renderDeliveries(filterStatus) {
   try {
     const url = filterStatus !== 'all' ? '/delivery-cycles?status=' + filterStatus : '/delivery-cycles';
     _cyclesCache = await GET(url);
-    const statusColors = { upcoming:'badge-pending', shopping:'badge-approved', delivered:'badge-completed' };
-    const statusLabels = { upcoming:'Upcoming', shopping:'Shopping', delivered:'Delivered' };
+    const statusColors = { upcoming:'badge-pending', open:'badge-active', shopping:'badge-approved', delivered:'badge-completed' };
+    const statusLabels = { upcoming:'Upcoming', open:'Open — Accepting Orders', shopping:'Shopping', delivered:'Delivered' };
     document.getElementById('content').innerHTML = `
       <div style="margin-bottom:16px">
         <div class="filter-tabs">
-          ${['all','upcoming','shopping','delivered'].map(s =>
-            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]}</div>`
+          ${['all','upcoming','open','shopping','delivered'].map(s =>
+            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]||s}</div>`
           ).join('')}
         </div>
       </div>
@@ -3124,7 +3124,8 @@ async function renderDeliveries(filterStatus) {
                 <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
-                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Shopping</button>` : ''}
+                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px;background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Open for Orders</button>` : ''}
+                  ${c.status === 'open'     ? `<button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>` : ''}
                   ${c.status === 'shopping' ? `<button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
                 </td>
               </tr>`).join('') :
@@ -3154,10 +3155,15 @@ async function loadConfirmationCount(cycleId) {
 }
 
 async function advanceCycleStatus(id, current) {
-  const next = { upcoming:'shopping', shopping:'delivered' };
+  const next  = { upcoming:'open', open:'shopping', shopping:'delivered' };
+  const label = { upcoming:'Open for Family Orders', open:'Shopping', shopping:'Delivered' };
+  const desc  = {
+    upcoming: 'Families will be able to log in to My Order and confirm their bundle.',
+    open:     'The order window closes. Volunteers will start shopping.',
+    shopping: 'Mark this cycle as fully delivered.'
+  };
   if (!next[current]) return;
-  const label = { upcoming:'Shopping', shopping:'Delivered' };
-  if (!confirm(`Mark this delivery as "${label[next[current]]}"?`)) return;
+  if (!confirm(`Move to "${label[next[current]]}"?\n\n${desc[current]}`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: next[current] });
     renderDeliveries();
