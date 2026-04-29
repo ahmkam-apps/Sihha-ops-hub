@@ -1927,7 +1927,9 @@ async function viewFamily(id) {
           ${currentOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(currentOrder.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">${overrideBtns}
-            ${currentOrder.status !== 'delivered' ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
+            ${currentOrder.status !== 'delivered' ? `
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="adminCancelOrder('${fid}','${currentOrder.cycle_id}','${r.name}')">✕ Cancel</button>
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
           </div>
         </div>`;
     }
@@ -3634,11 +3636,21 @@ async function manualConfirmFamily(familyId, familyName) {
 }
 
 async function resetFamilyOrder(familyId, familyName) {
-  if (!confirm(`Reset ${familyName}'s current order?\n\nThis clears their order back to pending and cancels any open change requests. No notification will be sent to the family.`)) return;
+  if (!confirm(`Reset ${familyName}'s current order?\n\nFor confirmed orders: clears items and resets back to pending.\nFor cancelled/skipped orders: deletes the record so the family can re-order.\n\nNo notification will be sent to the family.`)) return;
   try {
     await POST('/families/' + familyId + '/reset-order', {});
     viewFamily(familyId);
   } catch(e) { alert('Could not reset order: ' + e.message); }
+}
+
+async function adminCancelOrder(familyId, cycleId, familyName) {
+  const reason = prompt(`Cancel ${familyName}'s order?\n\nOptional: enter a reason (shown in admin logs). Leave blank to cancel without a reason.`);
+  if (reason === null) return; // user hit Cancel on the prompt
+  try {
+    await POST('/families/' + familyId + '/cancel-order', { cycle_id: cycleId, reason: reason.trim() });
+    alert(`Order cancelled. ${familyName} can now place a fresh order for this delivery.`);
+    viewFamily(familyId);
+  } catch(e) { alert('Could not cancel order: ' + e.message); }
 }
 
 // ── Change Requests Inbox ─────────────────────────────────────────────────────
