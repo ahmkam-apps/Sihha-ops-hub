@@ -4349,16 +4349,28 @@ def portal_get_families(cycle_id):
     for fam in families:
         fam_dict = dict(fam)
         slots = db.execute(
-            "SELECT id, task_type, claimed_by FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND status!='cancelled'",
+            '''SELECT vs.id, vs.task_type, vs.claimed_by, vs.status,
+                      v.name as claimed_by_name
+               FROM volunteer_slots vs
+               LEFT JOIN volunteers v ON vs.claimed_by = v.id
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status!='cancelled'
+               ORDER BY vs.claimed_at''',
             (cycle_id, fam['id'])
         ).fetchall()
-        my_slots = {}       # {slug: slot_id}
-        vol_counts = {}     # {slug: count}
+        my_slots    = {}   # {task_type: slot_id}  — slots I claimed
+        taken_by    = {}   # {task_type: volunteer_name}  — slots claimed by someone else
+        vol_counts  = {}   # {task_type: total_count}
         for s in slots:
-            vol_counts[s['task_type']] = vol_counts.get(s['task_type'], 0) + 1
+            tt = s['task_type']
+            vol_counts[tt] = vol_counts.get(tt, 0) + 1
             if s['claimed_by'] == vol_id:
-                my_slots[s['task_type']] = s['id']
+                my_slots[tt] = s['id']
+            elif s['claimed_by'] and s['status'] == 'claimed':
+                # Another volunteer has this slot — record their name (first one wins)
+                if tt not in taken_by:
+                    taken_by[tt] = s['claimed_by_name'] or 'A volunteer'
         fam_dict['my_slots']         = my_slots
+        fam_dict['taken_by']         = taken_by
         fam_dict['volunteer_counts'] = vol_counts
         # Address only for volunteers signed up for delivery
         if 'delivery' not in my_slots:

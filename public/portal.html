@@ -414,22 +414,29 @@ function renderFamilies(data) {
       ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
 
     const taskBtns = task_types.map(tt => {
-      const mySlotId = fam.my_slots?.[tt.slug];
-      const count    = fam.volunteer_counts?.[tt.slug] || 0;
-      const countBadge = count > 0
-        ? `<span style="font-size:10px;color:var(--gray-4);margin-left:4px;">(${count})</span>` : '';
+      const mySlotId  = fam.my_slots?.[tt.slug];
+      const takenBy   = fam.taken_by?.[tt.slug];   // name of volunteer who claimed it
 
       if (mySlotId) {
+        // I signed up — green button, click to cancel
         return `<button
           style="background:var(--green);color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
           onclick="cancelSignup('${mySlotId}','${fam.id}')">
-          ✓ ${tt.label} ×${countBadge}
+          ✓ ${tt.label} — You ×
         </button>`;
       }
+      if (takenBy) {
+        // Another volunteer already claimed this — show who, no button
+        return `<div
+          style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;font-size:12px;font-weight:600;background:#f0f0f0;color:#555;border:1px solid #ddd;">
+          👤 ${tt.label} — ${takenBy}
+        </div>`;
+      }
+      // Open — show signup button
       return `<button
         style="background:transparent;color:var(--black);border:1px solid var(--black);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
         onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
-        ${tt.label}${countBadge}
+        ${tt.label}
       </button>`;
     }).join('');
 
@@ -446,8 +453,15 @@ function renderFamilies(data) {
       </div>`;
   };
 
+  const openCount = families.filter(f =>
+    task_types.some(tt => !f.my_slots?.[tt.slug] && !f.taken_by?.[tt.slug])
+  ).length;
+  const heading = openCount > 0
+    ? `${families.length} families · ${openCount} with open slots`
+    : `${families.length} families · all slots filled`;
+
   document.getElementById('slots-content').innerHTML =
-    `<div class="section-heading">${families.length} families · tap a task to sign up</div>` +
+    `<div class="section-heading">${heading}</div>` +
     families.map(familyCard).join('');
 }
 
