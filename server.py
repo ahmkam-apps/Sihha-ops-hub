@@ -3527,6 +3527,15 @@ def check_food_order_eligibility():
                WHERE fr.family_id=? ORDER BY dc.delivery_date_start DESC LIMIT 20''',
             (family['id'],)
         ).fetchall()
+        # Can the family cancel? Yes if delivery is > 2 days away and order isn't delivered/skipped
+        from datetime import date
+        try:
+            delivery_dt = date.fromisoformat(cycle['delivery_date_start'])
+            days_until  = (delivery_dt - date.today()).days
+            can_cancel  = (days_until > 2 and existing['status'] not in ('skipped', 'delivered', 'cancelled'))
+        except Exception:
+            can_cancel = False
+
         return jsonify({
             'registered': True, 'family_name': family['name'],
             'family_id': family['id'],
@@ -3534,6 +3543,8 @@ def check_food_order_eligibility():
             'pending_bundle_size': family['pending_bundle_size'],
             'open_cycle': True, 'already_submitted': True,
             'order_status': existing['status'],
+            'request_id': existing['id'],
+            'can_cancel': can_cancel,
             'last_order': last_order,
             'delivery_start': cycle['delivery_date_start'],
             'delivery_end': cycle['delivery_date_end'],
@@ -3673,6 +3684,52 @@ def submit_food_order():
         'delivery_start': cycle['delivery_date_start'],
         'delivery_end': cycle['delivery_date_end']
     }), 201
+
+@app.route('/api/food-order/cancel', methods=['POST'])
+def cancel_food_order():
+    """Family cancels their confirmed order — allowed up to 2 days before delivery."""
+    from datetime import date as _date
+    data      = request.json or {}
+    family_id = data.get('family_id')
+    request_id = data.get('request_id')
+    if not family_id or not request_id:
+        return jsonify({'error': 'family_id and request_id required'}), 422
+
+    db  = get_db()
+    req = db.execute(
+        "SELECT fr.*, dc.delivery_date_start FROM food_requests fr JOIN delivery_cycles dc ON fr.cycle_id=dc.id WHERE fr.id=? AND fr.family_id=?",
+        (request_id, family_id)
+    ).fetchone()
+    if not req:
+        return jsonify({'error': 'Order not found'}), 404
+    if req['status'] in ('skipped', 'delivered', 'cancelled'):
+        return jsonify({'error': 'Order cannot be cancelled in its current state'}), 409
+
+    # Enforce 2-day cutoff
+    try:
+        delivery_dt = _date.fromisoformat(req['delivery_date_start'])
+        days_until  = (delivery_dt - _date.today()).days
+    except Exception:
+        days_until = 99  # unknown date — allow cancellation
+    if days_until <= 2:
+        return jsonify({'error': 'Orders can only be cancelled more than 2 days before delivery'}), 409
+
+    # Mark as skipped
+    db.execute(
+        "UPDATE food_requests SET status='skipped', updated_at=? WHERE id=?",
+        (now(), request_id)
+    )
+
+    # Release volunteer slots back to open so others can claim them
+    db.execute(
+        "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status='claimed'",
+        (now(), req['cycle_id'], family_id)
+    )
+
+    db.commit()
+    log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
+    return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
+
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):

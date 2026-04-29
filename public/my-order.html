@@ -478,6 +478,10 @@
         <div class="skipped-banner" id="skipped-banner">
           <span data-en="You have skipped this cycle. See you next time." data-ar="لقد تخطيت هذه الدورة. نراك في المرة القادمة.">You have skipped this cycle. See you next time.</span>
         </div>
+        <div id="cancel-order-row" style="display:none;margin-top:10px;">
+          <button onclick="doCancelOrder()" style="background:none;border:none;color:#b00;font-size:13px;cursor:pointer;text-decoration:underline;padding:0;"
+            data-en="Cancel this order" data-ar="إلغاء هذا الطلب">Cancel this order</button>
+        </div>
 
         <!-- Bundle size change -->
         <div class="bundle-change-row">
@@ -590,15 +594,16 @@
         return;
       }
 
-      STATE.family    = data.family_name;
-      STATE.familyId  = data.family_id;
-      STATE.cycle     = data.open_cycle ? data : null;
-      STATE.history   = data.history || [];
-      STATE.bundleSize = data.bundle_size;
-      STATE.pendingBundleSize = data.pending_bundle_size;
-      // Bundle categories already come from the check response (no second API call needed)
+      STATE.family             = data.family_name;
+      STATE.familyId           = data.family_id;
+      STATE.cycle              = data.open_cycle ? data : null;
+      STATE.history            = data.history || [];
+      STATE.bundleSize         = data.bundle_size;
+      STATE.pendingBundleSize  = data.pending_bundle_size;
+      STATE.requestId          = data.request_id   || null;   // for cancel
+      STATE.canCancel          = data.can_cancel   || false;
       STATE.bundleCategories   = data.bundle_categories   || [];
-      STATE.selectedCategories = data.selected_categories || []; // when already_submitted
+      STATE.selectedCategories = data.selected_categories || [];
 
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
@@ -670,13 +675,26 @@
       // Show confirmed/skipped state if already submitted
       if (d.already_submitted) {
         document.getElementById('cycle-actions').style.display = 'none';
-        document.getElementById('confirmed-banner').style.display = 'block';
-        // Show read-only summary of what they selected
-        if (STATE.selectedCategories.length) {
-          document.getElementById('items-section').style.display = 'block';
-          renderConfirmedItems();
-        } else {
+
+        if (d.order_status === 'skipped') {
+          document.getElementById('skipped-banner').style.display = 'block';
           document.getElementById('items-section').style.display = 'none';
+        } else {
+          document.getElementById('confirmed-banner').style.display = 'block';
+          // Always show items — use selected if available, fall back to full bundle list
+          document.getElementById('items-section').style.display = 'block';
+          if (STATE.selectedCategories.length) {
+            renderConfirmedItems();
+          } else if (STATE.bundleCategories.length) {
+            // No item-level tracking yet — show the full bundle as a preview
+            renderConfirmedItems(STATE.bundleCategories);
+          } else {
+            renderConfirmedItems([]);
+          }
+          // Show cancel button if within window
+          if (STATE.canCancel) {
+            document.getElementById('cancel-order-row').style.display = 'block';
+          }
         }
       } else {
         // Show item selection checklist
@@ -729,14 +747,14 @@
   }
 
   // ── Item list ─────────────────────────────────────────────────────────────
-  function renderConfirmedItems() {
+  function renderConfirmedItems(overrideCats) {
     const L = currentLang;
     const container = document.getElementById('items-list');
-    const cats = STATE.selectedCategories;
+    const cats = overrideCats !== undefined ? overrideCats : STATE.selectedCategories;
     const titleEl = document.querySelector('.items-section-title');
-    if (titleEl) titleEl.textContent = L === 'ar' ? 'العناصر التي طلبتها' : 'Your confirmed items';
+    if (titleEl) titleEl.textContent = L === 'ar' ? 'محتويات طردك' : 'What\'s in your bundle';
     if (!cats || !cats.length) {
-      container.innerHTML = `<div class="items-loading">${L === 'ar' ? 'لا توجد عناصر محددة.' : 'No items recorded.'}</div>`;
+      container.innerHTML = `<div class="items-loading">${L === 'ar' ? 'لا توجد عناصر.' : 'Bundle details will appear here once finalized.'}</div>`;
       return;
     }
     container.innerHTML = cats.map(cat => `
@@ -748,6 +766,31 @@
           <div class="item-qty">${escHtml(item.quantity || '')} ${escHtml(item.unit || '')}</div>
         </div>`).join('')}
     `).join('');
+  }
+
+  // ── Cancel order ──────────────────────────────────────────────────────────
+  async function doCancelOrder() {
+    const L = currentLang;
+    const msg = L === 'ar'
+      ? 'هل تريد إلغاء طلبك؟ لن يتم تسليم أي طرد في هذه الدورة.'
+      : 'Cancel your order? You will not receive a bundle this cycle.';
+    if (!confirm(msg)) return;
+    try {
+      const res = await fetch('/api/food-order/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ family_id: STATE.familyId, request_id: STATE.requestId })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Something went wrong.'); return; }
+      // Update UI
+      document.getElementById('confirmed-banner').style.display = 'none';
+      document.getElementById('cancel-order-row').style.display = 'none';
+      document.getElementById('items-section').style.display = 'none';
+      document.getElementById('skipped-banner').style.display = 'block';
+    } catch(e) {
+      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+    }
   }
 
   function renderItemList() {
