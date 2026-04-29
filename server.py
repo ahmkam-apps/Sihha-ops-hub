@@ -840,7 +840,54 @@ def bootstrap_db():
             sent_at  TEXT NOT NULL,
             UNIQUE(slot_id, sent_to)
         );
+
+        CREATE TABLE IF NOT EXISTS food_request_events (
+            id          TEXT PRIMARY KEY,
+            request_id  TEXT NOT NULL,
+            event_type  TEXT NOT NULL,
+            actor       TEXT NOT NULL DEFAULT 'system',
+            payload     TEXT NOT NULL DEFAULT '{}',
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY (request_id) REFERENCES food_requests(id)
+        );
     ''')
+
+    # ── Migration #19: backfill synthetic events for existing orders ──────────
+    existing_events = conn.execute("SELECT COUNT(*) FROM food_request_events").fetchone()[0]
+    if existing_events == 0:
+        log.info('Migration #19: backfilling food_request_events for existing orders...')
+        import json as _json
+        backfill_rows = conn.execute(
+            '''SELECT id, status, confirmed_at, updated_at, submitted_at FROM food_requests'''
+        ).fetchall()
+        _bf_count = 0
+        for _r in backfill_rows:
+            _etype = None
+            _ts    = None
+            if _r['status'] in ('confirmed', 'auto_confirmed'):
+                _etype = 'confirmed'
+                _ts    = _r['confirmed_at'] or _r['submitted_at'] or datetime.utcnow().isoformat()
+            elif _r['status'] == 'submitted':
+                _etype = 'confirmed'
+                _ts    = _r['submitted_at'] or datetime.utcnow().isoformat()
+            elif _r['status'] == 'skipped':
+                _etype = 'auto_skipped'
+                _ts    = _r['updated_at'] or _r['submitted_at'] or datetime.utcnow().isoformat()
+            elif _r['status'] == 'cancelled':
+                _etype = 'cancelled'
+                _ts    = _r['updated_at'] or _r['submitted_at'] or datetime.utcnow().isoformat()
+            elif _r['status'] == 'delivered':
+                _etype = 'confirmed'
+                _ts    = _r['confirmed_at'] or _r['submitted_at'] or datetime.utcnow().isoformat()
+            if _etype:
+                conn.execute(
+                    "INSERT OR IGNORE INTO food_request_events (id, request_id, event_type, actor, payload, created_at) VALUES (?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), _r['id'], _etype, 'system',
+                     _json.dumps({'note': 'backfilled'}), _ts)
+                )
+                _bf_count += 1
+        conn.commit()
+        log.info(f'Migration #19: backfilled {_bf_count} events for existing orders')
 
     # ── Seed default task types (idempotent) ─────────────────────────────────
     for _slug, _label, _order in [('shopping', 'Shop', 1), ('delivery', 'Delivery', 2), ('stock', 'Stock', 3)]:
@@ -1058,6 +1105,45 @@ def _wa_send(phone, apikey, message):
     except Exception as e:
         log.warning(f'WhatsApp send failed to {phone}: {e}')
         return False
+
+def _today_central():
+    """Return today's date in US Central time (America/Chicago).
+    Uses zoneinfo (Python 3.9+, always available on Railway).
+    Falls back to UTC if zoneinfo is unavailable."""
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        return _dt.now(ZoneInfo('America/Chicago')).date()
+    except Exception:
+        from datetime import date as _d
+        return _d.today()
+
+def _log_order_event(db, request_id, event_type, actor='system', payload=None):
+    """Append an event to food_request_events. Never raises — failures are logged only.
+    event_type: confirmed | items_edited | cancelled | admin_override | auto_skipped
+    actor:      family | admin | scheduler | system
+    payload:    dict — e.g. {'removed': ['Whole Chicken'], 'added': ['Brown Lentils']}
+    """
+    import json as _json
+    try:
+        db.execute(
+            "INSERT INTO food_request_events (id, request_id, event_type, actor, payload, created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), request_id, event_type, actor,
+             _json.dumps(payload or {}), now())
+        )
+    except Exception as _e:
+        log.warning(f'_log_order_event failed ({event_type} on {request_id}): {_e}')
+
+def _notify_coordinators(db, message):
+    """Send WA to all active admin users who have WA credentials configured."""
+    try:
+        admins = db.execute(
+            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
+        ).fetchall()
+        for a in admins:
+            _wa_send(a['wa_phone'], a['wa_apikey'], message)
+    except Exception as _e:
+        log.warning(f'_notify_coordinators failed: {_e}')
 
 def _email_send(to_email, subject, text_body):
     """Send an email via SendGrid Web API v3 (no SDK — pure urllib).
@@ -2660,6 +2746,8 @@ def update_food_request_status(rid):
     if status == 'confirmed':
         _ensure_volunteer_slots(db, row['cycle_id'], row['family_id'])
 
+    _log_order_event(db, rid, 'admin_override', actor='admin',
+                     payload={'new_status': status})
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM food_requests WHERE id=?", (rid,)).fetchone()))
 
@@ -2726,6 +2814,8 @@ def manual_confirm_family(fid):
     # Auto-create volunteer slots immediately
     slots_created = _ensure_volunteer_slots(db, cycle['id'], fid)
 
+    _log_order_event(db, rid, 'admin_override', actor='admin',
+                     payload={'new_status': 'confirmed', 'note': 'manual confirm by coordinator'})
     db.commit()
     log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} by coordinator — {slots_created} slots created')
     return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size, 'slots_created': slots_created}), 201
@@ -2784,7 +2874,8 @@ def get_cycle_shopping_list(cid):
     return jsonify({
         'cycle': dict(cycle) if cycle else {},
         'total_orders': total_orders,
-        'shopping_list': shopping_list
+        'shopping_list': shopping_list,
+        'generated_at': now()  # UTC — volunteers can see if list was generated before recent edits
     })
 
 # ── Print Reports (HTML → browser PDF) ────────────────────────────────────────
@@ -3312,12 +3403,23 @@ def submit_family_confirmation(token):
             "UPDATE food_requests SET status='skipped', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
             (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
         )
+        _log_order_event(db, req['id'], 'auto_skipped', actor='family')
         db.commit()
         return jsonify({'ok': True, 'action': 'skipped'})
 
+    # Capture previous selections for diff (items_edited vs first-time confirmed)
+    was_confirmed = req['status'] == 'confirmed'
+    prev_items = {}
+    if was_confirmed:
+        for _pi in db.execute(
+            "SELECT fi.name, fri.selected FROM food_request_items fri JOIN food_items fi ON fri.food_item_id=fi.id WHERE fri.request_id=?",
+            (req['id'],)
+        ).fetchall():
+            prev_items[_pi['name']] = _pi['selected']
+
     # Save item selections
     selected_ids = set(data.get('selected_items', []))
-    all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
+    all_items = db.execute("SELECT id, name FROM food_items WHERE is_active=1").fetchall()
     for item in all_items:
         is_selected = 1 if item['id'] in selected_ids else 0
         db.execute(
@@ -3331,6 +3433,15 @@ def submit_family_confirmation(token):
         "UPDATE food_requests SET status='confirmed', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
         (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
     )
+
+    # Log event — items_edited if re-confirming, confirmed if first time
+    if was_confirmed and prev_items:
+        _added   = [it['name'] for it in all_items if it['id'] in selected_ids and prev_items.get(it['name'], 0) == 0]
+        _removed = [n for n, sel in prev_items.items() if sel == 1 and n not in {it['name'] for it in all_items if it['id'] in selected_ids}]
+        _log_order_event(db, req['id'], 'items_edited', actor='family',
+                         payload={'added': _added, 'removed': _removed})
+    else:
+        _log_order_event(db, req['id'], 'confirmed', actor='family')
 
     # Auto-create volunteer slots — delivery dates are fixed
     _ensure_volunteer_slots(db, req['cycle_id'], req['family_id'])
@@ -3574,14 +3685,20 @@ def check_food_order_eligibility():
                WHERE fr.family_id=? ORDER BY dc.delivery_date_start DESC LIMIT 20''',
             (family['id'],)
         ).fetchall()
-        # Can the family cancel? Yes if delivery is > 2 days away and order isn't delivered/skipped
-        from datetime import date
+        # Cancellation: up to 24h before delivery (Central time)
+        # Editing: up to 48h before delivery AND cycle not in shopping/delivered
         try:
-            delivery_dt = date.fromisoformat(cycle['delivery_date_start'])
-            days_until  = (delivery_dt - date.today()).days
-            can_cancel  = (days_until > 2 and existing['status'] not in ('skipped', 'delivered', 'cancelled'))
+            delivery_dt = cycle['delivery_date_start']
+            from datetime import date as _d2
+            _ddt = _d2.fromisoformat(delivery_dt)
+            days_until  = (_ddt - _today_central()).days
+            _terminal   = existing['status'] in ('skipped', 'delivered', 'cancelled')
+            can_cancel  = (days_until >= 1 and not _terminal)
+            can_edit    = (days_until >= 2 and not _terminal
+                           and cycle['status'] not in ('shopping', 'delivered'))
         except Exception:
             can_cancel = False
+            can_edit   = False
 
         # Full bundle list as fallback — shown if selected_categories is empty.
         # Query ALL items (no is_active filter) so the family always sees something even
@@ -3604,6 +3721,25 @@ def check_food_order_eligibility():
                 bundle_cats[cat] = []
             bundle_cats[cat].append({'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
 
+        # Order event history — for family's own timeline display
+        import json as _json
+        order_events = db.execute(
+            "SELECT event_type, actor, payload, created_at FROM food_request_events WHERE request_id=? ORDER BY created_at ASC",
+            (existing['id'],)
+        ).fetchall()
+        events_list = []
+        for ev in order_events:
+            try:
+                payload = _json.loads(ev['payload'])
+            except Exception:
+                payload = {}
+            events_list.append({
+                'event_type': ev['event_type'],
+                'actor': ev['actor'],
+                'payload': payload,
+                'created_at': ev['created_at']
+            })
+
         return jsonify({
             'registered': True, 'family_name': family['name'],
             'family_id': family['id'],
@@ -3613,12 +3749,15 @@ def check_food_order_eligibility():
             'order_status': existing['status'],
             'request_id': existing['id'],
             'can_cancel': can_cancel,
+            'can_edit': can_edit,
             'last_order': last_order,
             'delivery_start': cycle['delivery_date_start'],
             'delivery_end': cycle['delivery_date_end'],
             'cycle_title': cycle['title'],
+            'cycle_status': cycle['status'],
             'selected_categories': [{'category': k, 'items': v} for k, v in sel_cats.items()],
             'bundle_categories': [{'category': k, 'items': v} for k, v in bundle_cats.items()],
+            'order_events': events_list,
             'history': [dict(r) for r in history_rows2],
             'message': 'You have already submitted a request for this delivery cycle.'
         })
@@ -3756,8 +3895,7 @@ def submit_food_order():
 
 @app.route('/api/food-order/cancel', methods=['POST'])
 def cancel_food_order():
-    """Family cancels their confirmed order — allowed up to 2 days before delivery."""
-    from datetime import date as _date
+    """Family cancels their confirmed order — allowed up to 24 hours before delivery (Central time)."""
     data      = request.json or {}
     family_id = data.get('family_id')
     request_id = data.get('request_id')
@@ -3766,7 +3904,12 @@ def cancel_food_order():
 
     db  = get_db()
     req = db.execute(
-        "SELECT fr.*, dc.delivery_date_start FROM food_requests fr JOIN delivery_cycles dc ON fr.cycle_id=dc.id WHERE fr.id=? AND fr.family_id=?",
+        '''SELECT fr.*, dc.delivery_date_start, dc.title as cycle_title,
+                  f.name as family_name, f.family_code
+           FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+           JOIN families f ON fr.family_id=f.id
+           WHERE fr.id=? AND fr.family_id=?''',
         (request_id, family_id)
     ).fetchone()
     if not req:
@@ -3774,18 +3917,28 @@ def cancel_food_order():
     if req['status'] in ('skipped', 'delivered', 'cancelled'):
         return jsonify({'error': 'Order cannot be cancelled in its current state'}), 409
 
-    # Enforce 2-day cutoff
+    # Enforce 24-hour cutoff using Central time
     try:
+        from datetime import date as _date
         delivery_dt = _date.fromisoformat(req['delivery_date_start'])
-        days_until  = (delivery_dt - _date.today()).days
+        days_until  = (delivery_dt - _today_central()).days
     except Exception:
         days_until = 99  # unknown date — allow cancellation
-    if days_until <= 2:
-        return jsonify({'error': 'Orders can only be cancelled more than 2 days before delivery'}), 409
+    if days_until < 1:
+        return jsonify({'error': 'Orders can only be cancelled at least 1 day before delivery'}), 409
 
-    # Mark as skipped
+    # Find claimed volunteers for this family/cycle BEFORE releasing slots (for notification)
+    claimed_volunteers = db.execute(
+        '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
+           FROM volunteer_slots vs
+           JOIN volunteers v ON vs.claimed_by = v.id
+           WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' ''',
+        (req['cycle_id'], family_id)
+    ).fetchall()
+
+    # Mark as cancelled (not skipped — this is family-initiated)
     db.execute(
-        "UPDATE food_requests SET status='skipped', updated_at=? WHERE id=?",
+        "UPDATE food_requests SET status='cancelled', updated_at=? WHERE id=?",
         (now(), request_id)
     )
 
@@ -3795,9 +3948,198 @@ def cancel_food_order():
         (now(), req['cycle_id'], family_id)
     )
 
+    _log_order_event(db, request_id, 'cancelled', actor='family',
+                     payload={'days_until_delivery': days_until})
     db.commit()
+
+    # Notify coordinators
+    _notify_coordinators(db,
+        f"Order cancelled by family:\n"
+        f"Family: {req['family_name']} ({req['family_code']})\n"
+        f"Cycle: {req['cycle_title']}\n"
+        f"Days until delivery: {days_until}\n"
+        f"Volunteer slots released back to open."
+    )
+
+    # Notify any volunteers whose slots were released
+    for vol in claimed_volunteers:
+        if vol['wa_phone'] and vol['wa_apikey']:
+            _wa_send(vol['wa_phone'], vol['wa_apikey'],
+                f"Update: {req['family_name']} has cancelled their food order for {req['cycle_title']}.\n"
+                f"Your {vol['task_type']} slot has been released — no action needed."
+            )
+
     log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
     return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
+
+
+@app.route('/api/food-order/items', methods=['PUT'])
+def edit_food_order_items():
+    """Family edits their item selections — allowed up to 48 hours before delivery (Central time).
+    Cycle must still be open or upcoming (not shopping/delivered).
+    Cancel is final — cancelled orders cannot be edited."""
+    import json as _json
+    data       = request.json or {}
+    phone      = _normalize_phone(data.get('phone') or '')
+    request_id = data.get('request_id')
+    selected_ids = set(data.get('selected_item_ids') or [])
+
+    if not phone or not request_id:
+        return jsonify({'error': 'phone and request_id required'}), 422
+
+    db = get_db()
+
+    # Phone lookup
+    family = db.execute("SELECT * FROM families WHERE phone=? AND status='active'", (phone,)).fetchone()
+    if not family:
+        # fuzzy fallback
+        for f in db.execute("SELECT * FROM families WHERE status='active'").fetchall():
+            if (f['phone'] or '').endswith(phone[-10:]) or phone.endswith((f['phone'] or '')[-10:]):
+                family = f
+                break
+    if not family:
+        return jsonify({'error': 'Phone number not found'}), 404
+
+    # Load request and its cycle
+    req = db.execute(
+        '''SELECT fr.*, dc.delivery_date_start, dc.status as cycle_status, dc.title as cycle_title,
+                  f.name as family_name, f.family_code
+           FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+           JOIN families f ON fr.family_id=f.id
+           WHERE fr.id=? AND fr.family_id=?''',
+        (request_id, family['id'])
+    ).fetchone()
+    if not req:
+        return jsonify({'error': 'Order not found'}), 404
+    if req['status'] in ('cancelled', 'skipped', 'delivered'):
+        return jsonify({'error': 'This order can no longer be edited'}), 409
+    if req['cycle_status'] in ('shopping', 'delivered'):
+        return jsonify({'error': 'Editing is no longer available — the shopping cycle has started'}), 409
+
+    # Enforce 48-hour edit window using Central time
+    try:
+        from datetime import date as _date
+        delivery_dt = _date.fromisoformat(req['delivery_date_start'])
+        days_until  = (delivery_dt - _today_central()).days
+    except Exception:
+        days_until = 99
+    if days_until < 2:
+        return jsonify({'error': 'Item editing closes 48 hours before delivery'}), 409
+
+    # Capture previous selections for diff (item names, not IDs)
+    prev_rows = db.execute(
+        "SELECT fi.id, fi.name, fri.selected FROM food_request_items fri JOIN food_items fi ON fri.food_item_id=fi.id WHERE fri.request_id=?",
+        (request_id,)
+    ).fetchall()
+    prev_by_id = {r['id']: (r['name'], r['selected']) for r in prev_rows}
+
+    # Get all active items to upsert
+    all_items = db.execute("SELECT id, name FROM food_items WHERE is_active=1").fetchall()
+    for item in all_items:
+        is_sel = 1 if item['id'] in selected_ids else 0
+        db.execute(
+            '''INSERT INTO food_request_items (id, request_id, food_item_id, selected)
+               VALUES (?,?,?,?)
+               ON CONFLICT(request_id, food_item_id) DO UPDATE SET selected=?''',
+            (str(uuid.uuid4()), request_id, item['id'], is_sel, is_sel)
+        )
+
+    try:
+        db.execute("UPDATE food_requests SET updated_at=? WHERE id=?", (now(), request_id))
+    except Exception:
+        pass
+
+    # Compute diff using names
+    added   = [it['name'] for it in all_items if it['id'] in selected_ids and prev_by_id.get(it['id'], ('', 0))[1] == 0]
+    removed = [name for iid, (name, sel) in prev_by_id.items() if sel == 1 and iid not in selected_ids]
+
+    _log_order_event(db, request_id, 'items_edited', actor='family',
+                     payload={'added': added, 'removed': removed, 'days_until_delivery': days_until})
+    db.commit()
+
+    # Notify coordinators if items changed
+    if added or removed:
+        added_str   = ', '.join(added)   if added   else 'none'
+        removed_str = ', '.join(removed) if removed else 'none'
+        _notify_coordinators(db,
+            f"Order items updated by family:\n"
+            f"Family: {req['family_name']} ({req['family_code']})\n"
+            f"Cycle: {req['cycle_title']}\n"
+            f"Added: {added_str}\n"
+            f"Removed: {removed_str}"
+        )
+        # Notify claimed volunteers (shopping list may have changed)
+        claimed_vols = db.execute(
+            '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
+               FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' AND vs.task_type='shopping' ''',
+            (req['cycle_id'], family['id'])
+        ).fetchall()
+        for vol in claimed_vols:
+            if vol['wa_phone'] and vol['wa_apikey']:
+                _wa_send(vol['wa_phone'], vol['wa_apikey'],
+                    f"Shopping list update: {req['family_name']} edited their order for {req['cycle_title']}.\n"
+                    f"Added: {added_str}\nRemoved: {removed_str}\n"
+                    f"Please check the updated shopping list."
+                )
+
+    log.info(f'Family {family["id"]} edited items for order {request_id}: +{added} -{removed}')
+    return jsonify({'ok': True, 'added': added, 'removed': removed,
+                    'message': 'Your order has been updated.'})
+
+
+@app.route('/api/food-requests/<rid>/items', methods=['PUT'])
+@require_auth(roles=['admin'])
+def admin_edit_food_request_items(rid):
+    """Admin edits item selections for a family's order on their behalf."""
+    import json as _json
+    data         = request.json or {}
+    selected_ids = set(data.get('selected_item_ids') or [])
+
+    db  = get_db()
+    req = db.execute(
+        '''SELECT fr.*, f.name as family_name, f.family_code, dc.title as cycle_title
+           FROM food_requests fr
+           JOIN families f ON fr.family_id=f.id
+           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+           WHERE fr.id=?''',
+        (rid,)
+    ).fetchone()
+    if not req:
+        return jsonify({'error': 'Order not found'}), 404
+
+    # Capture previous selections
+    prev_rows = db.execute(
+        "SELECT fi.id, fi.name, fri.selected FROM food_request_items fri JOIN food_items fi ON fri.food_item_id=fi.id WHERE fri.request_id=?",
+        (rid,)
+    ).fetchall()
+    prev_by_id = {r['id']: (r['name'], r['selected']) for r in prev_rows}
+
+    all_items = db.execute("SELECT id, name FROM food_items WHERE is_active=1").fetchall()
+    for item in all_items:
+        is_sel = 1 if item['id'] in selected_ids else 0
+        db.execute(
+            '''INSERT INTO food_request_items (id, request_id, food_item_id, selected)
+               VALUES (?,?,?,?)
+               ON CONFLICT(request_id, food_item_id) DO UPDATE SET selected=?''',
+            (str(uuid.uuid4()), rid, item['id'], is_sel, is_sel)
+        )
+
+    try:
+        db.execute("UPDATE food_requests SET updated_at=? WHERE id=?", (now(), rid))
+    except Exception:
+        pass
+
+    added   = [it['name'] for it in all_items if it['id'] in selected_ids and prev_by_id.get(it['id'], ('', 0))[1] == 0]
+    removed = [name for iid, (name, sel) in prev_by_id.items() if sel == 1 and iid not in selected_ids]
+
+    _log_order_event(db, rid, 'admin_override', actor='admin',
+                     payload={'action': 'items_edited', 'added': added, 'removed': removed})
+    db.commit()
+
+    log.info(f'Admin edited items for order {rid}: +{added} -{removed}')
+    return jsonify({'ok': True, 'added': added, 'removed': removed})
 
 
 @app.route('/uploads/<path:filename>')
@@ -4178,6 +4520,25 @@ def family_history(fid):
             (o['cycle_id'], fid)
         ).fetchall()
         o['slots'] = [dict(s) for s in slots]
+
+        # Order event log
+        import json as _json
+        ev_rows = db.execute(
+            "SELECT event_type, actor, payload, created_at FROM food_request_events WHERE request_id=? ORDER BY created_at ASC",
+            (o['id'],)
+        ).fetchall()
+        o['events'] = []
+        for ev in ev_rows:
+            try:
+                payload = _json.loads(ev['payload'])
+            except Exception:
+                payload = {}
+            o['events'].append({
+                'event_type': ev['event_type'],
+                'actor': ev['actor'],
+                'payload': payload,
+                'created_at': ev['created_at']
+            })
 
         result.append(o)
 
@@ -5007,11 +5368,19 @@ def _skip_nonresponding_families():
         ).fetchall()
         skipped = len(rows)
         if skipped:
+            ts_skip = datetime.utcnow().isoformat()
             conn.execute(
                 '''UPDATE food_requests SET status='skipped', confirmed_at=?
                    WHERE id IN ({})'''.format(','.join('?' * skipped)),
-                [datetime.utcnow().isoformat()] + [r['id'] for r in rows]
+                [ts_skip] + [r['id'] for r in rows]
             )
+            import json as _json
+            for _r in rows:
+                conn.execute(
+                    "INSERT INTO food_request_events (id, request_id, event_type, actor, payload, created_at) VALUES (?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), _r['id'], 'auto_skipped', 'scheduler',
+                     _json.dumps({'note': 'no response by cutoff'}), ts_skip)
+                )
             conn.commit()
         log.info(f'Cutoff: {skipped} non-responding families marked skipped for delivery {target}')
         return skipped
