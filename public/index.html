@@ -726,7 +726,7 @@ function nav(page) {
     payments: 'Payments', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', catalog: 'Food Catalog',
     cycle_detail: 'Delivery Detail', orders: 'Food Orders',
-    wa_setup: '📵 WhatsApp Setup'
+    wa_setup: '📵 WhatsApp Setup', requests: '📋 Change Requests'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   closeDrawer();
@@ -735,7 +735,7 @@ function nav(page) {
     volunteers: renderVolunteers,
     payments: renderPayments, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, catalog: renderCatalog,
-    orders: renderOrders, wa_setup: renderWASetup
+    orders: renderOrders, wa_setup: renderWASetup, requests: renderRequests
   };
   if (renders[page]) renders[page]();
 }
@@ -873,6 +873,10 @@ async function renderDashboard() {
       if (s.families_no_wa > 0)   parts.push(`${s.families_no_wa} famil${s.families_no_wa>1?'ies':'y'}`);
       if (s.volunteers_no_wa > 0) parts.push(`${s.volunteers_no_wa} volunteer${s.volunteers_no_wa>1?'s':''}`);
       alerts.push({ label: `📵 ${parts.join(' + ')} without WhatsApp`, nav: 'wa_setup', color: '#92400e' });
+    }
+    if ((s.pending_change_requests||0) > 0) {
+      const n = s.pending_change_requests;
+      alerts.push({ label: `📋 ${n} change request${n>1?'s':''} awaiting review`, nav: 'requests', color: '#1a5f8a' });
     }
 
     const attentionHTML = alerts.length > 0 ? `
@@ -1922,7 +1926,9 @@ async function viewFamily(id) {
           <span style="font-size:13px;font-weight:700;">${currentOrder.cycle_title}</span>
           ${currentOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(currentOrder.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
-          <div style="display:flex;gap:6px;margin-left:auto;">${overrideBtns}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">${overrideBtns}
+            ${currentOrder.status !== 'delivered' ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
+          </div>
         </div>`;
     }
 
@@ -3625,6 +3631,98 @@ async function manualConfirmFamily(familyId, familyName) {
     alert(`Done — ${familyName} confirmed for "${data.cycle_title}" (${data.bundle_size} bundle).`);
     viewFamily(familyId);
   } catch(e) { alert('Could not add to cycle: ' + e.message); }
+}
+
+async function resetFamilyOrder(familyId, familyName) {
+  if (!confirm(`Reset ${familyName}'s current order?\n\nThis clears their order back to pending and cancels any open change requests. No notification will be sent to the family.`)) return;
+  try {
+    await POST('/families/' + familyId + '/reset-order', {});
+    viewFamily(familyId);
+  } catch(e) { alert('Could not reset order: ' + e.message); }
+}
+
+// ── Change Requests Inbox ─────────────────────────────────────────────────────
+async function renderRequests() {
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4);padding:20px">Loading…</p>';
+  try {
+    const [pending, recent] = await Promise.all([
+      GET('/admin/change-requests?status=pending'),
+      GET('/admin/change-requests?status=all').catch(() => [])
+    ]);
+    const resolved = recent.filter(r => r.status !== 'pending' && r.status !== 'retracted').slice(0, 20);
+
+    const fmtTs = ts => ts ? new Date(ts + (ts.endsWith('Z')?'':'Z')).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+    const statusBadge = s => ({
+      pending:   '<span style="background:#fff8e6;color:#7a4a00;font-size:10px;font-weight:700;padding:2px 7px;">PENDING</span>',
+      approved:  '<span style="background:#e8f5ee;color:#1a5e34;font-size:10px;font-weight:700;padding:2px 7px;">APPROVED</span>',
+      rejected:  '<span style="background:#fdecea;color:#b00;font-size:10px;font-weight:700;padding:2px 7px;">REJECTED</span>',
+      retracted: '<span style="background:#f5f5f5;color:#888;font-size:10px;font-weight:700;padding:2px 7px;">RETRACTED</span>',
+    })[s] || s;
+
+    const renderRow = (cr, showActions) => {
+      const itemList = (cr.selected_items||[]).map(i => `<span style="display:inline-block;background:#f5f5f5;border-radius:3px;padding:1px 6px;margin:2px;font-size:11px;">${i.name}</span>`).join('');
+      return `
+        <div style="background:#fff;border:1px solid #eee;border-left:3px solid ${cr.status==='pending'?'#f0c040':cr.status==='approved'?'#1a8754':'#ccc'};padding:14px 16px;margin-bottom:10px;">
+          <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <div style="flex:1;min-width:200px;">
+              <div style="font-weight:700;font-size:14px;">${cr.family_name} <span style="font-weight:400;font-size:12px;color:#888;font-family:monospace;">${cr.family_code||''}</span></div>
+              <div style="font-size:12px;color:#555;margin-top:2px;">${cr.cycle_title} · ${fmtDate(cr.delivery_date_start)}</div>
+              <div style="font-size:12px;color:#888;margin-top:2px;">Submitted ${fmtTs(cr.created_at)}</div>
+            </div>
+            <div>${statusBadge(cr.status)}</div>
+          </div>
+          ${cr.family_notes ? `<div style="background:#f9f9f9;border-left:2px solid #ddd;padding:6px 10px;font-size:13px;margin-bottom:8px;color:#333;">💬 "${cr.family_notes}"</div>` : ''}
+          ${itemList ? `<div style="margin-bottom:8px;"><div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Requested items:</div>${itemList}</div>` : ''}
+          ${cr.admin_notes ? `<div style="background:#f0faf5;border-left:2px solid #1a8754;padding:6px 10px;font-size:12px;color:#1a5e34;margin-bottom:8px;">📝 Admin note: "${cr.admin_notes}"</div>` : ''}
+          ${showActions && cr.status === 'pending' ? `
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+              <input type="text" id="note-${cr.id}" placeholder="Admin note (optional)" style="flex:1;min-width:200px;border:1px solid #ddd;padding:5px 8px;font-size:12px;font-family:inherit;">
+              <button onclick="approveRequest('${cr.id}')" style="background:#1a8754;color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✓ Approve</button>
+              <button onclick="rejectRequest('${cr.id}')" style="background:#c00;color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✕ Reject</button>
+              <button onclick="viewFamily('${cr.family_id}')" style="background:none;border:1px solid #ccc;color:#555;padding:6px 12px;font-size:12px;cursor:pointer;font-family:inherit;">View Family →</button>
+            </div>` : ''}
+        </div>`;
+    };
+
+    document.getElementById('content').innerHTML = `
+      <div style="max-width:780px;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+          <h2 style="font-size:18px;font-weight:800;">Change Requests</h2>
+          ${pending.length > 0 ? `<span style="background:#f0c040;color:#7a4a00;font-size:12px;font-weight:700;padding:3px 10px;">${pending.length} pending</span>` : '<span style="background:#e8f5ee;color:#1a8754;font-size:12px;padding:3px 10px;">All clear</span>'}
+        </div>
+
+        ${pending.length === 0 ? `
+          <div style="background:#f9f9f9;border:1px solid #eee;padding:24px;text-align:center;color:#888;margin-bottom:20px;">
+            No pending change requests
+          </div>` : pending.map(cr => renderRow(cr, true)).join('')}
+
+        ${resolved.length > 0 ? `
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#aaa;margin:24px 0 10px;">Recent — Resolved</div>
+          ${resolved.map(cr => renderRow(cr, false)).join('')}
+        ` : ''}
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00;padding:20px">${e.message}</p>`;
+  }
+}
+
+async function approveRequest(crId) {
+  const note = (document.getElementById('note-' + crId)?.value || '').trim();
+  if (!confirm('Approve this change request? The family\'s item selection will be applied automatically.')) return;
+  try {
+    await POST('/admin/change-requests/' + crId + '/approve', { admin_notes: note });
+    renderRequests();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function rejectRequest(crId) {
+  const note = (document.getElementById('note-' + crId)?.value || '').trim();
+  if (!note && !confirm('Reject without adding a note? The family will be notified via WhatsApp.')) return;
+  if (!confirm('Reject this change request?')) return;
+  try {
+    await POST('/admin/change-requests/' + crId + '/reject', { admin_notes: note });
+    renderRequests();
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 async function viewShoppingList(cycleId) {

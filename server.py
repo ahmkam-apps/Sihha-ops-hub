@@ -938,12 +938,31 @@ def bootstrap_db():
             log.info(f'Migration: volunteer_slots rebuild skipped ({_e})')
 
     # ── Migration: add prev_claimed_by to volunteer_slots ────────────────────────
-    # Tracks who last held the slot before it was released — enables portal history
     try:
         conn.execute('ALTER TABLE volunteer_slots ADD COLUMN prev_claimed_by TEXT')
         log.info('Migration: added volunteer_slots.prev_claimed_by')
     except Exception:
-        pass  # Already exists
+        pass
+
+    # ── order_change_requests table ──────────────────────────────────────────────
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS order_change_requests (
+            id           TEXT PRIMARY KEY,
+            family_id    TEXT NOT NULL,
+            cycle_id     TEXT NOT NULL,
+            request_id   TEXT,
+            status       TEXT NOT NULL DEFAULT 'pending'
+                         CHECK(status IN ('pending','approved','rejected','retracted')),
+            family_notes TEXT,
+            payload      TEXT NOT NULL DEFAULT '{}',
+            admin_notes  TEXT,
+            reviewed_by  TEXT,
+            created_at   TEXT NOT NULL,
+            reviewed_at  TEXT,
+            FOREIGN KEY (family_id) REFERENCES families(id),
+            FOREIGN KEY (cycle_id)  REFERENCES delivery_cycles(id)
+        )
+    ''')
 
     conn.commit()
     conn.close()
@@ -1497,6 +1516,10 @@ def dashboard_stats():
         'donations_recurring_month': db.execute(
             "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ? AND frequency='monthly'",
             (f'{this_month}%',)
+        ).fetchone()[0],
+        # Change requests
+        'pending_change_requests': db.execute(
+            "SELECT COUNT(*) FROM order_change_requests WHERE status='pending'"
         ).fetchone()[0],
     }
 
@@ -3705,7 +3728,7 @@ def check_food_order_eligibility():
             (family['id'],)
         ).fetchall()
         # Cancellation: up to 24h before delivery (Central time)
-        # Editing: up to 48h before delivery AND cycle not in shopping/delivered
+        # Change requests: allowed when cycle is open/upcoming and within 30 days, not shopping/delivered
         try:
             delivery_dt = cycle['delivery_date_start']
             from datetime import date as _d2
@@ -3713,11 +3736,37 @@ def check_food_order_eligibility():
             days_until  = (_ddt - _today_central()).days
             _terminal   = existing['status'] in ('skipped', 'delivered', 'cancelled')
             can_cancel  = (days_until >= 1 and not _terminal)
-            can_edit    = (days_until >= 2 and not _terminal
-                           and cycle['status'] not in ('shopping', 'delivered'))
+            can_edit    = False  # Direct edit removed — use change request instead
+            can_request_change = (
+                not _terminal
+                and days_until <= 30
+                and days_until >= 1
+                and cycle['status'] not in ('shopping', 'delivered')
+            )
         except Exception:
             can_cancel = False
             can_edit   = False
+            can_request_change = False
+
+        # Pending change request for this order (max one active at a time)
+        import json as _json2
+        pending_cr = db.execute(
+            "SELECT * FROM order_change_requests WHERE request_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1",
+            (existing['id'],)
+        ).fetchone()
+        pending_change_request = None
+        if pending_cr:
+            try:
+                cr_payload = _json2.loads(pending_cr['payload'])
+            except Exception:
+                cr_payload = {}
+            pending_change_request = {
+                'id': pending_cr['id'],
+                'family_notes': pending_cr['family_notes'],
+                'payload': cr_payload,
+                'created_at': pending_cr['created_at'],
+            }
+            can_request_change = False  # Already have one pending
 
         # Full bundle list as fallback — shown if selected_categories is empty.
         # Query ALL items (no is_active filter) so the family always sees something even
@@ -3769,6 +3818,8 @@ def check_food_order_eligibility():
             'request_id': existing['id'],
             'can_cancel': can_cancel,
             'can_edit': can_edit,
+            'can_request_change': can_request_change,
+            'pending_change_request': pending_change_request,
             'last_order': last_order,
             'delivery_start': cycle['delivery_date_start'],
             'delivery_end': cycle['delivery_date_end'],
@@ -4007,6 +4058,352 @@ def cancel_food_order():
 
     except Exception as _e:
         log.exception(f'cancel_food_order ERROR — family={family_id!r} request={request_id!r}')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+
+
+# ── Family Change Requests ────────────────────────────────────────────────────
+
+@app.route('/api/family-request', methods=['POST'])
+def submit_family_change_request():
+    """Family submits a change request for their current order.
+    One pending request per order at a time. Cycle must be open/upcoming, not shopping, within 30 days."""
+    import json as _json
+    try:
+        data       = request.json or {}
+        family_id  = data.get('family_id')
+        request_id = data.get('request_id')
+        family_notes = (data.get('family_notes') or '').strip()
+        selected_item_ids = data.get('selected_item_ids') or []
+
+        if not family_id or not request_id:
+            return jsonify({'error': 'family_id and request_id required'}), 422
+
+        db = get_db()
+
+        # Verify the order belongs to this family
+        req = db.execute(
+            '''SELECT fr.*, dc.delivery_date_start, dc.status as cycle_status, dc.title as cycle_title,
+                      f.name as family_name, f.wa_phone, f.wa_apikey
+               FROM food_requests fr
+               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+               JOIN families f ON fr.family_id = f.id
+               WHERE fr.id=? AND fr.family_id=?''',
+            (request_id, family_id)
+        ).fetchone()
+        if not req:
+            return jsonify({'error': 'Order not found'}), 404
+        if req['status'] in ('cancelled', 'skipped', 'delivered'):
+            return jsonify({'error': 'Cannot request changes for this order'}), 409
+        if req['cycle_status'] in ('shopping', 'delivered'):
+            return jsonify({'error': 'Changes are not allowed once shopping has started'}), 409
+
+        # 30-day window check
+        try:
+            from datetime import date as _d
+            days_until = (_d.fromisoformat(req['delivery_date_start']) - _today_central()).days
+        except Exception:
+            days_until = 99
+        if days_until > 30:
+            return jsonify({'error': 'Change requests can only be submitted within 30 days of delivery'}), 409
+        if days_until < 1:
+            return jsonify({'error': 'Delivery is too soon to request changes'}), 409
+
+        # No duplicate pending request for this order
+        existing = db.execute(
+            "SELECT id FROM order_change_requests WHERE request_id=? AND status='pending'",
+            (request_id,)
+        ).fetchone()
+        if existing:
+            return jsonify({'error': 'You already have a pending change request for this order'}), 409
+
+        # Build payload — item selections
+        payload = _json.dumps({'selected_item_ids': selected_item_ids})
+
+        cr_id = str(uuid.uuid4())
+        db.execute(
+            '''INSERT INTO order_change_requests
+               (id, family_id, cycle_id, request_id, status, family_notes, payload, created_at)
+               VALUES (?,?,?,?,?,?,?,?)''',
+            (cr_id, family_id, req['cycle_id'], request_id, 'pending', family_notes, payload, now())
+        )
+        _log_order_event(db, request_id, 'change_requested', actor='family',
+                         payload={'change_request_id': cr_id, 'notes': family_notes})
+        db.commit()
+
+        # Notify coordinators
+        _notify_coordinators(db,
+            f"Change request from family:\n"
+            f"Family: {req['family_name']}\n"
+            f"Cycle: {req['cycle_title']}\n"
+            f"Notes: {family_notes or '(no notes)'}\n"
+            f"Items selected: {len(selected_item_ids)}\n"
+            f"Review in admin → Requests"
+        )
+
+        log.info(f'Change request {cr_id} submitted by family {family_id} for order {request_id}')
+        return jsonify({'ok': True, 'change_request_id': cr_id})
+
+    except Exception as _e:
+        log.exception(f'submit_family_change_request ERROR')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+
+
+@app.route('/api/family-request/<cr_id>/retract', methods=['POST'])
+def retract_family_change_request(cr_id):
+    """Family retracts their pending change request."""
+    try:
+        data      = request.json or {}
+        family_id = data.get('family_id')
+        if not family_id:
+            return jsonify({'error': 'family_id required'}), 422
+
+        db = get_db()
+        cr = db.execute(
+            "SELECT * FROM order_change_requests WHERE id=? AND family_id=? AND status='pending'",
+            (cr_id, family_id)
+        ).fetchone()
+        if not cr:
+            return jsonify({'error': 'Request not found or already reviewed'}), 404
+
+        db.execute(
+            "UPDATE order_change_requests SET status='retracted', reviewed_at=? WHERE id=?",
+            (now(), cr_id)
+        )
+        _log_order_event(db, cr['request_id'], 'change_retracted', actor='family',
+                         payload={'change_request_id': cr_id})
+        db.commit()
+        return jsonify({'ok': True})
+
+    except Exception as _e:
+        log.exception('retract_family_change_request ERROR')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+
+
+# ── Admin Change Request Routes ───────────────────────────────────────────────
+
+@app.route('/api/admin/change-requests')
+@require_auth()
+def list_change_requests():
+    """Admin: list change requests. Default: pending only. ?status=all for all."""
+    db = get_db()
+    status_filter = request.args.get('status', 'pending')
+    if status_filter == 'all':
+        rows = db.execute(
+            '''SELECT ocr.*, f.name as family_name, f.family_code,
+                      dc.title as cycle_title, dc.delivery_date_start,
+                      u.name as reviewed_by_name
+               FROM order_change_requests ocr
+               JOIN families f ON ocr.family_id = f.id
+               JOIN delivery_cycles dc ON ocr.cycle_id = dc.id
+               LEFT JOIN users u ON ocr.reviewed_by = u.id
+               ORDER BY ocr.created_at DESC LIMIT 100''',
+        ).fetchall()
+    else:
+        rows = db.execute(
+            '''SELECT ocr.*, f.name as family_name, f.family_code,
+                      dc.title as cycle_title, dc.delivery_date_start,
+                      u.name as reviewed_by_name
+               FROM order_change_requests ocr
+               JOIN families f ON ocr.family_id = f.id
+               JOIN delivery_cycles dc ON ocr.cycle_id = dc.id
+               LEFT JOIN users u ON ocr.reviewed_by = u.id
+               WHERE ocr.status=?
+               ORDER BY ocr.created_at DESC''',
+            (status_filter,)
+        ).fetchall()
+
+    import json as _json
+    result = []
+    for r in rows:
+        row = dict(r)
+        try:
+            row['payload'] = _json.loads(row['payload'])
+        except Exception:
+            row['payload'] = {}
+        # Attach current item names for the selected IDs
+        selected_ids = row['payload'].get('selected_item_ids', [])
+        if selected_ids:
+            placeholders = ','.join('?' * len(selected_ids))
+            item_rows = db.execute(
+                f"SELECT fi.id, fi.name, fi.unit, fc.name as category FROM food_items fi JOIN food_categories fc ON fi.category_id=fc.id WHERE fi.id IN ({placeholders})",
+                selected_ids
+            ).fetchall()
+            row['selected_items'] = [dict(i) for i in item_rows]
+        else:
+            row['selected_items'] = []
+        result.append(row)
+    return jsonify(result)
+
+
+@app.route('/api/admin/change-requests/<cr_id>/approve', methods=['POST'])
+@require_auth()
+def approve_change_request(cr_id):
+    """Admin approves a change request — automatically applies item changes to the order."""
+    import json as _json
+    try:
+        data = request.json or {}
+        admin_notes = (data.get('admin_notes') or '').strip()
+        db = get_db()
+
+        cr = db.execute(
+            '''SELECT ocr.*, f.name as family_name, f.wa_phone, f.wa_apikey,
+                      dc.title as cycle_title, dc.status as cycle_status
+               FROM order_change_requests ocr
+               JOIN families f ON ocr.family_id = f.id
+               JOIN delivery_cycles dc ON ocr.cycle_id = dc.id
+               WHERE ocr.id=? AND ocr.status='pending' ''',
+            (cr_id,)
+        ).fetchone()
+        if not cr:
+            return jsonify({'error': 'Request not found or already reviewed'}), 404
+
+        # Parse requested items
+        try:
+            payload = _json.loads(cr['payload'])
+        except Exception:
+            payload = {}
+        selected_ids = set(payload.get('selected_item_ids', []))
+
+        # Apply item changes to the order
+        if selected_ids and cr['request_id']:
+            # Get all items for this request
+            all_items = db.execute(
+                "SELECT food_item_id FROM food_request_items WHERE request_id=?",
+                (cr['request_id'],)
+            ).fetchall()
+            for item in all_items:
+                new_selected = 1 if item['food_item_id'] in selected_ids else 0
+                db.execute(
+                    "UPDATE food_request_items SET selected=? WHERE request_id=? AND food_item_id=?",
+                    (new_selected, cr['request_id'], item['food_item_id'])
+                )
+
+        # Mark request approved
+        db.execute(
+            '''UPDATE order_change_requests
+               SET status='approved', admin_notes=?, reviewed_by=?, reviewed_at=?
+               WHERE id=?''',
+            (admin_notes, g.user['user_id'], now(), cr_id)
+        )
+
+        _log_order_event(db, cr['request_id'], 'change_approved', actor='admin',
+                         payload={'change_request_id': cr_id, 'admin_notes': admin_notes,
+                                  'items_applied': len(selected_ids)})
+        db.commit()
+
+        # WA to family
+        if cr['wa_phone'] and cr['wa_apikey']:
+            msg = f"Your change request for {cr['cycle_title']} has been approved."
+            if admin_notes:
+                msg += f"\nCoordinator note: {admin_notes}"
+            _wa_send(cr['wa_phone'], cr['wa_apikey'], msg)
+
+        log.info(f'Change request {cr_id} approved by {g.user["username"]}')
+        return jsonify({'ok': True})
+
+    except Exception as _e:
+        log.exception(f'approve_change_request ERROR cr_id={cr_id}')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+
+
+@app.route('/api/admin/change-requests/<cr_id>/reject', methods=['POST'])
+@require_auth()
+def reject_change_request(cr_id):
+    """Admin rejects a change request — order stays unchanged."""
+    try:
+        data = request.json or {}
+        admin_notes = (data.get('admin_notes') or '').strip()
+        db = get_db()
+
+        cr = db.execute(
+            '''SELECT ocr.*, f.name as family_name, f.wa_phone, f.wa_apikey,
+                      dc.title as cycle_title
+               FROM order_change_requests ocr
+               JOIN families f ON ocr.family_id = f.id
+               JOIN delivery_cycles dc ON ocr.cycle_id = dc.id
+               WHERE ocr.id=? AND ocr.status='pending' ''',
+            (cr_id,)
+        ).fetchone()
+        if not cr:
+            return jsonify({'error': 'Request not found or already reviewed'}), 404
+
+        db.execute(
+            '''UPDATE order_change_requests
+               SET status='rejected', admin_notes=?, reviewed_by=?, reviewed_at=?
+               WHERE id=?''',
+            (admin_notes, g.user['user_id'], now(), cr_id)
+        )
+        _log_order_event(db, cr['request_id'], 'change_rejected', actor='admin',
+                         payload={'change_request_id': cr_id, 'admin_notes': admin_notes})
+        db.commit()
+
+        # WA to family
+        if cr['wa_phone'] and cr['wa_apikey']:
+            msg = f"Your change request for {cr['cycle_title']} was not approved."
+            if admin_notes:
+                msg += f"\nCoordinator note: {admin_notes}"
+            _wa_send(cr['wa_phone'], cr['wa_apikey'], msg)
+
+        log.info(f'Change request {cr_id} rejected by {g.user["username"]}')
+        return jsonify({'ok': True})
+
+    except Exception as _e:
+        log.exception(f'reject_change_request ERROR cr_id={cr_id}')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+
+
+@app.route('/api/families/<fid>/reset-order', methods=['POST'])
+@require_auth()
+def reset_family_order(fid):
+    """Admin silently resets a family's order for the current active cycle.
+    Clears all items and sets status back to pending_confirmation. No notification sent."""
+    try:
+        db = get_db()
+        family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+        if not family:
+            return jsonify({'error': 'Family not found'}), 404
+
+        # Find the active cycle order (not delivered/cancelled)
+        req = db.execute(
+            '''SELECT fr.*, dc.id as cycle_id_val FROM food_requests fr
+               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+               WHERE fr.family_id=? AND fr.status NOT IN ('delivered')
+               ORDER BY dc.delivery_date_start DESC LIMIT 1''',
+            (fid,)
+        ).fetchone()
+        if not req:
+            return jsonify({'error': 'No active order found to reset'}), 404
+
+        ts = now()
+        # Reset order status and clear items
+        try:
+            db.execute(
+                "UPDATE food_requests SET status='pending_confirmation', confirmed_at=NULL, updated_at=? WHERE id=?",
+                (ts, req['id'])
+            )
+        except Exception:
+            db.execute(
+                "UPDATE food_requests SET status='pending_confirmation', confirmed_at=NULL WHERE id=?",
+                (req['id'],)
+            )
+        # Deselect all items
+        db.execute("UPDATE food_request_items SET selected=0 WHERE request_id=?", (req['id'],))
+
+        # Retract any pending change requests for this order
+        db.execute(
+            "UPDATE order_change_requests SET status='retracted', reviewed_at=? WHERE request_id=? AND status='pending'",
+            (ts, req['id'])
+        )
+
+        _log_order_event(db, req['id'], 'order_reset', actor='admin',
+                         payload={'reset_by': g.user['username']})
+        db.commit()
+
+        log.info(f'Order {req["id"]} reset by admin {g.user["username"]} for family {fid}')
+        return jsonify({'ok': True, 'message': 'Order reset to pending confirmation.'})
+
+    except Exception as _e:
+        log.exception(f'reset_family_order ERROR fid={fid}')
         return jsonify({'error': f'Server error: {str(_e)}'}), 500
 
 

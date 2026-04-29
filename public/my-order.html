@@ -479,11 +479,34 @@
         <div class="skipped-banner" id="skipped-banner">
           <span data-en="You have skipped this cycle. See you next time." data-ar="لقد تخطيت هذه الدورة. نراك في المرة القادمة.">You have skipped this cycle. See you next time.</span>
         </div>
-        <div id="order-actions-row" style="display:none;margin-top:12px;display:none;gap:12px;align-items:center;flex-wrap:wrap;">
-          <button id="edit-order-btn" onclick="startEditOrder()" style="background:#111;color:#fff;border:none;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;display:none;"
-            data-en="Edit Order" data-ar="تعديل الطلب">Edit Order</button>
+        <div id="order-actions-row" style="display:none;margin-top:12px;gap:12px;align-items:center;flex-wrap:wrap;">
+          <button id="request-change-btn" onclick="showChangeRequestForm()" style="background:#111;color:#fff;border:none;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;display:none;"
+            data-en="Request Change" data-ar="طلب تعديل">Request Change</button>
           <button onclick="doCancelOrder()" id="cancel-order-btn" style="background:none;border:none;color:#b00;font-size:13px;cursor:pointer;text-decoration:underline;padding:0;display:none;"
             data-en="Cancel this order" data-ar="إلغاء هذا الطلب">Cancel this order</button>
+        </div>
+
+        <!-- Pending change request banner -->
+        <div id="pending-change-banner" style="display:none;margin-top:12px;background:#fff8e6;border:1px solid #f0c040;padding:12px 14px;font-size:13px;">
+          <div style="font-weight:700;color:#7a4a00;margin-bottom:4px;" data-en="⏳ Change Request Pending" data-ar="⏳ طلب تعديل قيد المراجعة">⏳ Change Request Pending</div>
+          <div id="pending-change-notes" style="color:#555;margin-bottom:8px;font-size:12px;"></div>
+          <button onclick="doRetractRequest()" style="background:none;border:1px solid #aaa;color:#555;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;"
+            data-en="Retract request" data-ar="سحب الطلب">Retract request</button>
+        </div>
+
+        <!-- Change request form (hidden until button clicked) -->
+        <div id="change-request-form" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:14px;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;" data-en="Request Change — select what you need" data-ar="طلب تعديل — اختر ما تحتاجه">Request Change — select what you need</div>
+          <div id="change-request-items" style="margin-bottom:12px;"></div>
+          <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;" data-en="Notes for coordinator (optional)" data-ar="ملاحظات للمنسق (اختياري)">Notes for coordinator (optional)</label>
+          <textarea id="change-request-notes" rows="3" style="width:100%;border:1px solid #ddd;padding:8px;font-size:13px;font-family:inherit;resize:vertical;" placeholder="e.g. We don't need eggs this cycle"></textarea>
+          <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+            <button onclick="submitChangeRequest()" id="submit-change-btn" style="background:#111;color:#fff;border:none;padding:10px 20px;font-size:13px;cursor:pointer;font-family:inherit;"
+              data-en="Submit Request" data-ar="إرسال الطلب">Submit Request</button>
+            <button onclick="hideChangeRequestForm()" style="background:none;border:1px solid #ccc;color:#555;padding:10px 14px;font-size:13px;cursor:pointer;font-family:inherit;"
+              data-en="Cancel" data-ar="إلغاء">Cancel</button>
+            <div id="change-request-msg" style="font-size:13px;display:none;"></div>
+          </div>
         </div>
         <!-- Event timeline -->
         <div id="order-events-section" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
@@ -568,8 +591,10 @@
     familyId: null,
     bundleSize: null,
     pendingBundleSize: null,
-    bundleCategories: [],    // [{category, items:[{id,name,unit,quantity}]}] — pre-submit
-    selectedCategories: []   // [{category, items:[{name,unit,quantity}]}]   — post-submit (read-only)
+    bundleCategories: [],
+    selectedCategories: [],
+    canRequestChange: false,
+    pendingChangeRequest: null,
   };
 
   const BUNDLE_LABELS = {
@@ -611,21 +636,23 @@
         return;
       }
 
-      STATE.family             = data.family_name;
-      STATE.familyId           = data.family_id;
-      STATE.cycle              = data.open_cycle ? data : null;
-      STATE.history            = data.history || [];
-      STATE.bundleSize         = data.bundle_size;
-      STATE.pendingBundleSize  = data.pending_bundle_size;
-      STATE.requestId          = data.request_id   || null;
-      STATE.canCancel          = data.can_cancel   || false;
-      STATE.canEdit            = data.can_edit     || false;
-      STATE.orderEvents        = data.order_events || [];
-      STATE.cycleStatus        = data.cycle_status || '';
-      STATE.phone              = document.getElementById('phone-input').value.trim();
-      STATE.bundleCategories   = data.bundle_categories   || [];
-      STATE.selectedCategories = data.selected_categories || [];
-      STATE.editMode           = false;
+      STATE.family               = data.family_name;
+      STATE.familyId             = data.family_id;
+      STATE.cycle                = data.open_cycle ? data : null;
+      STATE.history              = data.history || [];
+      STATE.bundleSize           = data.bundle_size;
+      STATE.pendingBundleSize    = data.pending_bundle_size;
+      STATE.requestId            = data.request_id   || null;
+      STATE.canCancel            = data.can_cancel   || false;
+      STATE.canEdit              = data.can_edit     || false;
+      STATE.canRequestChange     = data.can_request_change || false;
+      STATE.pendingChangeRequest = data.pending_change_request || null;
+      STATE.orderEvents          = data.order_events || [];
+      STATE.cycleStatus          = data.cycle_status || '';
+      STATE.phone                = document.getElementById('phone-input').value.trim();
+      STATE.bundleCategories     = data.bundle_categories   || [];
+      STATE.selectedCategories   = data.selected_categories || [];
+      STATE.editMode             = false;
 
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
@@ -719,11 +746,22 @@
           // Show action buttons
           const actionsRow = document.getElementById('order-actions-row');
           actionsRow.style.display = 'flex';
-          if (STATE.canEdit) {
-            document.getElementById('edit-order-btn').style.display = 'inline-block';
+          if (STATE.canRequestChange && !STATE.pendingChangeRequest) {
+            document.getElementById('request-change-btn').style.display = 'inline-block';
           }
           if (STATE.canCancel) {
             document.getElementById('cancel-order-btn').style.display = 'inline-block';
+          }
+          // Pending change request banner
+          const pendingBanner = document.getElementById('pending-change-banner');
+          if (STATE.pendingChangeRequest) {
+            pendingBanner.style.display = 'block';
+            document.getElementById('pending-change-notes').textContent =
+              STATE.pendingChangeRequest.family_notes
+                ? `"${STATE.pendingChangeRequest.family_notes}"`
+                : (currentLang === 'ar' ? 'لا توجد ملاحظات' : 'No notes added');
+          } else {
+            pendingBanner.style.display = 'none';
           }
           // Render event timeline
           renderOrderEvents();
@@ -826,6 +864,122 @@
     }
   }
 
+  // ── Change Request ────────────────────────────────────────────────────────
+  function showChangeRequestForm() {
+    const L = currentLang;
+    document.getElementById('change-request-form').style.display = 'block';
+    document.getElementById('request-change-btn').style.display = 'none';
+    document.getElementById('cancel-order-btn').style.display = 'none';
+    // Render item checklist using bundle_categories
+    const cats = STATE.bundleCategories;
+    const selectedNames = new Set();
+    (STATE.selectedCategories || []).forEach(cat => cat.items.forEach(i => selectedNames.add(i.name)));
+    const defaultAll = !STATE.selectedCategories.length;
+    const container = document.getElementById('change-request-items');
+    if (!cats || !cats.length) {
+      container.innerHTML = `<p style="font-size:13px;color:#888;">${L === 'ar' ? 'لا توجد عناصر.' : 'No items available.'}</p>`;
+      return;
+    }
+    container.innerHTML = cats.map(cat => `
+      <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#888;margin:10px 0 4px;">${escHtml(cat.category)}</div>
+      ${cat.items.map(item => {
+        const checked = defaultAll || selectedNames.has(item.name);
+        return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-bottom:1px solid #f5f5f5;">
+          <input type="checkbox" data-item-id="${escHtml(item.id)}" ${checked ? 'checked' : ''}
+            style="width:16px;height:16px;cursor:pointer;accent-color:#111;">
+          <span style="flex:1;font-size:14px;">${escHtml(item.name)}</span>
+          <span style="font-size:12px;color:#888;">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
+        </label>`;
+      }).join('')}
+    `).join('');
+  }
+
+  function hideChangeRequestForm() {
+    document.getElementById('change-request-form').style.display = 'none';
+    document.getElementById('change-request-msg').style.display = 'none';
+    document.getElementById('change-request-notes').value = '';
+    if (STATE.canRequestChange) document.getElementById('request-change-btn').style.display = 'inline-block';
+    if (STATE.canCancel) document.getElementById('cancel-order-btn').style.display = 'inline-block';
+  }
+
+  async function submitChangeRequest() {
+    const L = currentLang;
+    const btn = document.getElementById('submit-change-btn');
+    const msg = document.getElementById('change-request-msg');
+    const notes = document.getElementById('change-request-notes').value.trim();
+    const selectedIds = Array.from(document.querySelectorAll('#change-request-items input[type=checkbox]:checked'))
+      .map(cb => cb.dataset.itemId);
+    btn.disabled = true;
+    btn.textContent = L === 'ar' ? 'جارٍ الإرسال…' : 'Sending…';
+    msg.style.display = 'none';
+    try {
+      const res = await fetch('/api/family-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          family_id: STATE.familyId,
+          request_id: STATE.requestId,
+          family_notes: notes,
+          selected_item_ids: selectedIds
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        msg.textContent = data.error || (L === 'ar' ? 'حدث خطأ.' : 'Something went wrong.');
+        msg.style.color = '#b00';
+        msg.style.display = 'inline';
+        btn.disabled = false;
+        btn.textContent = L === 'ar' ? 'إرسال الطلب' : 'Submit Request';
+        return;
+      }
+      // Refresh state from server
+      const check = await fetch(`/api/food-order/check?phone=${encodeURIComponent(STATE.phone)}`);
+      const fresh = await check.json();
+      STATE.canRequestChange     = fresh.can_request_change || false;
+      STATE.pendingChangeRequest = fresh.pending_change_request || null;
+      STATE.orderEvents          = fresh.order_events || [];
+      hideChangeRequestForm();
+      // Show pending banner
+      const pendingBanner = document.getElementById('pending-change-banner');
+      pendingBanner.style.display = 'block';
+      document.getElementById('pending-change-notes').textContent = notes ? `"${notes}"` : (L === 'ar' ? 'لا توجد ملاحظات' : 'No notes added');
+      document.getElementById('request-change-btn').style.display = 'none';
+      renderOrderEvents();
+    } catch(e) {
+      msg.textContent = L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.';
+      msg.style.color = '#b00';
+      msg.style.display = 'inline';
+      btn.disabled = false;
+      btn.textContent = L === 'ar' ? 'إرسال الطلب' : 'Submit Request';
+    }
+  }
+
+  async function doRetractRequest() {
+    const L = currentLang;
+    if (!STATE.pendingChangeRequest) return;
+    if (!confirm(L === 'ar' ? 'هل تريد سحب طلب التعديل؟' : 'Retract this change request?')) return;
+    try {
+      const res = await fetch(`/api/family-request/${STATE.pendingChangeRequest.id}/retract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ family_id: STATE.familyId })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Something went wrong.'); return; }
+      STATE.pendingChangeRequest = null;
+      STATE.canRequestChange = true;
+      document.getElementById('pending-change-banner').style.display = 'none';
+      document.getElementById('request-change-btn').style.display = 'inline-block';
+      // Refresh events
+      const check = await fetch(`/api/food-order/check?phone=${encodeURIComponent(STATE.phone)}`);
+      const fresh = await check.json();
+      STATE.orderEvents = fresh.order_events || [];
+      renderOrderEvents();
+    } catch(e) {
+      alert(L === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+    }
+  }
+
   // ── Order event timeline ─────────────────────────────────────────────────
   function renderOrderEvents() {
     const events = STATE.orderEvents || [];
@@ -836,11 +990,16 @@
     section.style.display = 'block';
 
     const EVENT_LABELS = {
-      confirmed:      { en: '✓ Order confirmed',       ar: '✓ تم تأكيد الطلب' },
-      items_edited:   { en: '✏ Items updated',          ar: '✏ تم تعديل العناصر' },
-      cancelled:      { en: '✕ Order cancelled',        ar: '✕ تم إلغاء الطلب' },
-      auto_skipped:   { en: '— No response — skipped',  ar: '— لم يستجب — تم التخطي' },
-      admin_override: { en: '⚙ Updated by coordinator', ar: '⚙ تم التحديث من المنسق' },
+      confirmed:         { en: '✓ Order confirmed',            ar: '✓ تم تأكيد الطلب' },
+      items_edited:      { en: '✏ Items updated',               ar: '✏ تم تعديل العناصر' },
+      cancelled:         { en: '✕ Order cancelled',             ar: '✕ تم إلغاء الطلب' },
+      auto_skipped:      { en: '— No response — skipped',       ar: '— لم يستجب — تم التخطي' },
+      admin_override:    { en: '⚙ Updated by coordinator',      ar: '⚙ تم التحديث من المنسق' },
+      change_requested:  { en: '📋 Change request submitted',   ar: '📋 تم إرسال طلب التعديل' },
+      change_approved:   { en: '✓ Change request approved',     ar: '✓ تمت الموافقة على طلب التعديل' },
+      change_rejected:   { en: '✕ Change request not approved', ar: '✕ لم تتم الموافقة على طلب التعديل' },
+      change_retracted:  { en: '↩ Change request retracted',    ar: '↩ تم سحب طلب التعديل' },
+      order_reset:       { en: '⟳ Order reset by coordinator',  ar: '⟳ تمت إعادة تعيين الطلب' },
     };
 
     list.innerHTML = events.filter(ev => !ev.payload?.note?.includes('backfilled')).map(ev => {
