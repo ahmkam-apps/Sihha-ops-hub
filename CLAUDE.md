@@ -298,6 +298,7 @@ Seeded with S(1-2), M(3-5), L(6+) if table is empty.
 | `confirmation_token` | TEXT | **ALTER TABLE migration** (Phase 5) |
 | `confirmed_at` | TEXT | **ALTER TABLE migration** (Phase 5) |
 | `confirmation_sent_at` | TEXT | **ALTER TABLE migration** (Phase 5) |
+| `updated_at` | TEXT | **ALTER TABLE migration** (safety-net batch in `init_db()`, 2026-04-29) |
 
 ---
 
@@ -420,6 +421,8 @@ No migrations. Table is provisioned but sync goes directly into `donations` tabl
 
 **Note:** An earlier version of this table had `UNIQUE(cycle_id, family_id, task_type)` and a `CHECK(task_type IN ...)` constraint. Both were removed via a table-rebuild migration to allow multiple volunteers per task. The migration detects the old schema by checking for those strings in `sqlite_master`.
 
+**Current slot model (2026-04-29):** `_ensure_volunteer_slots()` creates ONE open slot per task type (shopping + delivery) when an order is confirmed. Volunteers claim a slot by UPDATEing that row to `status='claimed'`; they don't INSERT new rows. Cancelling a slot UPDATEs back to `status='open'` (not DELETE), so another volunteer can claim it. Attempting to claim a slot already claimed by someone else returns HTTP 409 with the other volunteer's name.
+
 ---
 
 ### Table: `volunteer_task_types` (Phase 3C)
@@ -443,6 +446,20 @@ Seeded with: shopping, delivery, stock. No migrations.
 | `created_at` | TEXT NOT NULL | CREATE TABLE (Phase 3C) |
 
 No migrations. Portal sessions expire in 48 hours (different from admin sessions which use `SESSION_HOURS`, default 24).
+
+---
+
+### Table: `food_request_events` (2026-04-29)
+| Column | Type | Source |
+|---|---|---|
+| `id` | TEXT PK | CREATE TABLE (Phase order-audit) |
+| `request_id` | TEXT NOT NULL → FK food_requests | CREATE TABLE (Phase order-audit) |
+| `event_type` | TEXT NOT NULL | `confirmed` \| `items_edited` \| `cancelled` \| `admin_override` \| `auto_skipped` |
+| `actor` | TEXT NOT NULL DEFAULT 'system' | `family` \| `admin` \| `scheduler` \| `system` |
+| `payload` | TEXT NOT NULL DEFAULT '{}' | JSON string — e.g. `{"added":["Rice"],"removed":["Chicken"]}` |
+| `created_at` | TEXT NOT NULL | CREATE TABLE (Phase order-audit) |
+
+**Note:** Created in Phase order-audit (2026-04-29). Migration #19 in `bootstrap_db()` includes a one-time backfill of synthetic events for all existing orders using `confirmed_at`/`updated_at` timestamps. Backfilled rows have `payload={"note":"backfilled"}` and are filtered out of UI display. Item names (not IDs) are stored in payload so history remains readable after catalog changes.
 
 ---
 
@@ -482,6 +499,8 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | 15 | Phase 5: food_requests confirmation statuses | TABLE RECREATION | `food_requests` | Expands status CHECK to include `pending_confirmation`, `confirmed`, `skipped`, `auto_confirmed` |
 | 16 | Phase 3C CREATE (idempotent) | CREATE TABLE IF NOT EXISTS | `volunteer_slots`, `volunteer_task_types`, `portal_sessions`, `reminder_log` | New tables |
 | 17 | Phase 3C: remove UNIQUE+CHECK on slots | TABLE RECREATION | `volunteer_slots` | Removes UNIQUE(cycle_id,family_id,task_type) and CHECK(task_type IN...) |
+| 18 | 2026-04-29 safety-net batch | ALTER TABLE | `food_requests` | `confirmation_token TEXT`, `confirmed_at TEXT`, `confirmation_sent_at TEXT`, `updated_at TEXT` (idempotent, all in try/except) |
+| 19 | 2026-04-29 order audit trail | CREATE TABLE IF NOT EXISTS + backfill | `food_request_events` | New table + one-time backfill of existing orders |
 
 **Columns used in route queries that had NO explicit migration (were in CREATE TABLE from the start):**
 - All original columns. These are safe.
@@ -627,11 +646,15 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | Method | Path | Auth | Description | Tables |
 |---|---|---|---|---|
 | POST | `/api/intake` | None | Public family intake form submission | families |
-| GET | `/api/food-order/check` | None | Check if phone is registered + open cycle | families, delivery_cycles, food_requests, food_items, bundle_size_rules |
+| GET | `/api/food-order/check` | None | Check if phone is registered + open/shopping cycle; returns bundle_categories always | families, delivery_cycles, food_requests, food_items, bundle_size_rules, food_categories |
 | POST | `/api/food-order` | None | Submit a food order for open cycle | food_requests, food_request_items, delivery_cycles, families, bundle_size_rules |
+| POST | `/api/food-order/cancel` | None (phone-based) | Cancel confirmed order if ≥1 day before delivery (Central time); releases slots; notifies coordinators + claimed volunteers via WA; logs `cancelled` event; cancel is FINAL — no re-order | food_requests, volunteer_slots, food_request_events, delivery_cycles, users, volunteers |
+| PUT | `/api/food-order/items` | None (phone-based) | Edit item selections if ≥2 days before delivery (Central time) AND cycle not shopping; logs `items_edited` event with diff; notifies coordinators + claimed shopping volunteers | food_requests, food_request_items, food_request_events, delivery_cycles, users, volunteers |
+| PUT | `/api/food-requests/<rid>/items` | admin | Admin edits item selections for a family's order; logs `admin_override` event | food_requests, food_request_items, food_request_events |
 | GET | `/api/family/confirm/<token>` | None (token-based) | Get order details for confirmation page | food_requests, families, delivery_cycles, food_items, food_categories, bundle_quantities, food_request_items |
 | POST | `/api/family/confirm/<token>` | None (token-based) | Submit confirmation/skip for bundle | food_requests, food_request_items, food_items |
 | POST | `/api/families/<fid>/request-bundle-change` | None | Request bundle size change | families, users (WA) |
+| POST | `/api/families/<fid>/manual-confirm` | admin | Manually confirm a family for the active cycle; creates confirmed food_request + items + open volunteer slots | food_requests, food_request_items, families, delivery_cycles, volunteer_slots |
 
 ### Volunteer Portal (phone-authenticated)
 | Method | Path | Auth | Description | Tables |
@@ -643,8 +666,8 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | GET | `/api/portal/my-tasks` | portal token | Volunteer's claimed/complete tasks | volunteer_slots, families, delivery_cycles |
 | POST | `/api/portal/complete/<slot_id>` | portal token | Mark slot complete; auto-marks food_request delivered if delivery type | volunteer_slots, food_requests |
 | GET | `/api/portal/families/<cycle_id>` | portal token | Families enrolled in cycle + volunteer signup status | food_requests, families, volunteer_slots, volunteer_task_types |
-| POST | `/api/portal/signup` | portal token | Sign up for task types for a family (WA confirmation) | volunteer_slots, families, delivery_cycles, volunteers |
-| DELETE | `/api/portal/cancel/<slot_id>` | portal token | Cancel own slot (hard delete) | volunteer_slots |
+| POST | `/api/portal/signup` | portal token | Claim an open slot for a family+task (UPDATE existing open row; 409 if already taken by another) | volunteer_slots, families, delivery_cycles, volunteers |
+| DELETE | `/api/portal/cancel/<slot_id>` | portal token | Release own claimed slot back to open (UPDATE status→open, NULL claimed_by) | volunteer_slots |
 | POST | `/api/portal/receipts/upload` | portal token | Upload receipt file | filesystem |
 | POST | `/api/portal/receipts` | portal token | Submit receipt + auto-create reimbursement + mark slot complete + notify treasurers | receipts, reimbursements, volunteer_slots, volunteers, users |
 | GET | `/api/portal/receipts` | portal token | List own receipts with reimbursement status | receipts, reimbursements |
@@ -712,13 +735,6 @@ All HTML files live in `/public/`. They are single-page apps with inline JS maki
 - Calls `GET /api/family/confirm/<token>` to load bundle details
 - Calls `POST /api/family/confirm/<token>` to confirm/skip
 
-### `my-order.html` — Family Order Status Page
-- Served at `/my-order`
-- Public, phone-based lookup (same as order.html)
-- Shows order history and current cycle status
-- Bilingual: English/Arabic (uses Cairo font for Arabic)
-- Also supports bundle size change request via `POST /api/families/<fid>/request-bundle-change`
-
 ### `portal.html` — Volunteer Portal SPA
 - Served at `/portal`
 - Phone-authenticated (POST `/api/portal/login`)
@@ -737,6 +753,17 @@ All HTML files live in `/public/`. They are single-page apps with inline JS maki
 - Public (no auth)
 - Collects: name, phone, email, role (shopper/delivery/both/general), availability, notes
 - Submits to `POST /api/volunteer-signup`
+
+### `my-order.html` — Family Order Status Page
+- Served at `/my-order`
+- Public, phone-based lookup (same fuzzy phone matching as order.html)
+- Calls `GET /api/food-order/check?phone=...`
+- Shows current cycle delivery date + order status
+- **Confirmed state**: renders "What's in your bundle" item list — first from `selected_categories`, falls back to `bundle_categories` (full catalog for their bundle size)
+- **Cancel button**: shown when `can_cancel=true` (>2 days before delivery); calls `POST /api/food-order/cancel`
+- **Any-cycle fallback**: works correctly for all cycle statuses (upcoming/open/shopping/delivered) — family always sees their confirmed order if one exists
+- Bilingual: English + Arabic (Cairo font for Arabic)
+- PWA-enabled (manifest-family.json)
 
 ### `donate-stats.html` — Donation Statistics Widget
 - Served at `/donate-stats`
@@ -817,6 +844,16 @@ Every push to `origin/master` (which triggers Railway deploy) must include:
 - Routes decorated with `@require_portal_auth()` only accept portal session tokens
 - These are completely separate — a volunteer cannot call admin routes with a portal token
 
+### `/api/food-order/check` — Family-Order-First Logic (updated 2026-04-29, commit cfd1211)
+The `check_food_order_eligibility()` function uses a **family-order-first** approach:
+1. **Priority 1 — Family has an active order:** Searches `food_requests` for the family's most recent non-skipped/non-cancelled order in any cycle with status `upcoming`, `open`, or `shopping`. If found, returns that cycle + order regardless of cycle status. This ensures families always see their confirmed delivery in My Order.
+2. **Priority 2 — Open cycle for fresh submission:** If no active family order exists, falls back to any `open` cycle so a new order can be submitted.
+3. **No cycle found:** Returns `open_cycle: False` → UI shows "No upcoming deliveries" message.
+4. The `already_submitted` response always includes both `selected_categories` (family's chosen items) AND `bundle_categories` (full catalog fallback) — so my-order.html always has something to display even if `food_request_items` is empty.
+5. Returns `can_cancel=True` (≥1 day before delivery, Central time) and `can_edit=True` (≥2 days before delivery, Central time, cycle not shopping/delivered).
+6. Returns `order_events` list for the current order (used by My Order Order Activity timeline).
+7. If `food_request_items` is empty for an existing order (created before catalog was populated), backfills all active catalog items as `selected=1`.
+
 ### Phone-Based Family Lookup (`/api/food-order/check`)
 - Normalizes input phone to digits only, then does exact match
 - Falls back to fuzzy scan of all families matching last 10 digits if exact match fails
@@ -827,11 +864,23 @@ Every push to `origin/master` (which triggers Railway deploy) must include:
 ```
 pending_confirmation → confirmed     (family confirmed via WA link or admin override)
 pending_confirmation → skipped       (family did not respond by cutoff, auto-skipped)
-pending_confirmation → skipped       (family opted out)
+pending_confirmation → skipped       (family opted out via confirm.html)
+confirmed → cancelled                (family cancelled via My Order — FINAL, no re-order allowed)
 confirmed → delivered                (volunteer marks delivery slot complete)
 ```
 - `auto_confirmed` status exists in the CHECK but is not currently set anywhere in code
 - `submitted` status (legacy) is set when family submits via `/api/food-order` (the self-serve order form), not the WA confirmation flow
+- `cancelled` (vs `skipped`): family-initiated via My Order cancel button. `skipped` = no response / family opted out.
+
+### Order Edit/Cancel Business Rules (2026-04-29)
+- **Edit window**: ≥2 days (48h) before delivery date, Central time (`America/Chicago`). Blocked if cycle status is `shopping` or `delivered`.
+- **Cancel window**: ≥1 day (24h) before delivery date, Central time. Cancel sets status=`cancelled` (not `skipped`).
+- **Cancel is final**: `UNIQUE(cycle_id, family_id)` constraint prevents re-ordering after cancel.
+- **All cutoffs use Central time** via `_today_central()` helper (zoneinfo, Python 3.9+).
+- **Notifications on cancel**: `_notify_coordinators()` (all admin users with WA) + claimed volunteers for that family/cycle.
+- **Notifications on edit**: `_notify_coordinators()` + claimed shopping volunteers (shopping list may have changed).
+- **Event logging**: Every order state change writes to `food_request_events` via `_log_order_event()`. Never raises — failures logged only.
+- **Payload stores item names** (not IDs) so history remains readable after catalog changes.
 
 ### APScheduler in Multi-Worker gunicorn
 - Both workers run the scheduler — both will try to send reminders at 8am, 9am, 9:30am UTC
@@ -847,8 +896,13 @@ confirmed → delivered                (volunteer marks delivery slot complete)
 ### `delivery_cycles.status` Lifecycle
 Cycles are manually advanced by admin — there is no auto-advancement (`auto_update_cycle_statuses` is a no-op). Typical progression:
 ```
-upcoming → shopping → delivered
+upcoming → open → shopping → delivered
 ```
+- `upcoming` — created, T-7 scheduler sends WA opt-in links
+- `open` — "Accepting Orders" — families can still submit; T-5 auto-skip fires
+- `shopping` — order window closed, volunteers are shopping
+- `delivered` — cycle complete
+
 The portal shows cycles with status `upcoming` or `shopping`. Dashboard shows the first `upcoming` or `shopping` cycle as the "active cycle".
 
 ### Bundle Size Logic

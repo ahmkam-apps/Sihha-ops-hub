@@ -499,6 +499,13 @@
         })
       });
       const data = await res.json();
+      if (res.status === 409 && data.error === 'duplicate') {
+        // Already registered — show helpful message instead of generic error
+        showDuplicate(data.message);
+        btn.disabled = false;
+        btn.textContent = 'Submit Request';
+        return;
+      }
       if (!res.ok) throw new Error(data.error || 'Submission failed');
       document.getElementById('form-state').style.display = 'none';
       document.getElementById('success-state').style.display = 'block';
@@ -513,6 +520,13 @@
   function showError(msg) {
     const el = document.getElementById('form-error');
     el.textContent = msg;
+    el.style.display = 'block';
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function showDuplicate(msg) {
+    const el = document.getElementById('form-error');
+    el.innerHTML = msg + ' &nbsp;<a href="/my-order" style="color:inherit;text-decoration:underline;">View your orders →</a>';
     el.style.display = 'block';
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
