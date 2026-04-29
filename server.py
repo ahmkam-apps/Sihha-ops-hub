@@ -3473,27 +3473,31 @@ def check_food_order_eligibility():
     ).fetchone()
     last_order = dict(last_order_row) if last_order_row else None
 
-    # Find active cycle — prefer 'open' (can still order), fall back to 'shopping' (order locked in)
-    # This ensures families always see their confirmed delivery even after coordinator advances to shopping
+    # Find the best cycle to show this family:
+    # 1. First, check if the family has an active order in any non-delivered, non-cancelled cycle
+    #    (upcoming, open, or shopping) — always show that so they can see their confirmed order.
+    # 2. Fall back to a delivered cycle with their most recent order (read-only history).
+    # 3. If no family order exists anywhere, show the open cycle for new submission (or nothing).
     all_cycles = db.execute("SELECT id, title, status FROM delivery_cycles ORDER BY delivery_date_start DESC LIMIT 5").fetchall()
     log.info(f'check_eligibility: family={family["name"]!r} cycles={[(r["title"],r["status"]) for r in all_cycles]}')
-    cycle = db.execute(
-        "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
+
+    # Priority 1: family has an active (non-skipped, non-cancelled) order in an upcoming/open/shopping cycle
+    active_order_row = db.execute(
+        '''SELECT dc.* FROM food_requests fr
+           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+           WHERE fr.family_id=? AND fr.status NOT IN ('skipped','cancelled')
+             AND dc.status IN ('upcoming','open','shopping')
+           ORDER BY dc.delivery_date_start DESC LIMIT 1''',
+        (family['id'],)
     ).fetchone()
 
-    if not cycle:
-        # No open cycle — check if there's a shopping cycle with a confirmed order for this family
-        # so they can still see their upcoming delivery and cancel if needed
-        shopping_cycle = db.execute(
-            "SELECT * FROM delivery_cycles WHERE status='shopping' ORDER BY delivery_date_start LIMIT 1"
+    if active_order_row:
+        cycle = active_order_row
+    else:
+        # Priority 2: open cycle for a fresh order submission
+        cycle = db.execute(
+            "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
         ).fetchone()
-        if shopping_cycle:
-            family_order = db.execute(
-                "SELECT id FROM food_requests WHERE cycle_id=? AND family_id=? AND status NOT IN ('skipped','cancelled')",
-                (shopping_cycle['id'], family['id'])
-            ).fetchone()
-            if family_order:
-                cycle = shopping_cycle  # show this cycle in read-only confirmed view
 
     if not cycle:
         history_rows = db.execute(
