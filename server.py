@@ -3465,12 +3465,27 @@ def check_food_order_eligibility():
     ).fetchone()
     last_order = dict(last_order_row) if last_order_row else None
 
-    # Find open cycle — log all cycles so Railway logs can diagnose "no items" issues
+    # Find active cycle — prefer 'open' (can still order), fall back to 'shopping' (order locked in)
+    # This ensures families always see their confirmed delivery even after coordinator advances to shopping
     all_cycles = db.execute("SELECT id, title, status FROM delivery_cycles ORDER BY delivery_date_start DESC LIMIT 5").fetchall()
     log.info(f'check_eligibility: family={family["name"]!r} cycles={[(r["title"],r["status"]) for r in all_cycles]}')
     cycle = db.execute(
         "SELECT * FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1"
     ).fetchone()
+
+    if not cycle:
+        # No open cycle — check if there's a shopping cycle with a confirmed order for this family
+        # so they can still see their upcoming delivery and cancel if needed
+        shopping_cycle = db.execute(
+            "SELECT * FROM delivery_cycles WHERE status='shopping' ORDER BY delivery_date_start LIMIT 1"
+        ).fetchone()
+        if shopping_cycle:
+            family_order = db.execute(
+                "SELECT id FROM food_requests WHERE cycle_id=? AND family_id=? AND status NOT IN ('skipped','cancelled')",
+                (shopping_cycle['id'], family['id'])
+            ).fetchone()
+            if family_order:
+                cycle = shopping_cycle  # show this cycle in read-only confirmed view
 
     if not cycle:
         history_rows = db.execute(
