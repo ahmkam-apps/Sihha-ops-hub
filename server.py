@@ -3201,11 +3201,24 @@ def check_food_order_eligibility():
         except Exception:
             pass  # Column already exists
 
-        # Check family exists — fetch all base columns defensively
+        # Check family exists — try exact match first, then strip leading country code
         family_row = db.execute(
             "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
             "FROM families WHERE phone=? AND status != 'inactive'", (phone,)
         ).fetchone()
+        if not family_row:
+            # Normalise stored phones on the fly and compare last 10 digits
+            # Handles: leading 1, stored hyphens/spaces not yet migrated, country codes
+            candidates = db.execute(
+                "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
+                "FROM families WHERE status != 'inactive'"
+            ).fetchall()
+            last10 = phone[-10:] if len(phone) >= 10 else phone
+            for c in candidates:
+                stored_norm = _normalize_phone(c['phone'] or '')
+                if stored_norm == phone or stored_norm[-10:] == last10:
+                    family_row = c
+                    break
     except Exception as exc:
         log.exception(f'check_food_order_eligibility DB error: {exc}')
         # Fallback: try without pending_bundle_size in case column truly missing
