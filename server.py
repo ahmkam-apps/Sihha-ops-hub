@@ -1608,7 +1608,9 @@ def list_families():
         FROM families f
         WHERE 1=1"""
     params = []
-    if status:
+    if status == 'needs_wa':
+        q += " AND f.status='active' AND (f.wa_phone IS NULL OR TRIM(f.wa_phone)='' OR f.wa_apikey IS NULL OR TRIM(f.wa_apikey)='')"
+    elif status:
         q += " AND f.status=?"; params.append(status)
     if search:
         q += " AND (f.name LIKE ? OR f.phone LIKE ? OR f.address LIKE ?)"; params += [f'%{search}%']*3
@@ -1752,7 +1754,9 @@ def list_volunteers():
     search = (request.args.get('search') or '').strip()
     q = "SELECT * FROM volunteers WHERE 1=1"
     params = []
-    if status:
+    if status == 'needs_wa':
+        q += " AND status='active' AND (wa_phone IS NULL OR TRIM(wa_phone)='' OR wa_apikey IS NULL OR TRIM(wa_apikey)='')"
+    elif status:
         q += " AND status=?"; params.append(status)
     if search:
         q += " AND (name LIKE ? OR phone LIKE ? OR email LIKE ?)"; params += [f'%{search}%']*3

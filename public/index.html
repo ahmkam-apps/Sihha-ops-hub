@@ -1429,7 +1429,8 @@ async function renderFamilies(filter, search) {
 
   let url = '/families';
   const params = [];
-  if (filter !== 'all') params.push('status=' + filter);
+  const statusParam = filter === 'needs-wa' ? 'needs_wa' : filter;
+  if (statusParam !== 'all') params.push('status=' + statusParam);
   if (search) params.push('search=' + encodeURIComponent(search));
   if (params.length) url += '?' + params.join('&');
 
@@ -1485,9 +1486,11 @@ async function renderFamilies(filter, search) {
               id="family-search" value="${search||''}"
               oninput="renderFamilies('${filter}', this.value)">
             <div class="filter-tabs">
-              ${['all','pending','active','inactive','paused'].map(f =>
+              ${['all','pending','active','inactive','paused','needs-wa'].map(f =>
                 `<div class="filter-tab ${filter===f?'active':''}"
-                  onclick="renderFamilies('${f}', document.getElementById('family-search').value)">${f}</div>`
+                  onclick="renderFamilies('${f}', document.getElementById('family-search').value)"
+                  style="${f==='needs-wa'?'color:#b45309;border-color:#f0a500;':''}"
+                  >${f==='needs-wa'?'⚠ Needs WA':f}</div>`
               ).join('')}
             </div>
           </div>
@@ -1508,7 +1511,8 @@ async function renderFamilies(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.city||'—'}</td>
                 <td>${r.family_size||'—'}</td>
-                <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}</td>
+                <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}${r.status==='active'&&(!r.wa_phone||!r.wa_apikey)?` <span title="WhatsApp not configured — family won't receive notifications" style="display:inline-block;font-size:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ WA</span>`:''}
+                </td>
                 ${hasActiveCycle ? `<td onclick="event.stopPropagation()">${orderBadge(r.id)}</td>` : ''}
                 <td style="font-size:12px;color:${r.last_delivery_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_delivery_volunteer?'600':'400'}">
                   ${r.last_delivery_volunteer||'—'}
@@ -1540,7 +1544,12 @@ async function quickStatusFamily(id, status) {
   if (row) row.style.opacity = '0.4';
   try {
     await PUT('/families/' + id, { status });
-    renderFamilies(STATE.filter, document.getElementById('family-search')?.value);
+    if (status === 'active') {
+      // Go straight to profile — coordinator should set up WA credentials right away
+      viewFamily(id);
+    } else {
+      renderFamilies(STATE.filter, document.getElementById('family-search')?.value);
+    }
   } catch(e) {
     if (row) row.style.opacity = '1';
     alert(e.message);
@@ -1827,6 +1836,21 @@ async function viewFamily(id) {
          ${content}
        </div>`;
 
+    // ── WA setup banner ───────────────────────────────────────────────────────
+    const waBanner = (r.status === 'active' && (!r.wa_phone || !r.wa_apikey)) ? `
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:10px;padding:14px 20px;margin-bottom:14px;display:flex;gap:14px;align-items:flex-start;">
+        <span style="font-size:20px;line-height:1;flex-shrink:0;">⚠️</span>
+        <div>
+          <div style="font-weight:700;font-size:13px;color:#92400e;margin-bottom:4px;">WhatsApp Not Configured</div>
+          <div style="font-size:12px;color:#78350f;line-height:1.6;">
+            This family won't receive delivery notifications until their WhatsApp is set up.<br>
+            <strong>Steps:</strong> Ask them to text <span style="font-family:monospace;background:#fef9c3;padding:1px 5px;border-radius:3px;">I allow callmebot to send me messages</span>
+            to <span style="font-family:monospace;font-weight:700;">+34 644 49 25 64</span>.
+            They'll receive an API key by WhatsApp. Enter both their WhatsApp number and API key in the <strong>Profile</strong> section below.
+          </div>
+        </div>
+      </div>` : '';
+
     // ── Summary strip ─────────────────────────────────────────────────────────
     const bundleLabel = {S:'Small',M:'Medium',L:'Large'};
     const summaryStrip = `
@@ -2035,7 +2059,7 @@ async function viewFamily(id) {
         }
       </div>`;
 
-    document.getElementById('content').innerHTML = summaryStrip + cycleStrip + editGrid + historySection;
+    document.getElementById('content').innerHTML = waBanner + summaryStrip + cycleStrip + editGrid + historySection;
     // Show Save button now that fields are rendered
     const saveBtn = document.getElementById('fam-save-btn');
     if (saveBtn) saveBtn.style.display = 'inline-flex';
@@ -2070,7 +2094,8 @@ async function renderVolunteers(filter, search) {
 
   let url = '/volunteers';
   const params = [];
-  if (filter !== 'all') params.push('status=' + filter);
+  const volStatusParam = filter === 'needs-wa' ? 'needs_wa' : filter;
+  if (volStatusParam !== 'all') params.push('status=' + volStatusParam);
   if (search) params.push('search=' + encodeURIComponent(search));
   if (params.length) url += '?' + params.join('&');
 
@@ -2086,9 +2111,11 @@ async function renderVolunteers(filter, search) {
               id="vol-search" value="${search||''}"
               oninput="renderVolunteers('${filter}', this.value)">
             <div class="filter-tabs">
-              ${['all','pending','active','inactive'].map(f =>
+              ${['all','pending','active','inactive','needs-wa'].map(f =>
                 `<div class="filter-tab ${filter===f?'active':''}"
-                  onclick="renderVolunteers('${f}', document.getElementById('vol-search').value)">${f}</div>`
+                  onclick="renderVolunteers('${f}', document.getElementById('vol-search').value)"
+                  style="${f==='needs-wa'?'color:#b45309;border-color:#f0a500;':''}"
+                  >${f==='needs-wa'?'⚠ Needs WA':f}</div>`
               ).join('')}
             </div>
           </div>
@@ -2105,7 +2132,7 @@ async function renderVolunteers(filter, search) {
                 <td>${r.phone||'—'}</td>
                 <td>${r.email||'—'}</td>
                 <td><span style="font-size:11px;text-transform:capitalize">${r.role||'—'}</span></td>
-                <td>${badge(r.status)}</td>
+                <td>${badge(r.status)}${r.status==='active'&&(!r.wa_phone||!r.wa_apikey)?` <span title="WhatsApp not configured — volunteer won't receive task notifications" style="display:inline-block;font-size:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ WA</span>`:''}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap">
                   ${r.status==='pending' ? `
@@ -2210,7 +2237,12 @@ async function quickStatusVolunteer(id, status) {
   if (row) row.style.opacity = '0.4';
   try {
     await PUT('/volunteers/' + id, { status });
-    renderVolunteers(STATE.filter, document.getElementById('vol-search')?.value);
+    if (status === 'active') {
+      // Go straight to volunteer profile — coordinator should set up WA credentials right away
+      viewVolunteer(id);
+    } else {
+      renderVolunteers(STATE.filter, document.getElementById('vol-search')?.value);
+    }
   } catch(e) {
     if (row) row.style.opacity = '1';
     alert(e.message);
@@ -2351,7 +2383,14 @@ async function viewVolunteer(id) {
         ${v}
       </button>`).join('');
 
-    const detailsHTML = `
+    const volWaBanner = (r.status === 'active' && (!r.wa_phone || !r.wa_apikey)) ? `
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12px;color:#78350f;line-height:1.6;">
+        <strong style="color:#92400e;display:block;margin-bottom:3px;">⚠️ WhatsApp Not Configured</strong>
+        Ask them to text <span style="font-family:monospace;background:#fef9c3;padding:1px 4px;border-radius:3px;">I allow callmebot to send me messages</span>
+        to <strong>+34 644 49 25 64</strong>. They'll receive an API key. Then click <strong>Edit</strong> to enter their WA phone and API key.
+      </div>` : '';
+
+    const detailsHTML = volWaBanner + `
       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
       <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
       <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
