@@ -2395,6 +2395,29 @@ def auto_update_cycle_statuses(db):
     """No-op — cycles are now manually advanced (upcoming→shopping→delivered)."""
     pass
 
+
+def _ensure_volunteer_slots(db, cycle_id, family_id):
+    """Create shopping + delivery slots for a family the moment their order is confirmed.
+    Safe to call multiple times — uses INSERT OR IGNORE (idempotent).
+    Returns the number of new slots created (0 if they already existed).
+    """
+    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
+    if not cycle:
+        return 0
+    delivery_date = cycle['delivery_date_start']  # fixed date
+    created = 0
+    for task_type, task_date in [('shopping', None), ('delivery', delivery_date)]:
+        try:
+            db.execute(
+                "INSERT OR IGNORE INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,status,created_at) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), cycle_id, family_id, task_type, task_date, 'open', now())
+            )
+            created += db.execute("SELECT changes()").fetchone()[0]
+        except Exception as e:
+            log.warning(f'_ensure_volunteer_slots: could not create {task_type} slot for family {family_id}: {e}')
+    return created
+
+
 def _enroll_families_in_cycle(db, cycle_id, delivery_date_start):
     """Auto-create food_requests for all active families in a new cycle."""
     families = db.execute(
@@ -2624,6 +2647,11 @@ def update_food_request_status(rid):
     except Exception:
         # Fallback: confirmed_at/updated_at columns may not exist yet on old DB
         db.execute("UPDATE food_requests SET status=? WHERE id=?", (status, rid))
+
+    # Auto-create volunteer slots when coordinator confirms a family
+    if status == 'confirmed':
+        _ensure_volunteer_slots(db, row['cycle_id'], row['family_id'])
+
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM food_requests WHERE id=?", (rid,)).fetchone()))
 
@@ -2687,9 +2715,12 @@ def manual_confirm_family(fid):
             (str(uuid.uuid4()), rid, item['id'])
         )
 
+    # Auto-create volunteer slots immediately
+    slots_created = _ensure_volunteer_slots(db, cycle['id'], fid)
+
     db.commit()
-    log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} by coordinator')
-    return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size}), 201
+    log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} by coordinator — {slots_created} slots created')
+    return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size, 'slots_created': slots_created}), 201
 
 @app.route('/api/delivery-cycles/<cid>/shopping-list', methods=['GET'])
 @require_auth()
@@ -3292,6 +3323,10 @@ def submit_family_confirmation(token):
         "UPDATE food_requests SET status='confirmed', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
         (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
     )
+
+    # Auto-create volunteer slots — delivery dates are fixed
+    _ensure_volunteer_slots(db, req['cycle_id'], req['family_id'])
+
     db.commit()
     return jsonify({'ok': True, 'action': 'confirmed'})
 
@@ -3627,8 +3662,11 @@ def submit_food_order():
             (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
         )
 
+    # Auto-create volunteer slots immediately — delivery dates are fixed
+    slots_created = _ensure_volunteer_slots(db, data['cycle_id'], data['family_id'])
+
     db.commit()
-    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]}')
+    log.info(f'Food order submitted: family {data["family_id"]} for cycle {data["cycle_id"]} — {slots_created} slots created')
     return jsonify({
         'ok': True,
         'message': 'Your request has been submitted.',
