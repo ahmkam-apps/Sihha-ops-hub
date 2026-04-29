@@ -3124,9 +3124,12 @@ async function renderDeliveries(filterStatus) {
                 <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="openCycleForm('${c.id}')">Edit</button>
-                  ${c.status === 'upcoming' ? `<button class="btn btn-sm" style="margin-left:4px;background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Open for Orders</button>` : ''}
-                  ${c.status === 'open'     ? `<button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>` : ''}
-                  ${c.status === 'shopping' ? `<button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
+                  ${c.status === 'upcoming'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Open for Orders</button>` : ''}
+                  ${c.status === 'open'      ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','open')">← Upcoming</button>
+                                               <button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>` : ''}
+                  ${c.status === 'shopping'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','shopping')">← Open for Orders</button>
+                                               <button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
+                  ${c.status === 'delivered' ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','delivered')">← Shopping</button>` : ''}
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="5">No deliveries found</td></tr>'}
@@ -3166,6 +3169,17 @@ async function advanceCycleStatus(id, current) {
   if (!confirm(`Move to "${label[next[current]]}"?\n\n${desc[current]}`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: next[current] });
+    renderDeliveries();
+  } catch(e) { alert(e.message); }
+}
+
+async function revertCycleStatus(id, current) {
+  const prev  = { open:'upcoming', shopping:'open', delivered:'shopping' };
+  const label = { open:'Upcoming', shopping:'Open for Orders', delivered:'Shopping' };
+  if (!prev[current]) return;
+  if (!confirm(`Revert this cycle back to "${label[prev[current]]}"?\n\nThis will undo the status advance.`)) return;
+  try {
+    await PUT('/delivery-cycles/' + id, { status: prev[current] });
     renderDeliveries();
   } catch(e) { alert(e.message); }
 }
