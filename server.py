@@ -4108,6 +4108,20 @@ def submit_family_change_request():
         # Build payload — item selections
         payload = _json.dumps({'selected_item_ids': selected_item_ids})
 
+        # Resolve item names for the event log (so history shows human-readable items)
+        requested_item_names = []
+        if selected_item_ids:
+            try:
+                placeholders = ','.join('?' * len(selected_item_ids))
+                requested_item_names = [
+                    r['name'] for r in db.execute(
+                        f"SELECT name FROM food_items WHERE id IN ({placeholders})",
+                        list(selected_item_ids)
+                    ).fetchall()
+                ]
+            except Exception:
+                pass
+
         cr_id = str(uuid.uuid4())
         db.execute(
             '''INSERT INTO order_change_requests
@@ -4116,7 +4130,11 @@ def submit_family_change_request():
             (cr_id, family_id, req['cycle_id'], request_id, 'pending', family_notes, payload, now())
         )
         _log_order_event(db, request_id, 'change_requested', actor='family',
-                         payload={'change_request_id': cr_id, 'notes': family_notes})
+                         payload={
+                             'change_request_id': cr_id,
+                             'notes':             family_notes,
+                             'requested_items':   requested_item_names,
+                         })
         db.commit()
 
         # Notify coordinators
@@ -4253,9 +4271,22 @@ def approve_change_request(cr_id):
             payload = {}
         selected_ids = set(payload.get('selected_item_ids', []))
 
+        # Capture item names BEFORE applying changes (for the event log)
+        def _item_names_for_request(rid, selected_only=True):
+            cond = "AND fri.selected=1" if selected_only else ""
+            rows = db.execute(
+                f'''SELECT fi.name FROM food_request_items fri
+                    JOIN food_items fi ON fri.food_item_id=fi.id
+                    WHERE fri.request_id=? {cond}
+                    ORDER BY fi.name''',
+                (rid,)
+            ).fetchall()
+            return [r['name'] for r in rows]
+
+        items_before = _item_names_for_request(cr['request_id']) if cr['request_id'] else []
+
         # Apply item changes to the order
         if selected_ids and cr['request_id']:
-            # Get all items for this request
             all_items = db.execute(
                 "SELECT food_item_id FROM food_request_items WHERE request_id=?",
                 (cr['request_id'],)
@@ -4267,6 +4298,11 @@ def approve_change_request(cr_id):
                     (new_selected, cr['request_id'], item['food_item_id'])
                 )
 
+        # Capture item names AFTER applying changes
+        items_after = _item_names_for_request(cr['request_id']) if cr['request_id'] else []
+        added   = [n for n in items_after  if n not in set(items_before)]
+        removed = [n for n in items_before if n not in set(items_after)]
+
         # Mark request approved
         db.execute(
             '''UPDATE order_change_requests
@@ -4276,8 +4312,14 @@ def approve_change_request(cr_id):
         )
 
         _log_order_event(db, cr['request_id'], 'change_approved', actor='admin',
-                         payload={'change_request_id': cr_id, 'admin_notes': admin_notes,
-                                  'items_applied': len(selected_ids)})
+                         payload={
+                             'change_request_id': cr_id,
+                             'admin_notes':       admin_notes,
+                             'items_before':      items_before,
+                             'items_after':       items_after,
+                             'added':             added,
+                             'removed':           removed,
+                         })
         db.commit()
 
         # WA to family

@@ -393,6 +393,35 @@
   .event-detail { color: #888; font-size: 11px; }
   .event-time { color: #bbb; white-space: nowrap; margin-left: 10px; font-size: 11px; }
 
+  /* ── Change review result banner ── */
+  .review-result {
+    padding: 14px 16px;
+    margin-bottom: 14px;
+    border-left: 4px solid;
+  }
+  .review-result.approved {
+    background: #e8f5ee;
+    border-left-color: var(--green);
+  }
+  .review-result.rejected {
+    background: var(--amber-bg);
+    border-left-color: var(--amber-border);
+  }
+  .review-result-title {
+    font-size: 13px; font-weight: 700; margin-bottom: 6px;
+  }
+  .review-result.approved .review-result-title { color: #155f30; }
+  .review-result.rejected .review-result-title { color: var(--amber-text); }
+  .review-result-detail { font-size: 12px; color: var(--gray-5); line-height: 1.7; }
+  .review-result-chip {
+    display: inline-block;
+    padding: 1px 8px; font-size: 11px; margin: 2px 3px 2px 0;
+    border-radius: 2px;
+  }
+  .chip-added   { background: #d4edda; color: #155f30; }
+  .chip-removed { background: #fdecea; color: var(--red); text-decoration: line-through; }
+  .chip-neutral { background: var(--gray-1); color: var(--gray-5); border: 1px solid var(--gray-2); }
+
   /* No-order states */
   .coming-soon-note {
     font-size: 13px; color: var(--gray-4); margin-top: 4px; padding: 4px 0 4px;
@@ -766,13 +795,13 @@ function toggleItem(row) { row.classList.toggle('selected'); }
 // ── Confirmed order body ───────────────────────────────────────────────────────
 function renderOrderBody(cid, ord) {
   const L = currentLang;
+  const isTerminal = ['cancelled','skipped'].includes(ord.status);
 
-  // Items summary
+  // ── Items summary ──
   let itemsHtml = '';
   const cats = ord.selected_categories && ord.selected_categories.length
     ? ord.selected_categories
     : ord.bundle_categories || [];
-  const isTerminal = ['cancelled','skipped'].includes(ord.status);
 
   if (cats.length && !isTerminal) {
     itemsHtml = `
@@ -791,7 +820,66 @@ function renderOrderBody(cid, ord) {
     itemsHtml = `<div class="locked-note" style="color:var(--gray-4)">${msg}</div>`;
   }
 
-  // Actions
+  // ── Change review result banner ──
+  // Find the most recent approval or rejection event and surface it prominently.
+  const reviewEvents = (ord.events || []).filter(
+    ev => ev.event_type === 'change_approved' || ev.event_type === 'change_rejected'
+  );
+  const lastReview = reviewEvents.length ? reviewEvents[reviewEvents.length - 1] : null;
+  let reviewBannerHtml = '';
+  if (lastReview && !ord.pending_change_request) {
+    const pl = lastReview.payload || {};
+    const reviewDate = lastReview.created_at
+      ? new Date(lastReview.created_at + (lastReview.created_at.endsWith('Z') ? '' : 'Z'))
+          .toLocaleDateString(L === 'ar' ? 'ar-SA' : 'en-US', {month:'short', day:'numeric', year:'numeric'})
+      : '';
+
+    if (lastReview.event_type === 'change_approved') {
+      const added   = pl.added   || [];
+      const removed = pl.removed || [];
+      const note    = pl.admin_notes || '';
+
+      let changeDetail = '';
+      if (added.length || removed.length) {
+        changeDetail += `<div style="margin-top:6px;">`;
+        if (removed.length) {
+          changeDetail += `<div style="margin-bottom:4px;">${L === 'ar' ? 'أُزيل:' : 'Removed:'} `;
+          changeDetail += removed.map(n => `<span class="review-result-chip chip-removed">${escHtml(n)}</span>`).join('');
+          changeDetail += '</div>';
+        }
+        if (added.length) {
+          changeDetail += `<div>${L === 'ar' ? 'أُضيف:' : 'Added:'} `;
+          changeDetail += added.map(n => `<span class="review-result-chip chip-added">${escHtml(n)}</span>`).join('');
+          changeDetail += '</div>';
+        }
+        changeDetail += '</div>';
+      } else if (pl.items_after && pl.items_after.length) {
+        // No diff but we have the final list — show it
+        changeDetail = `<div style="margin-top:6px;font-size:12px;color:var(--gray-5)">
+          ${pl.items_after.map(n => `<span class="review-result-chip chip-neutral">${escHtml(n)}</span>`).join('')}
+        </div>`;
+      }
+
+      reviewBannerHtml = `
+        <div class="review-result approved">
+          <div class="review-result-title">✓ ${L === 'ar' ? 'تم قبول طلب التعديل' : 'Your change request was approved'} · ${escHtml(reviewDate)}</div>
+          <div class="review-result-detail">
+            ${changeDetail}
+            ${note ? `<div style="margin-top:6px;font-style:italic;">${L === 'ar' ? 'ملاحظة المنسق:' : 'Coordinator note:'} ${escHtml(note)}</div>` : ''}
+          </div>
+        </div>`;
+    } else {
+      // rejected
+      const note = pl.admin_notes || '';
+      reviewBannerHtml = `
+        <div class="review-result rejected">
+          <div class="review-result-title">${L === 'ar' ? 'لم يتم قبول طلب التعديل' : 'Change request was not approved'} · ${escHtml(reviewDate)}</div>
+          ${note ? `<div class="review-result-detail" style="margin-top:4px;font-style:italic;">${L === 'ar' ? 'ملاحظة المنسق:' : 'Coordinator note:'} ${escHtml(note)}</div>` : ''}
+        </div>`;
+    }
+  }
+
+  // ── Actions ──
   let actionsHtml = '';
   if (!isTerminal) {
     let changeBtn = '', cancelBtn = '';
@@ -806,7 +894,7 @@ function renderOrderBody(cid, ord) {
     }
   }
 
-  // Pending change request banner
+  // ── Pending change request banner ──
   let pendingCRHtml = '';
   if (ord.pending_change_request) {
     const notes = ord.pending_change_request.family_notes
@@ -820,13 +908,16 @@ function renderOrderBody(cid, ord) {
       </div>`;
   }
 
-  // Change request form
+  // ── Change request form ──
   const crFormHtml = renderCRForm(cid, ord);
 
-  // Event timeline
-  const eventsHtml = renderEventsSection(cid, ord.events || []);
+  // ── Event timeline ── auto-expand if there's change history
+  const hasChangeHistory = (ord.events || []).some(ev =>
+    ['change_requested','change_approved','change_rejected','change_retracted'].includes(ev.event_type)
+  );
+  const eventsHtml = renderEventsSection(cid, ord.events || [], hasChangeHistory);
 
-  return itemsHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
+  return itemsHtml + reviewBannerHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
 }
 
 // ── Change request form ────────────────────────────────────────────────────────
@@ -881,7 +972,7 @@ function hideCRForm(cid) {
 }
 
 // ── Events section ─────────────────────────────────────────────────────────────
-function renderEventsSection(cid, events) {
+function renderEventsSection(cid, events, autoExpand) {
   const L = currentLang;
   if (!events.length) return '';
   const filtered = events.filter(ev => !(ev.payload && ev.payload.note && ev.payload.note.includes('backfilled')));
@@ -893,25 +984,54 @@ function renderEventsSection(cid, events) {
       ? new Date(ev.created_at + (ev.created_at.endsWith('Z') ? '' : 'Z'))
           .toLocaleDateString(L === 'ar' ? 'ar-SA' : 'en-US', {month:'short', day:'numeric', year:'numeric'})
       : '';
-    let detail = '';
-    if (ev.event_type === 'items_edited' && ev.payload) {
-      const added   = ev.payload.added?.join(', ');
-      const removed = ev.payload.removed?.join(', ');
-      if (added)   detail += (L === 'ar' ? ` أُضيف: ${added}` : ` +${added}`);
-      if (removed) detail += (L === 'ar' ? ` أُزيل: ${removed}` : ` -${removed}`);
+    const pl = ev.payload || {};
+
+    // Build rich per-event detail
+    let detailLines = [];
+
+    if (ev.event_type === 'change_requested') {
+      if (pl.notes) detailLines.push(`${L === 'ar' ? 'ملاحظة:' : 'Note:'} "${escHtml(pl.notes)}"`);
+      if (pl.requested_items?.length) {
+        detailLines.push(`${L === 'ar' ? 'العناصر المطلوبة:' : 'Requested:'} ${pl.requested_items.map(n => escHtml(n)).join(', ')}`);
+      }
+    } else if (ev.event_type === 'change_approved') {
+      if (pl.removed?.length) detailLines.push(`${L === 'ar' ? 'أُزيل:' : 'Removed:'} ${pl.removed.map(n => escHtml(n)).join(', ')}`);
+      if (pl.added?.length)   detailLines.push(`${L === 'ar' ? 'أُضيف:' : 'Added:'} ${pl.added.map(n => escHtml(n)).join(', ')}`);
+      if (!pl.added?.length && !pl.removed?.length && pl.items_after?.length) {
+        detailLines.push(`${L === 'ar' ? 'العناصر:' : 'Items:'} ${pl.items_after.map(n => escHtml(n)).join(', ')}`);
+      }
+      if (pl.admin_notes) detailLines.push(`${L === 'ar' ? 'ملاحظة المنسق:' : 'Note:'} "${escHtml(pl.admin_notes)}"`);
+    } else if (ev.event_type === 'change_rejected') {
+      if (pl.admin_notes) detailLines.push(`${L === 'ar' ? 'ملاحظة المنسق:' : 'Note:'} "${escHtml(pl.admin_notes)}"`);
+    } else if (ev.event_type === 'items_edited') {
+      if (pl.removed?.length) detailLines.push(`${L === 'ar' ? 'أُزيل:' : 'Removed:'} ${pl.removed.map(n => escHtml(n)).join(', ')}`);
+      if (pl.added?.length)   detailLines.push(`${L === 'ar' ? 'أُضيف:' : 'Added:'} ${pl.added.map(n => escHtml(n)).join(', ')}`);
+    } else if (ev.event_type === 'confirmed' && pl.notes) {
+      detailLines.push(`${L === 'ar' ? 'ملاحظة:' : 'Note:'} "${escHtml(pl.notes)}"`);
     }
-    return `<div class="event-row">
-      <div><span class="event-label">${escHtml(label)}</span>${detail ? `<span class="event-detail"> — ${escHtml(detail)}</span>` : ''}</div>
-      <span class="event-time">${escHtml(ts)}</span>
+
+    const detailHtml = detailLines.length
+      ? `<div class="event-detail" style="margin-top:2px;">${detailLines.join(' · ')}</div>`
+      : '';
+
+    return `<div class="event-row" style="align-items:flex-start;flex-direction:column;gap:1px;padding:6px 0;">
+      <div style="display:flex;justify-content:space-between;width:100%;align-items:baseline;">
+        <span class="event-label">${escHtml(label)}</span>
+        <span class="event-time">${escHtml(ts)}</span>
+      </div>
+      ${detailHtml}
     </div>`;
   }).join('');
 
+  const expandClass = autoExpand ? ' open' : '';
+  const toggleLabel = L === 'ar' ? 'سجل الطلب' : 'Order activity';
+
   return `
-    <div style="margin-top:10px;">
+    <div style="margin-top:10px;border-top:1px solid var(--gray-2);padding-top:10px;">
       <button class="events-toggle" onclick="toggleEvents('${escHtml(cid)}')">
-        ${L === 'ar' ? 'عرض سجل الطلب' : 'View order activity'}
+        ${escHtml(toggleLabel)} (${filtered.length})
       </button>
-      <div class="events-list" id="events-${escHtml(cid)}">${rowsHtml}</div>
+      <div class="events-list${expandClass}" id="events-${escHtml(cid)}">${rowsHtml}</div>
     </div>`;
 }
 
