@@ -1435,7 +1435,47 @@ async function renderFamilies(filter, search) {
 
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const rows = await GET(url);
+    // Fetch families + active cycle orders in parallel
+    const [rows, openCycles, shoppingCycles] = await Promise.all([
+      GET(url),
+      GET('/delivery-cycles?status=open').catch(() => []),
+      GET('/delivery-cycles?status=shopping').catch(() => [])
+    ]);
+
+    // Pick the most relevant active cycle: open first, then shopping
+    const activeCycle = openCycles[0] || shoppingCycles[0] || null;
+
+    // Build family_id → order map for the active cycle
+    let orderMap = {};
+    if (activeCycle) {
+      try {
+        const orders = await GET('/delivery-cycles/' + activeCycle.id + '/orders');
+        orders.forEach(o => { orderMap[o.family_id] = o; });
+      } catch(_) {}
+    }
+
+    const hasActiveCycle = !!activeCycle;
+    const cycleLabel = hasActiveCycle
+      ? `${activeCycle.title} <span style="font-size:11px;font-weight:400;color:var(--gray-4)">(${activeCycle.status})</span>`
+      : '';
+
+    function orderBadge(familyId) {
+      const o = orderMap[familyId];
+      if (!o) return `<span style="font-size:11px;color:var(--gray-3)">—</span>`;
+      const s = o.status;
+      if (s === 'confirmed')
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#1a8754;background:#f0faf5;padding:2px 7px;border-radius:10px;border:1px solid #b7e0ca">✓ Confirmed</span>`;
+      if (s === 'submitted')
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#b45309;background:#fffbeb;padding:2px 7px;border-radius:10px;border:1px solid #f6d58a">● Submitted</span>`;
+      if (s === 'skipped')
+        return `<span style="font-size:11px;color:var(--gray-3);font-style:italic">Skipped</span>`;
+      if (s === 'delivered')
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#2e86c1;background:#eaf4fb;padding:2px 7px;border-radius:10px;border:1px solid #aad4f0">✓ Delivered</span>`;
+      return `<span style="font-size:11px;color:var(--gray-4)">${s}</span>`;
+    }
+
+    const colCount = hasActiveCycle ? 11 : 10;
+
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header">
@@ -1452,10 +1492,13 @@ async function renderFamilies(filter, search) {
             </div>
           </div>
         </div>
+        ${hasActiveCycle ? `<div style="padding:8px 16px 4px;font-size:12px;color:var(--gray-4)">Showing order status for: <strong>${cycleLabel}</strong></div>` : ''}
         <table>
           <thead><tr>
             <th>ID</th><th>Name</th><th>Phone</th><th>City</th>
-            <th>Size</th><th>Status</th><th>Delivered By</th><th>Shopped By</th><th>Added</th><th></th>
+            <th>Size</th><th>Status</th>
+            ${hasActiveCycle ? '<th>Order</th>' : ''}
+            <th>Delivered By</th><th>Shopped By</th><th>Added</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -1466,6 +1509,7 @@ async function renderFamilies(filter, search) {
                 <td>${r.city||'—'}</td>
                 <td>${r.family_size||'—'}</td>
                 <td>${badge(r.status)}</td>
+                ${hasActiveCycle ? `<td onclick="event.stopPropagation()">${orderBadge(r.id)}</td>` : ''}
                 <td style="font-size:12px;color:${r.last_delivery_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_delivery_volunteer?'600':'400'}">
                   ${r.last_delivery_volunteer||'—'}
                   ${r.last_delivery_date?`<div style="font-size:10px;color:var(--gray-4);font-weight:400">${fmtDateShort(r.last_delivery_date)}</div>`:''}
@@ -1482,7 +1526,7 @@ async function renderFamilies(filter, search) {
                   ` : ''}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="10">No families found</td></tr>'}
+              `<tr class="empty-row"><td colspan="${colCount}">No families found</td></tr>`}
           </tbody>
         </table>
       </div>`;
