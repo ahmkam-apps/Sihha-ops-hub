@@ -4344,27 +4344,40 @@ def reject_change_request(cr_id):
 @app.route('/api/families/<fid>/reset-order', methods=['POST'])
 @require_auth()
 def reset_family_order(fid):
-    """Admin silently resets a family's order for the current active cycle.
-    Clears all items and sets status back to pending_confirmation. No notification sent."""
+    """Admin resets a family's order for the most recent active cycle.
+    - Cancelled / skipped orders: DELETED entirely so the family can place a fresh order.
+    - Confirmed orders: reset to pending_confirmation (items cleared, no WA sent).
+    """
     try:
         db = get_db()
         family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
         if not family:
             return jsonify({'error': 'Family not found'}), 404
 
-        # Find the active cycle order (not delivered/cancelled)
+        # Find most recent non-delivered order
         req = db.execute(
-            '''SELECT fr.*, dc.id as cycle_id_val FROM food_requests fr
+            '''SELECT fr.* FROM food_requests fr
                JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-               WHERE fr.family_id=? AND fr.status NOT IN ('delivered')
+               WHERE fr.family_id=? AND fr.status != 'delivered'
                ORDER BY dc.delivery_date_start DESC LIMIT 1''',
             (fid,)
         ).fetchone()
         if not req:
-            return jsonify({'error': 'No active order found to reset'}), 404
+            return jsonify({'error': 'No order found to reset'}), 404
 
         ts = now()
-        # Reset order status and clear items
+
+        if req['status'] in ('cancelled', 'skipped', 'pending_confirmation'):
+            # Hard delete — frees the slot so family can place a fresh portal order
+            db.execute("DELETE FROM food_request_events     WHERE request_id=?", (req['id'],))
+            db.execute("DELETE FROM food_request_items      WHERE request_id=?", (req['id'],))
+            db.execute("DELETE FROM order_change_requests   WHERE request_id=?", (req['id'],))
+            db.execute("DELETE FROM food_requests           WHERE id=?",         (req['id'],))
+            db.commit()
+            log.info(f'Order {req["id"]} DELETED (status={req["status"]}) by admin {g.user["username"]} for family {fid}')
+            return jsonify({'ok': True, 'message': 'Order cleared. Family can now place a fresh order.'})
+
+        # Confirmed order: soft reset back to pending_confirmation
         try:
             db.execute(
                 "UPDATE food_requests SET status='pending_confirmation', confirmed_at=NULL, updated_at=? WHERE id=?",
@@ -4375,20 +4388,15 @@ def reset_family_order(fid):
                 "UPDATE food_requests SET status='pending_confirmation', confirmed_at=NULL WHERE id=?",
                 (req['id'],)
             )
-        # Deselect all items
         db.execute("UPDATE food_request_items SET selected=0 WHERE request_id=?", (req['id'],))
-
-        # Retract any pending change requests for this order
         db.execute(
             "UPDATE order_change_requests SET status='retracted', reviewed_at=? WHERE request_id=? AND status='pending'",
             (ts, req['id'])
         )
-
-        _log_order_event(db, req['id'], 'order_reset', actor='admin',
-                         payload={'reset_by': g.user['username']})
+        _log_order_event(db, req['id'], 'order_reset', actor='admin', payload={'reset_by': g.user['username']})
         db.commit()
 
-        log.info(f'Order {req["id"]} reset by admin {g.user["username"]} for family {fid}')
+        log.info(f'Order {req["id"]} reset to pending_confirmation by admin {g.user["username"]} for family {fid}')
         return jsonify({'ok': True, 'message': 'Order reset to pending confirmation.'})
 
     except Exception as _e:
