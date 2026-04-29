@@ -525,6 +525,21 @@ def bootstrap_db():
         except sqlite3.OperationalError:
             pass  # Already exists
 
+    # Ensure all donations columns exist (some only added inside route handlers, not here)
+    for _col, _def in [
+        ('donor_email',  'TEXT'),
+        ('type',         'TEXT'),
+        ('reference_id', 'TEXT'),
+        ('cycle_id',     'TEXT'),
+        ('frequency',    'TEXT'),
+        ('source',       'TEXT'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE donations ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added donations.{_col}')
+        except sqlite3.OperationalError:
+            pass
+
     # ── Phase 4A migrations ───────────────────────────────────────────────────
 
     # Add slot_id to receipts (links a portal-submitted receipt to a volunteer slot)
