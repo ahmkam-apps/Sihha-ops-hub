@@ -937,6 +937,14 @@ def bootstrap_db():
             conn.execute('PRAGMA foreign_keys=ON')
             log.info(f'Migration: volunteer_slots rebuild skipped ({_e})')
 
+    # ── Migration: add prev_claimed_by to volunteer_slots ────────────────────────
+    # Tracks who last held the slot before it was released — enables portal history
+    try:
+        conn.execute('ALTER TABLE volunteer_slots ADD COLUMN prev_claimed_by TEXT')
+        log.info('Migration: added volunteer_slots.prev_claimed_by')
+    except Exception:
+        pass  # Already exists
+
     conn.commit()
     conn.close()
     final_size_kb = os.path.getsize(abs_db) / 1024
@@ -3961,10 +3969,10 @@ def cancel_food_order():
                 (request_id,)
             )
 
-        # Release volunteer slots back to open so others can claim them
+        # Release volunteer slots back to open — preserve prev_claimed_by for portal history
         try:
             db.execute(
-                "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status='claimed'",
+                "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status='claimed'",
                 (now(), req['cycle_id'], family_id)
             )
         except Exception:
@@ -4311,7 +4319,10 @@ def portal_claim_slot():
 @require_portal_auth()
 def portal_my_tasks():
     vol_id = g.pv['volunteer_id']
-    rows = get_db().execute(
+    db = get_db()
+
+    # Active + completed assignments
+    rows = db.execute(
         '''SELECT vs.*, f.name as family_name, f.address, f.city, f.family_size, f.family_code,
                   dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
            FROM volunteer_slots vs
@@ -4324,11 +4335,33 @@ def portal_my_tasks():
     result = []
     for r in rows:
         row = dict(r)
-        # Shopping volunteers do NOT see family address
+        row['was_released'] = False
         if row['task_type'] == 'shopping':
             row['address'] = None
             row['city'] = None
         result.append(row)
+
+    # Recently released slots — where this volunteer was the last holder
+    # Only show slots from cycles in the last 60 days to avoid stale history
+    released = db.execute(
+        '''SELECT vs.*, f.name as family_name, f.family_code,
+                  dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
+           FROM volunteer_slots vs
+           JOIN families f ON vs.family_id = f.id
+           JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+           WHERE vs.prev_claimed_by=? AND vs.claimed_by != ?
+             AND vs.status IN ('open','claimed')
+             AND dc.delivery_date_start >= date('now', '-60 days')
+           ORDER BY dc.delivery_date_start DESC, vs.task_type''',
+        (vol_id, vol_id)
+    ).fetchall()
+    for r in released:
+        row = dict(r)
+        row['was_released'] = True
+        row['address'] = None  # never show address for released assignments
+        row['city'] = None
+        result.append(row)
+
     return jsonify(result)
 
 @app.route('/api/portal/complete/<slot_id>', methods=['POST'])
@@ -4715,21 +4748,50 @@ def update_volunteer_slot(sid):
     d = request.json or {}
 
     # Support assigning / unassigning a volunteer
-    claimed_by = d.get('claimed_by', slot['claimed_by'])
+    old_claimed_by = slot['claimed_by']
+    claimed_by = d.get('claimed_by', old_claimed_by)
     # If a volunteer is being assigned, auto-set status to claimed
     if 'claimed_by' in d:
         default_status = 'claimed' if d['claimed_by'] else 'open'
     else:
         default_status = slot['status']
 
+    # Track previous holder when slot is released or reassigned
+    prev_claimed_by = slot.get('prev_claimed_by')
+    if 'claimed_by' in d and old_claimed_by and old_claimed_by != d.get('claimed_by'):
+        prev_claimed_by = old_claimed_by
+
     db.execute(
         """UPDATE volunteer_slots
-           SET status=?, notes=?, task_date=?, claimed_by=?, updated_at=?
+           SET status=?, notes=?, task_date=?, claimed_by=?, prev_claimed_by=?, updated_at=?
            WHERE id=?""",
         (d.get('status', default_status), d.get('notes', slot['notes']),
-         d.get('task_date', slot['task_date']), claimed_by, now(), sid)
+         d.get('task_date', slot['task_date']), claimed_by, prev_claimed_by, now(), sid)
     )
     db.commit()
+
+    # Notify the displaced volunteer via WA
+    if 'claimed_by' in d and old_claimed_by and old_claimed_by != d.get('claimed_by'):
+        try:
+            old_vol = db.execute(
+                "SELECT name, wa_phone, wa_apikey FROM volunteers WHERE id=?", (old_claimed_by,)
+            ).fetchone()
+            if old_vol and old_vol['wa_phone'] and old_vol['wa_apikey']:
+                # Get family name for context
+                fam = db.execute(
+                    "SELECT f.name, dc.title FROM families f JOIN delivery_cycles dc ON dc.id=? WHERE f.id=?",
+                    (slot['cycle_id'], slot['family_id'])
+                ).fetchone()
+                fam_name = fam['name'] if fam else 'a family'
+                cycle_title = fam['title'] if fam else ''
+                action = 'reassigned to another volunteer' if d.get('claimed_by') else 'released back to open'
+                _wa_send(old_vol['wa_phone'], old_vol['wa_apikey'],
+                    f"Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) has been {action} by a coordinator. "
+                    f"No action needed from you."
+                )
+        except Exception as _e:
+            log.warning(f'update_volunteer_slot: WA notify failed: {_e}')
+
     row = db.execute(
         """SELECT vs.*, v.name as volunteer_name
            FROM volunteer_slots vs
@@ -4986,9 +5048,9 @@ def portal_cancel_slot(slot_id):
     ).fetchone()
     if not slot:
         return jsonify({'error': 'Not found or not yours'}), 404
-    # Release back to open — preserve the slot so another volunteer can claim it
+    # Release back to open — preserve prev_claimed_by for portal history
     db.execute(
-        "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE id=?",
+        "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE id=?",
         (now(), slot_id)
     )
     db.commit()
