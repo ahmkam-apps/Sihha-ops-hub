@@ -3551,6 +3551,28 @@ def check_food_order_eligibility():
         except Exception:
             can_cancel = False
 
+        # Always include the full bundle list as fallback — shown if selected_categories is empty
+        # (e.g. orders confirmed before per-item tracking was added, or manually confirmed)
+        bsize = existing['bundle_size'] or family['bundle_size'] or 'M'
+        bundle_item_rows = db.execute(
+            '''SELECT fi.id, fi.name, fi.unit,
+                      fc.name as category, fc.display_order as cat_order,
+                      fi.display_order as item_order,
+                      COALESCE(bq.quantity,'') as quantity
+               FROM food_items fi
+               JOIN food_categories fc ON fi.category_id = fc.id
+               LEFT JOIN bundle_quantities bq ON bq.food_item_id=fi.id AND bq.bundle_size=?
+               WHERE fi.is_active=1 AND fc.is_active=1
+               ORDER BY fc.display_order, fi.display_order''',
+            (bsize,)
+        ).fetchall()
+        bundle_cats = {}
+        for r in bundle_item_rows:
+            cat = r['category']
+            if cat not in bundle_cats:
+                bundle_cats[cat] = []
+            bundle_cats[cat].append({'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']})
+
         return jsonify({
             'registered': True, 'family_name': family['name'],
             'family_id': family['id'],
@@ -3565,6 +3587,7 @@ def check_food_order_eligibility():
             'delivery_end': cycle['delivery_date_end'],
             'cycle_title': cycle['title'],
             'selected_categories': [{'category': k, 'items': v} for k, v in sel_cats.items()],
+            'bundle_categories': [{'category': k, 'items': v} for k, v in bundle_cats.items()],
             'history': [dict(r) for r in history_rows2],
             'message': 'You have already submitted a request for this delivery cycle.'
         })
