@@ -240,45 +240,33 @@
 <!-- MAIN APP (hidden until logged in) -->
 <div id="app-screen" style="display:none">
 
-  <!-- MAIN VIEW: Tasks + Sign Up on one page -->
-  <div id="pane-main">
-    <div class="container">
-
-      <!-- MY TASKS section -->
-      <div class="section-divider">
-        <span>My Tasks</span>
-        <a href="#" onclick="showHistory();return false;"
-           style="font-size:11px;font-weight:600;color:var(--gray-4);text-decoration:none;text-transform:uppercase;letter-spacing:.05em;">
-          History →
-        </a>
-      </div>
-      <div id="tasks-content"><div class="spinner">Loading…</div></div>
-
-      <!-- SIGN UP section -->
-      <div class="section-divider" style="margin-top:32px;">
-        <span>Sign Up for Deliveries</span>
-      </div>
-      <!-- Cycle selector: only shown when there are no active (open/shopping) cycles -->
-      <div id="cycle-select-wrap" class="cycle-select-wrap" style="display:none;">
-        <label style="margin:0;white-space:nowrap">Delivery:</label>
-        <select id="cycle-select" onchange="loadFamiliesForCycle(this.value)">
-          <option value="">Loading…</option>
-        </select>
-      </div>
-      <div id="slots-content"><div class="empty">Loading deliveries…</div></div>
-
-    </div>
+  <!-- TAB BAR -->
+  <div class="tab-bar" id="main-tab-bar">
+    <div class="tab active" id="tab-tasks"   onclick="switchTab('tasks')">My Tasks</div>
+    <div class="tab"        id="tab-signup"  onclick="switchTab('signup')">Sign Up</div>
+    <div class="tab"        id="tab-history" onclick="switchTab('history')">History</div>
   </div>
 
-  <!-- HISTORY VIEW: separate page -->
-  <div id="pane-history" style="display:none">
-    <div class="container">
-      <div class="tab-bar">
-        <div class="tab active" onclick="showMain()">← Back</div>
-        <div class="tab" style="flex:2;pointer-events:none;color:var(--black);">History</div>
-      </div>
-      <div id="history-content"><div class="spinner">Loading…</div></div>
+  <!-- MY TASKS TAB -->
+  <div id="pane-tasks" class="container">
+    <div id="tasks-content"><div class="spinner">Loading…</div></div>
+  </div>
+
+  <!-- SIGN UP TAB -->
+  <div id="pane-signup" class="container" style="display:none">
+    <!-- Cycle selector: only shown when there are no active (open/shopping) cycles -->
+    <div id="cycle-select-wrap" class="cycle-select-wrap" style="display:none;">
+      <label style="margin:0;white-space:nowrap">Delivery:</label>
+      <select id="cycle-select" onchange="loadFamiliesForCycle(this.value)">
+        <option value="">Loading…</option>
+      </select>
     </div>
+    <div id="slots-content"><div class="spinner">Loading…</div></div>
+  </div>
+
+  <!-- HISTORY TAB -->
+  <div id="pane-history" class="container" style="display:none">
+    <div id="history-content"><div class="spinner">Loading…</div></div>
   </div>
 
 </div>
@@ -372,20 +360,24 @@ async function showApp() {
   document.getElementById('app-screen').style.display   = 'block';
   document.getElementById('vol-name-display').textContent = VOL.name;
   document.getElementById('logout-btn').style.display = 'inline-block';
-  // Load both sections in parallel
+  switchTab('tasks');
+  // Pre-load sign-up data in background
   loadCycles();
-  refreshTasks();
 }
 
-function showMain() {
-  document.getElementById('pane-main').style.display    = '';
-  document.getElementById('pane-history').style.display = 'none';
-}
+let _activeTab = 'tasks';
 
-function showHistory() {
-  document.getElementById('pane-main').style.display    = 'none';
-  document.getElementById('pane-history').style.display = '';
-  loadHistory();
+function switchTab(tab) {
+  _activeTab = tab;
+  // Update tab bar
+  ['tasks','signup','history'].forEach(t => {
+    document.getElementById('tab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('pane-' + t).style.display = t === tab ? '' : 'none';
+  });
+  // Load data on first visit to each tab
+  if (tab === 'tasks')   { refreshTasks(); }
+  if (tab === 'signup')  { loadCycles(); }
+  if (tab === 'history') { loadHistory(); }
 }
 
 // ── Cycles ────────────────────────────────────────────────────────────────────
