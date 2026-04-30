@@ -258,9 +258,10 @@
       <div class="section-divider" style="margin-top:32px;">
         <span>Sign Up for Deliveries</span>
       </div>
-      <div class="cycle-select-wrap">
+      <!-- Cycle selector: only shown when there are no active (open/shopping) cycles -->
+      <div id="cycle-select-wrap" class="cycle-select-wrap" style="display:none;">
         <label style="margin:0;white-space:nowrap">Delivery:</label>
-        <select id="cycle-select" onchange="loadFamilies()">
+        <select id="cycle-select" onchange="loadFamiliesForCycle(this.value)">
           <option value="">Loading…</option>
         </select>
       </div>
@@ -391,22 +392,29 @@ function showHistory() {
 async function loadCycles() {
   try {
     const cycles = await GET('/portal/cycles');
-    const sel = document.getElementById('cycle-select');
+
     if (!cycles.length) {
-      sel.innerHTML = '<option>No active cycles</option>';
       document.getElementById('slots-content').innerHTML =
         '<div class="empty">No delivery cycles are currently open. Check back soon.</div>';
       return;
     }
-    sel.innerHTML = cycles.map(c =>
-      `<option value="${c.id}">${c.title} · ${fmtDate(c.delivery_date_start)}</option>`
-    ).join('');
-    // Default to the most actionable cycle: open (families ordering) → shopping → first
-    const best = cycles.find(c => c.status === 'open')
-              || cycles.find(c => c.status === 'shopping')
-              || cycles[0];
-    sel.value = best.id;
-    loadFamilies();
+
+    const activeCycles = cycles.filter(c => c.status === 'open' || c.status === 'shopping');
+
+    if (activeCycles.length > 0) {
+      // Active cycles exist — load all of them without requiring volunteer to pick one
+      document.getElementById('cycle-select-wrap').style.display = 'none';
+      loadAllActiveFamilies(activeCycles);
+    } else {
+      // Only upcoming cycles — show selector so volunteer can browse
+      document.getElementById('cycle-select-wrap').style.display = '';
+      const sel = document.getElementById('cycle-select');
+      sel.innerHTML = cycles.map(c =>
+        `<option value="${c.id}">${c.title} · ${fmtDate(c.delivery_date_start)}</option>`
+      ).join('');
+      sel.value = cycles[0].id;
+      loadFamiliesForCycle(cycles[0].id);
+    }
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
@@ -414,110 +422,131 @@ async function loadCycles() {
 }
 
 // ── Family Sign-up ─────────────────────────────────────────────────────────────
-async function loadFamilies() {
-  const cycleId = document.getElementById('cycle-select').value;
-  if (!cycleId) return;
+
+// Load all open/shopping cycles' families in parallel — no selector needed
+async function loadAllActiveFamilies(activeCycles) {
   document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
-    const data = await GET('/portal/families/' + cycleId);
-    renderFamilies(data);
+    const results = await Promise.all(activeCycles.map(c => GET('/portal/families/' + c.id)));
+    renderMultipleCycles(results);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
   }
 }
 
-function renderFamilies(data) {
-  const { families, task_types, cycle } = data;
+// Fallback: load families for a single cycle (used when volunteer picks from dropdown)
+async function loadFamiliesForCycle(cycleId) {
+  if (!cycleId) return;
+  document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading…</div>';
+  try {
+    const data = await GET('/portal/families/' + cycleId);
+    renderMultipleCycles([data]);
+  } catch(e) {
+    if (e.message.includes('expired')) { logout(); return; }
+    document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
 
-  if (!families.length) {
+// Render one or more cycles' families, grouped under their cycle header
+function renderMultipleCycles(results) {
+  const anyFamilies = results.some(r => r.families && r.families.length > 0);
+  if (!anyFamilies) {
     document.getElementById('slots-content').innerHTML =
-      '<div class="empty">No active families found.</div>';
+      '<div class="empty">No active families found for current deliveries.</div>';
     return;
   }
 
-  const familyCard = (fam) => {
-    const addressBox = fam.address
-      ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
+  let html = '';
+  results.forEach((data, idx) => {
+    if (!data.families || !data.families.length) return;
+    const { families, task_types, cycle } = data;
 
-    // Order status badge
-    const orderBadge = fam.order_status
-      ? `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#e6f4ea;color:#1a7a3c;border-radius:3px;white-space:nowrap;">✓ Order placed</span>`
-      : `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#fff8e1;color:#b45309;border-radius:3px;white-space:nowrap;">⏳ No order yet</span>`;
-
-    const taskBtns = task_types.map(tt => {
-      const mySlotId  = fam.my_slots?.[tt.slug];
-      const takenBy   = fam.taken_by?.[tt.slug];
-      const myStatus  = fam.my_status?.[tt.slug];  // 'claimed' or 'confirmed'
-
-      if (mySlotId) {
-        const isConfirmed = myStatus === 'confirmed';
-        const btnBg    = isConfirmed ? 'var(--green)' : '#f0a500';
-        const btnLabel = isConfirmed
-          ? `✓ ${tt.label} — confirmed`
-          : `⏳ ${tt.label} — waiting for order`;
-        const btnTitle = isConfirmed
-          ? 'Family has placed their order — this is confirmed!'
-          : 'You are signed up — waiting for family to place their order';
-        return `<button
-          style="background:${btnBg};color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
-          title="${btnTitle}"
-          onclick="cancelSignup('${mySlotId}','${fam.id}')">
-          ${btnLabel} ×
-        </button>`;
-      }
-      if (takenBy) {
-        // Another volunteer already claimed this — show who, no button
-        return `<div
-          style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;font-size:12px;font-weight:600;background:#f0f0f0;color:#555;border:1px solid #ddd;">
-          👤 ${tt.label} — ${takenBy}
-        </div>`;
-      }
-      // Open — show signup button
-      return `<button
-        style="background:transparent;color:var(--black);border:1px solid var(--black);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
-        onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
-        ${tt.label}
-      </button>`;
-    }).join('');
-
-    return `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-          <div style="min-width:0;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-              <div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--black);">${fam.family_code || '—'}</div>
-              ${orderBadge}
-            </div>
-            <div class="card-meta">Family size: ${fam.family_size || '?'}</div>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">${taskBtns}</div>
-        </div>
-        ${addressBox}
+    // Cycle header — only show if there are multiple cycles
+    if (results.filter(r => r.families && r.families.length).length > 1) {
+      html += `<div style="margin-top:${idx > 0 ? '28px' : '0'};margin-bottom:10px;padding:8px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--black);">
+        📦 ${cycle.title} · Delivery ${fmtDate(cycle.delivery_date_start)}
       </div>`;
-  };
+    }
 
-  const withOrderCount = families.filter(f => f.order_status).length;
-  const openCount = families.filter(f =>
-    task_types.some(tt => !f.my_slots?.[tt.slug] && !f.taken_by?.[tt.slug])
-  ).length;
+    const withOrderCount = families.filter(f => f.order_status).length;
+    const openCount = families.filter(f =>
+      task_types.some(tt => !f.my_slots?.[tt.slug] && !f.taken_by?.[tt.slug])
+    ).length;
+    const heading = openCount > 0
+      ? `${families.length} families · ${withOrderCount} with orders · ${openCount} with open slots`
+      : `${families.length} families · ${withOrderCount} with orders · all slots filled`;
 
-  let heading;
-  if (openCount > 0) {
-    heading = `${families.length} families · ${withOrderCount} with orders · ${openCount} with open slots`;
-  } else {
-    heading = `${families.length} families · ${withOrderCount} with orders · all slots filled`;
-  }
+    html += `<div class="section-heading">${heading}</div>`;
+    html += families.map(fam => buildFamilyCard(fam, task_types, cycle)).join('');
+  });
 
-  document.getElementById('slots-content').innerHTML =
-    `<div class="section-heading">${heading}</div>` +
-    families.map(familyCard).join('');
+  document.getElementById('slots-content').innerHTML = html;
+}
+
+// Build a single family card — used by renderMultipleCycles
+function buildFamilyCard(fam, task_types, cycle) {
+  const addressBox = fam.address
+    ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
+
+  const orderBadge = fam.order_status
+    ? `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#e6f4ea;color:#1a7a3c;border-radius:3px;white-space:nowrap;">✓ Order placed</span>`
+    : `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#fff8e1;color:#b45309;border-radius:3px;white-space:nowrap;">⏳ No order yet</span>`;
+
+  const taskBtns = task_types.map(tt => {
+    const mySlotId = fam.my_slots?.[tt.slug];
+    const takenBy  = fam.taken_by?.[tt.slug];
+    const myStatus = fam.my_status?.[tt.slug];
+
+    if (mySlotId) {
+      const isConfirmed = myStatus === 'confirmed';
+      const btnBg    = isConfirmed ? 'var(--green)' : '#f0a500';
+      const btnLabel = isConfirmed
+        ? `✓ ${tt.label} — confirmed`
+        : `⏳ ${tt.label} — waiting for order`;
+      const btnTitle = isConfirmed
+        ? 'Family has placed their order — this is confirmed!'
+        : 'You are signed up — waiting for family to place their order';
+      return `<button
+        style="background:${btnBg};color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+        title="${btnTitle}"
+        onclick="cancelSignup('${mySlotId}','${fam.id}')">
+        ${btnLabel} ×
+      </button>`;
+    }
+    if (takenBy) {
+      return `<div
+        style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;font-size:12px;font-weight:600;background:#f0f0f0;color:#555;border:1px solid #ddd;">
+        👤 ${tt.label} — ${takenBy}
+      </div>`;
+    }
+    return `<button
+      style="background:transparent;color:var(--black);border:1px solid var(--black);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+      onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
+      ${tt.label}
+    </button>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+        <div style="min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+            <div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--black);">${fam.family_code || '—'}</div>
+            ${orderBadge}
+          </div>
+          <div class="card-meta">Family size: ${fam.family_size || '?'}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">${taskBtns}</div>
+      </div>
+      ${addressBox}
+    </div>`;
 }
 
 async function signUp(cycleId, familyId, taskType) {
   try {
     await POST('/portal/signup', { cycle_id: cycleId, family_id: familyId, task_types: [taskType] });
-    loadFamilies();
+    loadCycles();
     refreshTasks();
   } catch(e) { alert(e.message); }
 }
@@ -526,7 +555,7 @@ async function cancelSignup(slotId, familyId) {
   if (!confirm('Cancel your sign-up for this task?')) return;
   try {
     await api('DELETE', '/portal/cancel/' + slotId);
-    loadFamilies();
+    loadCycles();
     refreshTasks();
   } catch(e) { alert(e.message); }
 }
