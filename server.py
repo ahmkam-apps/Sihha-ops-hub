@@ -37,6 +37,7 @@ def get_db():
         g.db.row_factory = sqlite3.Row
         g.db.execute('PRAGMA journal_mode=WAL')
         g.db.execute('PRAGMA foreign_keys=ON')
+        g.db.execute('PRAGMA busy_timeout=5000')  # wait up to 5s on lock before erroring
     return g.db
 
 @app.teardown_appcontext
@@ -1185,6 +1186,20 @@ def _wa_send(phone, apikey, message):
     except Exception as e:
         log.warning(f'WhatsApp send failed to {phone}: {e}')
         return False
+
+
+def _wa_send_async(sends):
+    """Fire a list of WA messages in a background thread so the caller returns immediately.
+    sends: list of (phone, apikey, message) tuples — items with missing phone/apikey are skipped.
+    """
+    import threading as _t
+    items = [(p, k, m) for p, k, m in sends if p and k]
+    if not items:
+        return
+    def _run():
+        for phone, apikey, msg in items:
+            _wa_send(phone, apikey, msg)
+    _t.Thread(target=_run, daemon=True).start()
 
 def _today_central():
     """Return today's date in US Central time (America/Chicago).
@@ -4111,33 +4126,14 @@ def submit_food_order():
             qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
             item_lines.append(f"  • {ir['name']}{(' — ' + qty_str) if qty_str else ''}")
 
+    # Update slot statuses to confirmed (DB only — no WA yet)
     for slot in claimed_slots:
         db.execute(
             "UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?",
             (now(), slot['id'])
         )
-        if slot['wa_phone'] and slot['wa_apikey']:
-            try:
-                if slot['task_type'] == 'shopping':
-                    items_text = '\n'.join(item_lines) if item_lines else '  (no items selected)'
-                    msg = (f"✅ Order Confirmed — Shopping Task\n"
-                           f"Family: {slot['family_name']}\n"
-                           f"Delivery: {cycle['delivery_date_start']}\n\n"
-                           f"Shopping list:\n{items_text}\n\n"
-                           f"JazakAllah Khair!")
-                else:
-                    msg = (f"✅ Order Confirmed — Delivery Task\n"
-                           f"Family: {slot['family_name']}\n"
-                           f"Delivery: {cycle['delivery_date_start']}\n"
-                           f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\n"
-                           f"JazakAllah Khair!")
-                _wa_send(slot['wa_phone'], slot['wa_apikey'], msg)
-            except Exception:
-                pass
 
-    db.commit()
-
-    # Audit log + coordinator notification (after commit, non-fatal)
+    # Audit log (before commit so it's in the same transaction)
     try:
         _log_order_event(db, rid, 'confirmed', 'family', {
             'source': 'portal',
@@ -4146,16 +4142,45 @@ def submit_food_order():
         })
     except Exception:
         pass
+
+    db.commit()  # ← commit everything first, then notify in background
+
+    # Build all WA sends — snapshot to plain dicts (sqlite Row not safe across threads)
+    wa_sends = []
+    cycle_start = cycle['delivery_date_start']
+    items_text  = '\n'.join(item_lines) if item_lines else '  (no items selected)'
+    for slot in [dict(s) for s in claimed_slots]:
+        if slot.get('wa_phone') and slot.get('wa_apikey'):
+            if slot['task_type'] == 'shopping':
+                msg = (f"✅ Order Confirmed — Shopping Task\n"
+                       f"Family: {slot['family_name']}\n"
+                       f"Delivery: {cycle_start}\n\n"
+                       f"Shopping list:\n{items_text}\n\n"
+                       f"JazakAllah Khair!")
+            else:
+                msg = (f"✅ Order Confirmed — Delivery Task\n"
+                       f"Family: {slot['family_name']}\n"
+                       f"Delivery: {cycle_start}\n"
+                       f"Address: {slot.get('address') or 'TBD'}, {slot.get('city') or ''}\n\n"
+                       f"JazakAllah Khair!")
+            wa_sends.append((slot['wa_phone'], slot['wa_apikey'], msg))
+
+    coord_msg = (
+        f"New order placed via portal:\n"
+        f"Family: {family['name']}\n"
+        f"Cycle: {cycle['title']}\n"
+        f"Items selected: {len(selected_ids)}"
+        + (f"\nNotes: {family_notes}" if family_notes else '')
+    )
     try:
-        _notify_coordinators(db,
-            f"New order placed via portal:\n"
-            f"Family: {family['name']}\n"
-            f"Cycle: {cycle['title']}\n"
-            f"Items selected: {len(selected_ids)}"
-            + (f"\nNotes: {family_notes}" if family_notes else '')
-        )
+        for a in db.execute(
+            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
+        ).fetchall():
+            wa_sends.append((a['wa_phone'], a['wa_apikey'], coord_msg))
     except Exception:
         pass
+
+    _wa_send_async(wa_sends)  # fire-and-forget — response returns immediately
 
     log.info(f'Food order placed: family {data["family_id"]} cycle {data["cycle_id"]} — {slots_created} new slots, {len(claimed_slots)} slots confirmed')
     return jsonify({
@@ -4236,24 +4261,37 @@ def cancel_food_order():
 
         _log_order_event(db, request_id, 'cancelled', actor='family',
                          payload={'days_until_delivery': days_until})
-        db.commit()
 
-        # Notify coordinators
-        _notify_coordinators(db,
-            f"Order cancelled by family:\n"
-            f"Family: {req['family_name']} ({req['family_code']})\n"
-            f"Cycle: {req['cycle_title']}\n"
-            f"Days until delivery: {days_until}\n"
-            f"Volunteer slots released back to open."
-        )
+        # Gather coordinator WA details before commit (still have DB context)
+        coord_sends = []
+        try:
+            coord_msg = (
+                f"Order cancelled by family:\n"
+                f"Family: {req['family_name']} ({req['family_code']})\n"
+                f"Cycle: {req['cycle_title']}\n"
+                f"Days until delivery: {days_until}\n"
+                f"Volunteer slots released back to open."
+            )
+            for a in db.execute(
+                "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
+            ).fetchall():
+                coord_sends.append((a['wa_phone'], a['wa_apikey'], coord_msg))
+        except Exception:
+            pass
 
-        # Notify any volunteers whose slots were released
+        # Gather volunteer notification sends
+        vol_sends = []
         for vol in claimed_volunteers:
             if vol['wa_phone'] and vol['wa_apikey']:
-                _wa_send(vol['wa_phone'], vol['wa_apikey'],
+                vol_sends.append((vol['wa_phone'], vol['wa_apikey'],
                     f"Update: {req['family_name']} has cancelled their food order for {req['cycle_title']}.\n"
                     f"Your {vol['task_type']} slot has been released — no action needed."
-                )
+                ))
+
+        db.commit()
+
+        # Fire all WA notifications in background — response returns immediately
+        _wa_send_async(coord_sends + vol_sends)
 
         log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
         return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
