@@ -3970,7 +3970,7 @@ def check_food_order_eligibility():
                JOIN volunteers v ON vs.claimed_by = v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed')
                ORDER BY vs.task_type''',
-            (cycle['id'], existing['family_id'] if hasattr(existing, 'keys') else family['id'])
+            (cycle['id'], family['id'])
         ).fetchall()
         volunteers = {}
         for vs in vol_slots:
