@@ -672,12 +672,40 @@ function renderDeliveries() {
     container.innerHTML = `
       <div class="no-cycles">
         <div style="font-size:22px;margin-bottom:8px;">📦</div>
-        <div>${L === 'ar' ? 'لا توجد تسليمات قادمة خلال الـ 30 يوماً القادمة.' : 'No upcoming deliveries in the next 30 days.'}</div>
+        <div>${L === 'ar' ? 'لا توجد تسليمات قادمة.' : 'No upcoming deliveries.'}</div>
         <div style="font-size:13px;margin-top:6px;color:var(--gray-4)">${L === 'ar' ? 'تحقق مجدداً قريباً.' : 'Check back soon.'}</div>
       </div>`;
     return;
   }
-  container.innerHTML = STATE.cycles.map(cycle => renderCycleCard(cycle)).join('');
+
+  // Active orders (confirmed / pending / submitted) — shown first
+  const withOrder  = STATE.cycles.filter(c => c.order && !['cancelled','skipped'].includes(c.order.status));
+  // Cancelled/skipped in the current window — still browsable but below
+  const terminal   = STATE.cycles.filter(c => c.order && ['cancelled','skipped'].includes(c.order.status));
+  // Everything without an order
+  const noOrder    = STATE.cycles.filter(c => !c.order);
+
+  const sectionLabel = (text) =>
+    `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin:18px 0 8px;">${text}</div>`;
+
+  let html = '';
+
+  if (withOrder.length) {
+    html += sectionLabel(L === 'ar' ? 'طلبك الحالي' : 'Your Order');
+    html += withOrder.map(c => renderCycleCard(c)).join('');
+  }
+
+  if (noOrder.length) {
+    html += sectionLabel(L === 'ar' ? 'تسليمات قادمة' : 'Upcoming Deliveries');
+    html += noOrder.map(c => renderCycleCard(c)).join('');
+  }
+
+  if (terminal.length) {
+    html += sectionLabel(L === 'ar' ? 'دورات سابقة' : 'Previous');
+    html += terminal.map(c => renderCycleCard(c)).join('');
+  }
+
+  container.innerHTML = html;
 }
 
 function fmtDate(s) {
@@ -814,10 +842,24 @@ function renderOrderBody(cid, ord) {
           </div>`).join('')}
       </div>`;
   } else if (isTerminal) {
-    const msg = ord.status === 'cancelled'
-      ? (L === 'ar' ? 'لقد ألغيت هذا الطلب.' : 'You cancelled this order.')
-      : (L === 'ar' ? 'تم تخطي هذه الدورة.' : 'You skipped this cycle.');
-    itemsHtml = `<div class="locked-note" style="color:var(--gray-4)">${msg}</div>`;
+    let msg, msgStyle;
+    if (ord.status === 'cancelled') {
+      const cancelEvent = (ord.events || []).slice().reverse().find(ev => ev.event_type === 'cancelled');
+      const byAdmin = cancelEvent && cancelEvent.actor === 'admin';
+      if (byAdmin) {
+        msg = L === 'ar'
+          ? 'تم إلغاء هذا الطلب من قِبل الفريق. يمكنك تقديم طلب جديد لهذه الدورة.'
+          : 'This order was cancelled by our team. You\'re welcome to place a new order for this delivery.';
+        msgStyle = 'color:var(--amber-border);background:var(--amber-bg);padding:12px 14px;border-radius:8px;border-left:3px solid var(--amber-border);font-size:13px;';
+      } else {
+        msg = L === 'ar' ? 'لقد ألغيت هذا الطلب.' : 'You cancelled this order.';
+        msgStyle = 'color:var(--gray-4)';
+      }
+    } else {
+      msg = L === 'ar' ? 'تم تخطي هذه الدورة.' : 'You skipped this cycle.';
+      msgStyle = 'color:var(--gray-4)';
+    }
+    itemsHtml = `<div class="locked-note" style="${msgStyle}">${msg}</div>`;
   }
 
   // ── Change review result banner ──
@@ -879,6 +921,32 @@ function renderOrderBody(cid, ord) {
     }
   }
 
+  // ── Volunteer assignment strip ──
+  let volHtml = '';
+  if (!isTerminal && ord.volunteers && Object.keys(ord.volunteers).length > 0) {
+    const vols = ord.volunteers;
+    const slots = [];
+    if (vols.shopping) {
+      const icon = vols.shopping.confirmed ? '✓' : '⏳';
+      const label = L === 'ar' ? 'المتسوق' : 'Shopper';
+      const statusNote = vols.shopping.confirmed
+        ? (L === 'ar' ? 'مؤكد' : 'confirmed')
+        : (L === 'ar' ? 'في الانتظار' : 'pending your order');
+      slots.push(`<span style="font-size:12px;color:var(--gray-5)">${icon} <strong>${label}:</strong> ${escHtml(vols.shopping.name)} <span style="color:var(--gray-4)">(${statusNote})</span></span>`);
+    }
+    if (vols.delivery) {
+      const icon = vols.delivery.confirmed ? '✓' : '⏳';
+      const label = L === 'ar' ? 'المندوب' : 'Delivery';
+      const statusNote = vols.delivery.confirmed
+        ? (L === 'ar' ? 'مؤكد' : 'confirmed')
+        : (L === 'ar' ? 'في الانتظار' : 'pending your order');
+      slots.push(`<span style="font-size:12px;color:var(--gray-5)">${icon} <strong>${label}:</strong> ${escHtml(vols.delivery.name)} <span style="color:var(--gray-4)">(${statusNote})</span></span>`);
+    }
+    if (slots.length) {
+      volHtml = `<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;padding:10px 14px;background:#f7f7f7;border-radius:6px;border-left:3px solid var(--gray-2)">${slots.join('')}</div>`;
+    }
+  }
+
   // ── Actions ──
   let actionsHtml = '';
   if (!isTerminal) {
@@ -917,7 +985,7 @@ function renderOrderBody(cid, ord) {
   );
   const eventsHtml = renderEventsSection(cid, ord.events || [], hasChangeHistory);
 
-  return itemsHtml + reviewBannerHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
+  return itemsHtml + reviewBannerHtml + volHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
 }
 
 // ── Change request form ────────────────────────────────────────────────────────

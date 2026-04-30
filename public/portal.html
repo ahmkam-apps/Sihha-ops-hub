@@ -346,13 +346,30 @@ function logout() {
   document.getElementById('logout-btn').style.display = 'none';
 }
 
-function showApp() {
+async function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-screen').style.display   = 'block';
   document.getElementById('vol-name-display').textContent = VOL.name;
   document.getElementById('logout-btn').style.display = 'inline-block';
   loadCycles();
-  loadMyTasks();
+  // Pre-fetch tasks + receipts; auto-switch to My Tasks if volunteer has active commitments
+  try {
+    const [tasks, receipts] = await Promise.all([
+      GET('/portal/my-tasks'),
+      GET('/portal/receipts').catch(() => [])
+    ]);
+    const hasActive = tasks.some(t => !t.was_released && ['claimed','confirmed'].includes(t.status));
+    if (hasActive) {
+      // Switch tab without triggering another fetch — tasks are already loaded below
+      ['open', 'mytasks', 'history'].forEach(t => {
+        document.getElementById('pane-' + t).style.display = t === 'mytasks' ? '' : 'none';
+        document.getElementById('tab-'  + t).classList.toggle('active', t === 'mytasks');
+      });
+    }
+    _renderMyTasksData(tasks, receipts);
+  } catch(e) {
+    // Fallback: stay on Sign Up tab; My Tasks will load on demand when tab is clicked
+  }
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -507,6 +524,169 @@ async function cancelSignup(slotId, familyId) {
 // ── My Tasks ──────────────────────────────────────────────────────────────────
 let _receipts = [];  // cached receipt list for cross-referencing
 
+// Pure render — called by both loadMyTasks() and showApp()
+function _renderMyTasksData(tasks, receipts) {
+  receipts = receipts || [];
+  _receipts = receipts;
+
+  const active   = tasks.filter(t => !t.was_released);
+  const released = tasks.filter(t =>  t.was_released);
+
+  if (!active.length && !released.length) {
+    document.getElementById('tasks-content').innerHTML =
+      '<div class="empty">You have no tasks yet. Go to Open Slots to sign up.</div>';
+    return;
+  }
+
+  // Split active into confirmed (family ordered) vs waiting (no order yet)
+  const confirmed = active.filter(t => t.status === 'confirmed');
+  const waiting   = active.filter(t => t.status === 'claimed');
+  const completed = active.filter(t => t.status === 'complete');
+
+  const renderTask = (t) => {
+    const isDelivery = t.task_type === 'delivery';
+    const isDone     = t.status === 'complete';
+    const isShopping = !isDelivery;
+    const isPending  = t.status === 'claimed';
+
+    const receipt = receipts.find(r => r.slot_id === t.id);
+
+    const addressBox = isDelivery && !isPending && t.address
+      ? `<div class="address-box" style="margin-top:10px">📍 ${t.address}, ${t.city}</div>` : '';
+
+    const markBtn = (isDelivery && !isDone && !isPending)
+      ? `<button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')">Mark Complete</button>` : '';
+
+    // Shopping item list (only shown for confirmed shopping tasks)
+    let itemListSection = '';
+    if (isShopping && !isPending && t.shopping_items && t.shopping_items.length > 0) {
+      const itemRows = t.shopping_items.map(item =>
+        `<tr>
+          <td style="padding:4px 8px;font-size:13px;">${item.name}</td>
+          <td style="padding:4px 8px;font-size:13px;text-align:center;font-weight:600;">${item.qty}</td>
+        </tr>`
+      ).join('');
+      itemListSection = `
+        <div style="margin-top:10px;border:1px solid var(--gray-2);border-radius:6px;overflow:hidden;">
+          <div style="background:var(--gray-1);padding:6px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#555;">
+            🛒 Shopping List
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="padding:4px 8px;font-size:11px;text-align:left;color:#888;border-bottom:1px solid var(--gray-2);">Item</th>
+              <th style="padding:4px 8px;font-size:11px;text-align:center;color:#888;border-bottom:1px solid var(--gray-2);">Qty</th>
+            </tr></thead>
+            <tbody>${itemRows}</tbody>
+          </table>
+        </div>`;
+    } else if (isShopping && !isPending && (!t.shopping_items || t.shopping_items.length === 0)) {
+      itemListSection = `<div style="margin-top:8px;font-size:12px;color:#888;">No specific items requested yet.</div>`;
+    }
+
+    let receiptSection = '';
+    if (isShopping && !isPending) {
+      if (receipt) {
+        const rs = receipt.reimbursement_status || receipt.receipt_status;
+        const rsClass = rs === 'paid' ? 'reimb-paid' : rs === 'rejected' ? 'reimb-rejected' : 'reimb-pending';
+        const rsLabel = rs === 'paid'
+          ? `✅ Reimbursed${receipt.payment_method ? ' via ' + receipt.payment_method : ''}`
+          : rs === 'rejected' ? '❌ Rejected — resubmit below'
+          : '⏳ Pending Review';
+        receiptSection = `
+          <div style="margin-top:10px;padding:10px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:13px;border-radius:6px">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+              <div>
+                <strong>Receipt:</strong> $${Number(receipt.amount||0).toFixed(2)}${receipt.store ? ' · ' + receipt.store : ''}
+                <span class="reimb-status ${rsClass}">${rsLabel}</span>
+                ${receipt.file_url ? `<br><a href="${receipt.file_url}" target="_blank" style="font-size:12px;color:var(--green)">View photo →</a>` : ''}
+              </div>
+              <button class="btn btn-outline btn-sm" onclick="openReceiptModal('${t.id}')">✏️ Update Receipt</button>
+            </div>
+          </div>`;
+      } else if (!isPending) {
+        receiptSection = `
+          <div style="margin-top:10px">
+            <button class="btn btn-green btn-sm" onclick="openReceiptModal('${t.id}')">📷 Submit Receipt</button>
+          </div>`;
+      }
+    }
+
+    // Pending note for waiting tasks
+    const pendingNote = isPending
+      ? `<div style="margin-top:6px;font-size:12px;color:#b45309;padding:6px 8px;background:#fff8e1;border-radius:4px;">
+          ⏳ Slot reserved — this becomes active once the family places their order. You'll receive a WhatsApp notification.
+         </div>` : '';
+
+    const cardBorder = isPending ? 'border-left:3px solid #f0a500;' : '';
+
+    return `
+      <div class="card" style="${cardBorder}">
+        <div class="card-row">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="badge badge-${isDelivery?'delivery':'shopping'}">${t.task_type}</span>
+              ${isPending
+                ? `<span style="font-size:11px;font-weight:700;color:#b45309;background:#fff8e1;padding:2px 6px;border-radius:3px;">Pending order</span>`
+                : isDone
+                  ? `<span class="badge badge-complete">complete</span>`
+                  : `<span style="font-size:11px;font-weight:700;color:#1a7a3c;background:#e6f4ea;padding:2px 6px;border-radius:3px;">Confirmed</span>`
+              }
+            </div>
+            <div class="card-title" style="font-family:monospace;letter-spacing:1px">${t.family_code||t.family_name}</div>
+            <div class="card-meta">${t.cycle_title} · Delivery by ${fmtDate(t.delivery_date_end)}</div>
+          </div>
+          <div>${markBtn}</div>
+        </div>
+        ${pendingNote}
+        ${addressBox}
+        ${itemListSection}
+        ${receiptSection}
+      </div>`;
+  };
+
+  const renderReleased = t => `
+    <div class="card" style="opacity:0.75;border-left:3px solid #c00;">
+      <div class="card-row">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span class="badge badge-${t.task_type==='delivery'?'delivery':'shopping'}">${t.task_type}</span>
+            <span style="font-size:11px;font-weight:700;color:#c00;text-transform:uppercase;letter-spacing:.5px">Removed</span>
+          </div>
+          <div class="card-title" style="font-family:monospace;letter-spacing:1px">${t.family_code||t.family_name}</div>
+          <div class="card-meta">${t.cycle_title} · Delivery by ${fmtDate(t.delivery_date_end)}</div>
+          <div style="font-size:12px;color:#888;margin-top:4px">This assignment was cancelled or reassigned by a coordinator.</div>
+        </div>
+      </div>
+    </div>`;
+
+  const sectionLabel = (text) =>
+    `<div style="margin-top:20px;margin-bottom:8px;font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;">${text}</div>`;
+
+  let html = '';
+
+  if (confirmed.length) {
+    if (waiting.length || completed.length || released.length) html += sectionLabel(`✓ Confirmed (${confirmed.length})`);
+    html += confirmed.map(t => renderTask(t)).join('');
+  }
+  if (waiting.length) {
+    html += sectionLabel(`⏳ Waiting for Family Order (${waiting.length})`);
+    html += waiting.map(t => renderTask(t)).join('');
+  }
+  if (completed.length) {
+    html += sectionLabel(`Done (${completed.length})`);
+    html += completed.map(t => renderTask(t)).join('');
+  }
+  if (!confirmed.length && !waiting.length && !completed.length) {
+    html = '<div class="empty">You have no active tasks. Go to Open Slots to sign up.</div>';
+  }
+  if (released.length) {
+    html += sectionLabel('Removed Assignments');
+    html += released.map(renderReleased).join('');
+  }
+
+  document.getElementById('tasks-content').innerHTML = html;
+}
+
 async function loadMyTasks() {
   document.getElementById('tasks-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
@@ -514,164 +694,7 @@ async function loadMyTasks() {
       GET('/portal/my-tasks'),
       GET('/portal/receipts').catch(() => [])
     ]);
-    _receipts = receipts;
-
-    const active   = tasks.filter(t => !t.was_released);
-    const released = tasks.filter(t =>  t.was_released);
-
-    if (!active.length && !released.length) {
-      document.getElementById('tasks-content').innerHTML =
-        '<div class="empty">You have no tasks yet. Go to Open Slots to sign up.</div>';
-      return;
-    }
-
-    // Split active into confirmed (family ordered) vs waiting (no order yet)
-    const confirmed = active.filter(t => t.status === 'confirmed');
-    const waiting   = active.filter(t => t.status === 'claimed');
-    const completed = active.filter(t => t.status === 'complete');
-
-    const renderTask = (t, opts = {}) => {
-      const isDelivery = t.task_type === 'delivery';
-      const isDone     = t.status === 'complete';
-      const isShopping = !isDelivery;
-      const isPending  = t.status === 'claimed';
-
-      const receipt = receipts.find(r => r.slot_id === t.id);
-
-      const addressBox = isDelivery && !isPending && t.address
-        ? `<div class="address-box" style="margin-top:10px">📍 ${t.address}, ${t.city}</div>` : '';
-
-      const markBtn = (isDelivery && !isDone && !isPending)
-        ? `<button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')">Mark Complete</button>` : '';
-
-      // Shopping item list (only shown for confirmed shopping tasks)
-      let itemListSection = '';
-      if (isShopping && !isPending && t.shopping_items && t.shopping_items.length > 0) {
-        const itemRows = t.shopping_items.map(item =>
-          `<tr>
-            <td style="padding:4px 8px;font-size:13px;">${item.name}</td>
-            <td style="padding:4px 8px;font-size:13px;text-align:center;font-weight:600;">${item.qty}</td>
-          </tr>`
-        ).join('');
-        itemListSection = `
-          <div style="margin-top:10px;border:1px solid var(--gray-2);border-radius:6px;overflow:hidden;">
-            <div style="background:var(--gray-1);padding:6px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#555;">
-              🛒 Shopping List
-            </div>
-            <table style="width:100%;border-collapse:collapse;">
-              <thead><tr>
-                <th style="padding:4px 8px;font-size:11px;text-align:left;color:#888;border-bottom:1px solid var(--gray-2);">Item</th>
-                <th style="padding:4px 8px;font-size:11px;text-align:center;color:#888;border-bottom:1px solid var(--gray-2);">Qty</th>
-              </tr></thead>
-              <tbody>${itemRows}</tbody>
-            </table>
-          </div>`;
-      } else if (isShopping && !isPending && (!t.shopping_items || t.shopping_items.length === 0)) {
-        itemListSection = `<div style="margin-top:8px;font-size:12px;color:#888;">No specific items requested yet.</div>`;
-      }
-
-      let receiptSection = '';
-      if (isShopping && !isPending) {
-        if (receipt) {
-          const rs = receipt.reimbursement_status || receipt.receipt_status;
-          const rsClass = rs === 'paid' ? 'reimb-paid' : rs === 'rejected' ? 'reimb-rejected' : 'reimb-pending';
-          const rsLabel = rs === 'paid'
-            ? `✅ Reimbursed${receipt.payment_method ? ' via ' + receipt.payment_method : ''}`
-            : rs === 'rejected' ? '❌ Rejected — resubmit below'
-            : '⏳ Pending Review';
-          receiptSection = `
-            <div style="margin-top:10px;padding:10px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:13px;border-radius:6px">
-              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-                <div>
-                  <strong>Receipt:</strong> $${Number(receipt.amount||0).toFixed(2)}${receipt.store ? ' · ' + receipt.store : ''}
-                  <span class="reimb-status ${rsClass}">${rsLabel}</span>
-                  ${receipt.file_url ? `<br><a href="${receipt.file_url}" target="_blank" style="font-size:12px;color:var(--green)">View photo →</a>` : ''}
-                </div>
-                <button class="btn btn-outline btn-sm" onclick="openReceiptModal('${t.id}')">✏️ Update Receipt</button>
-              </div>
-            </div>`;
-        } else if (!isPending) {
-          receiptSection = `
-            <div style="margin-top:10px">
-              <button class="btn btn-green btn-sm" onclick="openReceiptModal('${t.id}')">📷 Submit Receipt</button>
-            </div>`;
-        }
-      }
-
-      // Pending note for waiting tasks
-      const pendingNote = isPending
-        ? `<div style="margin-top:6px;font-size:12px;color:#b45309;padding:6px 8px;background:#fff8e1;border-radius:4px;">
-            ⏳ Slot reserved — this becomes active once the family places their order. You'll receive a WhatsApp notification.
-           </div>` : '';
-
-      const cardBorder = isPending ? 'border-left:3px solid #f0a500;' : '';
-
-      return `
-        <div class="card" style="${cardBorder}">
-          <div class="card-row">
-            <div>
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                <span class="badge badge-${isDelivery?'delivery':'shopping'}">${t.task_type}</span>
-                ${isPending
-                  ? `<span style="font-size:11px;font-weight:700;color:#b45309;background:#fff8e1;padding:2px 6px;border-radius:3px;">Pending order</span>`
-                  : isDone
-                    ? `<span class="badge badge-complete">complete</span>`
-                    : `<span style="font-size:11px;font-weight:700;color:#1a7a3c;background:#e6f4ea;padding:2px 6px;border-radius:3px;">Confirmed</span>`
-                }
-              </div>
-              <div class="card-title" style="font-family:monospace;letter-spacing:1px">${t.family_code||t.family_name}</div>
-              <div class="card-meta">${t.cycle_title} · Delivery by ${fmtDate(t.delivery_date_end)}</div>
-            </div>
-            <div>${markBtn}</div>
-          </div>
-          ${pendingNote}
-          ${addressBox}
-          ${itemListSection}
-          ${receiptSection}
-        </div>`;
-    };
-
-    const renderReleased = t => `
-      <div class="card" style="opacity:0.75;border-left:3px solid #c00;">
-        <div class="card-row">
-          <div>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-              <span class="badge badge-${t.task_type==='delivery'?'delivery':'shopping'}">${t.task_type}</span>
-              <span style="font-size:11px;font-weight:700;color:#c00;text-transform:uppercase;letter-spacing:.5px">Removed</span>
-            </div>
-            <div class="card-title" style="font-family:monospace;letter-spacing:1px">${t.family_code||t.family_name}</div>
-            <div class="card-meta">${t.cycle_title} · Delivery by ${fmtDate(t.delivery_date_end)}</div>
-            <div style="font-size:12px;color:#888;margin-top:4px">This assignment was cancelled or reassigned by a coordinator.</div>
-          </div>
-        </div>
-      </div>`;
-
-    const sectionLabel = (text) =>
-      `<div style="margin-top:20px;margin-bottom:8px;font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;">${text}</div>`;
-
-    let html = '';
-
-    if (confirmed.length) {
-      if (waiting.length || completed.length || released.length) html += sectionLabel(`✓ Confirmed (${confirmed.length})`);
-      html += confirmed.map(t => renderTask(t)).join('');
-    }
-    if (waiting.length) {
-      html += sectionLabel(`⏳ Waiting for Family Order (${waiting.length})`);
-      html += waiting.map(t => renderTask(t)).join('');
-    }
-    if (completed.length) {
-      html += sectionLabel(`Done (${completed.length})`);
-      html += completed.map(t => renderTask(t)).join('');
-    }
-    if (!confirmed.length && !waiting.length && !completed.length) {
-      html = '<div class="empty">You have no active tasks. Go to Open Slots to sign up.</div>';
-    }
-    if (released.length) {
-      html += sectionLabel('Removed Assignments');
-      html += released.map(renderReleased).join('');
-    }
-
-    document.getElementById('tasks-content').innerHTML = html;
+    _renderMyTasksData(tasks, receipts);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('tasks-content').innerHTML = `<div class="empty">${e.message}</div>`;
