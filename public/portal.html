@@ -246,7 +246,7 @@
     <div class="tab"        id="tab-history" onclick="switchTab('history')">History</div>
   </div>
 
-  <!-- MAIN TAB: My Sign-Ups + Available -->
+  <!-- MAIN TAB: My Sign-Ups + Active + Upcoming -->
   <div id="pane-main" class="container">
 
     <!-- MY SIGN-UPS -->
@@ -255,11 +255,17 @@
     </div>
     <div id="my-signups-content"><div class="spinner">Loading…</div></div>
 
-    <!-- AVAILABLE TO SIGN UP -->
+    <!-- ACTIVE DELIVERIES -->
     <div class="section-divider" style="margin-top:32px;">
-      <span>Available Families</span>
+      <span id="active-section-label">Active Deliveries</span>
     </div>
     <div id="slots-content"><div class="spinner">Loading…</div></div>
+
+    <!-- UPCOMING DELIVERIES -->
+    <div class="section-divider" style="margin-top:32px;" id="upcoming-section-header" style="display:none">
+      <span>Upcoming Deliveries</span>
+    </div>
+    <div id="upcoming-content"></div>
 
   </div>
 
@@ -415,6 +421,7 @@ async function refreshAll() {
     ]);
     renderMySignups(tasks, receipts);
     renderAvailable(cyclesData, tasks);
+    renderUpcoming(cyclesData);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('my-signups-content').innerHTML = `<div class="empty">${e.message}</div>`;
@@ -488,14 +495,20 @@ function renderMySignups(tasks, receipts) {
   document.getElementById('my-signups-content').innerHTML = html;
 }
 
-// ── Available Families ────────────────────────────────────────────────────────
+// ── Active Deliveries ─────────────────────────────────────────────────────────
 async function renderAvailable(cycles, myTasks) {
   const activeCycles = cycles.filter(c => c.status === 'open' || c.status === 'shopping');
   if (!activeCycles.length) {
+    document.getElementById('active-section-label').textContent = 'Active Deliveries';
     document.getElementById('slots-content').innerHTML =
       '<div class="empty">No active delivery cycles right now.</div>';
     return;
   }
+  // Label with cycle date(s)
+  const label = activeCycles.length === 1
+    ? `Active · ${fmtDate(activeCycles[0].delivery_date_start)}`
+    : `Active Deliveries`;
+  document.getElementById('active-section-label').textContent = label;
   document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
     const results = await Promise.all(activeCycles.map(c => GET('/portal/families/' + c.id)));
@@ -504,6 +517,101 @@ async function renderAvailable(cycles, myTasks) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
   }
+}
+
+// ── Upcoming Deliveries (accordion) ───────────────────────────────────────────
+const _upcomingCache = {};  // cycleId → families data (lazy loaded)
+
+function renderUpcoming(cycles) {
+  const upcoming = cycles.filter(c => c.status === 'upcoming');
+  const header   = document.getElementById('upcoming-section-header');
+  const wrap     = document.getElementById('upcoming-content');
+
+  if (!upcoming.length) { header.style.display = 'none'; wrap.innerHTML = ''; return; }
+  header.style.display = '';
+
+  wrap.innerHTML = upcoming.map((c, i) => `
+    <div class="card" style="padding:0;margin-bottom:8px;overflow:hidden;" id="upcoming-row-${c.id}">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;background:var(--gray-1);"
+           onclick="toggleUpcoming('${c.id}')">
+        <div>
+          <div style="font-size:14px;font-weight:700;">${c.title}</div>
+          <div style="font-size:12px;color:var(--gray-4);margin-top:2px;">${fmtDate(c.delivery_date_start)} · ${c.open_slots ?? '—'} open slots</div>
+        </div>
+        <span id="upcoming-icon-${c.id}" style="font-size:18px;font-weight:300;color:var(--gray-4);line-height:1;">+</span>
+      </div>
+      <div id="upcoming-families-${c.id}" style="display:none;"></div>
+    </div>`
+  ).join('');
+}
+
+async function toggleUpcoming(cycleId) {
+  const familiesEl = document.getElementById('upcoming-families-' + cycleId);
+  const iconEl     = document.getElementById('upcoming-icon-' + cycleId);
+  const isOpen     = familiesEl.style.display !== 'none';
+
+  if (isOpen) {
+    familiesEl.style.display = 'none';
+    iconEl.textContent = '+';
+    return;
+  }
+
+  iconEl.textContent = '−';
+  familiesEl.style.display = 'block';
+
+  // Already loaded — just show
+  if (_upcomingCache[cycleId]) {
+    renderUpcomingFamilies(cycleId, _upcomingCache[cycleId]);
+    return;
+  }
+
+  familiesEl.innerHTML = '<div class="spinner" style="padding:16px;">Loading…</div>';
+  try {
+    const data = await GET('/portal/families/' + cycleId);
+    _upcomingCache[cycleId] = data;
+    renderUpcomingFamilies(cycleId, data);
+  } catch(e) {
+    familiesEl.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+function renderUpcomingFamilies(cycleId, data) {
+  const { families, task_types, cycle } = data;
+  const el = document.getElementById('upcoming-families-' + cycleId);
+  if (!families || !families.length) {
+    el.innerHTML = '<div class="empty" style="padding:12px;">No families yet.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="border-top:0.5px solid var(--gray-2);">' +
+    families.map(fam => {
+      const taskBtns = task_types.map(tt => {
+        const mySlotId = fam.my_slots?.[tt.slug];
+        const takenBy  = fam.taken_by?.[tt.slug];
+        const myStatus = fam.my_status?.[tt.slug];
+        if (mySlotId) {
+          const isConfirmed = myStatus === 'confirmed';
+          const bg = isConfirmed ? 'var(--green)' : '#f0a500';
+          return `<button style="background:${bg};color:#fff;border:none;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);"
+            onclick="cancelSignup('${mySlotId}','${fam.id}')">
+            ${tt.label} ×</button>`;
+        }
+        if (takenBy) {
+          return `<span style="font-size:11px;padding:4px 8px;background:#f0f0f0;color:#555;border:1px solid #ddd;">
+            ${tt.label}: ${takenBy}</span>`;
+        }
+        return `<button style="background:transparent;color:var(--black);border:1px solid var(--black);padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);"
+          onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
+          ${tt.label}</button>`;
+      }).join('');
+
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:0.5px solid var(--gray-2);flex-wrap:wrap;gap:6px;">
+        <div>
+          <span style="font-family:monospace;font-size:14px;font-weight:700;">${fam.family_code || '—'}</span>
+          <span style="font-size:11px;color:var(--gray-4);margin-left:8px;">Size: ${fam.family_size || '?'}</span>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">${taskBtns}</div>
+      </div>`;
+    }).join('') + '</div>';
 }
 
 function renderFamilySlots(results) {
