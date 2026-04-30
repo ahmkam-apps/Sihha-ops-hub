@@ -5749,12 +5749,13 @@ def portal_get_families(cycle_id):
         return jsonify({'error': 'Cycle not found'}), 404
     vol_id = g.pv['volunteer_id']
 
-    # Show ALL active families regardless of whether they have placed an order yet
+    # Show ALL active families; only join to active (non-cancelled/skipped) orders
     families = db.execute(
         '''SELECT f.id, f.name, f.family_size, f.family_code, f.address, f.city,
                   fr.status as order_status, fr.id as request_id
            FROM families f
            LEFT JOIN food_requests fr ON fr.family_id = f.id AND fr.cycle_id = ?
+                                     AND fr.status NOT IN ('cancelled', 'skipped')
            WHERE f.status = 'active'
            ORDER BY f.name''',
         (cycle_id,)
