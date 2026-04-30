@@ -1201,12 +1201,13 @@ def _send_sms(phone_digits, message):
         if len(digits) == 11 and digits.startswith('1'):
             digits = digits[1:]
         to = '+1' + digits
+        log.info(f'SMS attempt: from={TWILIO_FROM!r} to={to!r} sid={TWILIO_ACCOUNT_SID[:8]}...')
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        client.messages.create(body=message, from_=TWILIO_FROM, to=to)
-        log.info(f'SMS sent to {phone_digits}')
+        msg = client.messages.create(body=message, from_=TWILIO_FROM, to=to)
+        log.info(f'SMS sent to {to} — Twilio sid={msg.sid} status={msg.status}')
         return True
     except Exception as e:
-        log.warning(f'SMS send failed to {phone_digits}: {e}')
+        log.error(f'SMS FAILED to={to!r} from={TWILIO_FROM!r}: {type(e).__name__}: {e}')
         return False
 
 
