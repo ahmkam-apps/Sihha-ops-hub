@@ -405,7 +405,7 @@ function renderFamilies(data) {
 
   if (!families.length) {
     document.getElementById('slots-content').innerHTML =
-      '<div class="empty">No families enrolled in this delivery yet.</div>';
+      '<div class="empty">No active families found.</div>';
     return;
   }
 
@@ -413,16 +413,30 @@ function renderFamilies(data) {
     const addressBox = fam.address
       ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
 
+    // Order status badge
+    const orderBadge = fam.order_status
+      ? `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#e6f4ea;color:#1a7a3c;border-radius:3px;white-space:nowrap;">✓ Order placed</span>`
+      : `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#fff8e1;color:#b45309;border-radius:3px;white-space:nowrap;">⏳ No order yet</span>`;
+
     const taskBtns = task_types.map(tt => {
       const mySlotId  = fam.my_slots?.[tt.slug];
-      const takenBy   = fam.taken_by?.[tt.slug];   // name of volunteer who claimed it
+      const takenBy   = fam.taken_by?.[tt.slug];
+      const myStatus  = fam.my_status?.[tt.slug];  // 'claimed' or 'confirmed'
 
       if (mySlotId) {
-        // I signed up — green button, click to cancel
+        const isConfirmed = myStatus === 'confirmed';
+        const btnBg    = isConfirmed ? 'var(--green)' : '#f0a500';
+        const btnLabel = isConfirmed
+          ? `✓ ${tt.label} — confirmed`
+          : `⏳ ${tt.label} — waiting for order`;
+        const btnTitle = isConfirmed
+          ? 'Family has placed their order — this is confirmed!'
+          : 'You are signed up — waiting for family to place their order';
         return `<button
-          style="background:var(--green);color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+          style="background:${btnBg};color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+          title="${btnTitle}"
           onclick="cancelSignup('${mySlotId}','${fam.id}')">
-          ✓ ${tt.label} — You ×
+          ${btnLabel} ×
         </button>`;
       }
       if (takenBy) {
@@ -443,8 +457,11 @@ function renderFamilies(data) {
     return `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-          <div>
-            <div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--black);margin-bottom:2px;">${fam.family_code || '—'}</div>
+          <div style="min-width:0;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+              <div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--black);">${fam.family_code || '—'}</div>
+              ${orderBadge}
+            </div>
             <div class="card-meta">Family size: ${fam.family_size || '?'}</div>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">${taskBtns}</div>
@@ -453,12 +470,17 @@ function renderFamilies(data) {
       </div>`;
   };
 
+  const withOrderCount = families.filter(f => f.order_status).length;
   const openCount = families.filter(f =>
     task_types.some(tt => !f.my_slots?.[tt.slug] && !f.taken_by?.[tt.slug])
   ).length;
-  const heading = openCount > 0
-    ? `${families.length} families · ${openCount} with open slots`
-    : `${families.length} families · all slots filled`;
+
+  let heading;
+  if (openCount > 0) {
+    heading = `${families.length} families · ${withOrderCount} with orders · ${openCount} with open slots`;
+  } else {
+    heading = `${families.length} families · ${withOrderCount} with orders · all slots filled`;
+  }
 
   document.getElementById('slots-content').innerHTML =
     `<div class="section-heading">${heading}</div>` +
@@ -503,21 +525,53 @@ async function loadMyTasks() {
       return;
     }
 
-    const renderActive = t => {
+    // Split active into confirmed (family ordered) vs waiting (no order yet)
+    const confirmed = active.filter(t => t.status === 'confirmed');
+    const waiting   = active.filter(t => t.status === 'claimed');
+    const completed = active.filter(t => t.status === 'complete');
+
+    const renderTask = (t, opts = {}) => {
       const isDelivery = t.task_type === 'delivery';
       const isDone     = t.status === 'complete';
       const isShopping = !isDelivery;
+      const isPending  = t.status === 'claimed';
 
       const receipt = receipts.find(r => r.slot_id === t.id);
 
-      const addressBox = isDelivery && t.address
+      const addressBox = isDelivery && !isPending && t.address
         ? `<div class="address-box" style="margin-top:10px">📍 ${t.address}, ${t.city}</div>` : '';
 
-      const markBtn = (isDelivery && !isDone)
+      const markBtn = (isDelivery && !isDone && !isPending)
         ? `<button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')">Mark Complete</button>` : '';
 
+      // Shopping item list (only shown for confirmed shopping tasks)
+      let itemListSection = '';
+      if (isShopping && !isPending && t.shopping_items && t.shopping_items.length > 0) {
+        const itemRows = t.shopping_items.map(item =>
+          `<tr>
+            <td style="padding:4px 8px;font-size:13px;">${item.name}</td>
+            <td style="padding:4px 8px;font-size:13px;text-align:center;font-weight:600;">${item.qty}</td>
+          </tr>`
+        ).join('');
+        itemListSection = `
+          <div style="margin-top:10px;border:1px solid var(--gray-2);border-radius:6px;overflow:hidden;">
+            <div style="background:var(--gray-1);padding:6px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#555;">
+              🛒 Shopping List
+            </div>
+            <table style="width:100%;border-collapse:collapse;">
+              <thead><tr>
+                <th style="padding:4px 8px;font-size:11px;text-align:left;color:#888;border-bottom:1px solid var(--gray-2);">Item</th>
+                <th style="padding:4px 8px;font-size:11px;text-align:center;color:#888;border-bottom:1px solid var(--gray-2);">Qty</th>
+              </tr></thead>
+              <tbody>${itemRows}</tbody>
+            </table>
+          </div>`;
+      } else if (isShopping && !isPending && (!t.shopping_items || t.shopping_items.length === 0)) {
+        itemListSection = `<div style="margin-top:8px;font-size:12px;color:#888;">No specific items requested yet.</div>`;
+      }
+
       let receiptSection = '';
-      if (isShopping) {
+      if (isShopping && !isPending) {
         if (receipt) {
           const rs = receipt.reimbursement_status || receipt.receipt_status;
           const rsClass = rs === 'paid' ? 'reimb-paid' : rs === 'rejected' ? 'reimb-rejected' : 'reimb-pending';
@@ -536,7 +590,7 @@ async function loadMyTasks() {
                 <button class="btn btn-outline btn-sm" onclick="openReceiptModal('${t.id}')">✏️ Update Receipt</button>
               </div>
             </div>`;
-        } else {
+        } else if (!isPending) {
           receiptSection = `
             <div style="margin-top:10px">
               <button class="btn btn-green btn-sm" onclick="openReceiptModal('${t.id}')">📷 Submit Receipt</button>
@@ -544,20 +598,35 @@ async function loadMyTasks() {
         }
       }
 
+      // Pending note for waiting tasks
+      const pendingNote = isPending
+        ? `<div style="margin-top:6px;font-size:12px;color:#b45309;padding:6px 8px;background:#fff8e1;border-radius:4px;">
+            ⏳ Slot reserved — this becomes active once the family places their order. You'll receive a WhatsApp notification.
+           </div>` : '';
+
+      const cardBorder = isPending ? 'border-left:3px solid #f0a500;' : '';
+
       return `
-        <div class="card">
+        <div class="card" style="${cardBorder}">
           <div class="card-row">
             <div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                 <span class="badge badge-${isDelivery?'delivery':'shopping'}">${t.task_type}</span>
-                <span class="badge badge-${t.status}">${t.status}</span>
+                ${isPending
+                  ? `<span style="font-size:11px;font-weight:700;color:#b45309;background:#fff8e1;padding:2px 6px;border-radius:3px;">Pending order</span>`
+                  : isDone
+                    ? `<span class="badge badge-complete">complete</span>`
+                    : `<span style="font-size:11px;font-weight:700;color:#1a7a3c;background:#e6f4ea;padding:2px 6px;border-radius:3px;">Confirmed</span>`
+                }
               </div>
               <div class="card-title" style="font-family:monospace;letter-spacing:1px">${t.family_code||t.family_name}</div>
               <div class="card-meta">${t.cycle_title} · Delivery by ${fmtDate(t.delivery_date_end)}</div>
             </div>
             <div>${markBtn}</div>
           </div>
+          ${pendingNote}
           ${addressBox}
+          ${itemListSection}
           ${receiptSection}
         </div>`;
     };
@@ -577,15 +646,31 @@ async function loadMyTasks() {
         </div>
       </div>`;
 
+    const sectionLabel = (text) =>
+      `<div style="margin-top:20px;margin-bottom:8px;font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;">${text}</div>`;
+
     let html = '';
-    if (active.length) html += active.map(renderActive).join('');
+
+    if (confirmed.length) {
+      if (waiting.length || completed.length || released.length) html += sectionLabel(`✓ Confirmed (${confirmed.length})`);
+      html += confirmed.map(t => renderTask(t)).join('');
+    }
+    if (waiting.length) {
+      html += sectionLabel(`⏳ Waiting for Family Order (${waiting.length})`);
+      html += waiting.map(t => renderTask(t)).join('');
+    }
+    if (completed.length) {
+      html += sectionLabel(`Done (${completed.length})`);
+      html += completed.map(t => renderTask(t)).join('');
+    }
+    if (!confirmed.length && !waiting.length && !completed.length) {
+      html = '<div class="empty">You have no active tasks. Go to Open Slots to sign up.</div>';
+    }
     if (released.length) {
-      html += `<div style="margin-top:20px;margin-bottom:8px;font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px">Removed Assignments</div>`;
+      html += sectionLabel('Removed Assignments');
       html += released.map(renderReleased).join('');
     }
-    if (!active.length) {
-      html = '<div class="empty">You have no active tasks. Go to Open Slots to sign up.</div>' + (released.length ? `<div style="margin-top:20px;margin-bottom:8px;font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px">Removed Assignments</div>` + released.map(renderReleased).join('') : '');
-    }
+
     document.getElementById('tasks-content').innerHTML = html;
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }

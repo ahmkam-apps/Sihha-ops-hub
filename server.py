@@ -898,6 +898,16 @@ def bootstrap_db():
             (_slug, _label, _order)
         )
 
+    # ── Migration: add is_family_slot to volunteer_task_types ─────────────────
+    try:
+        conn.execute('ALTER TABLE volunteer_task_types ADD COLUMN is_family_slot INTEGER NOT NULL DEFAULT 0')
+        log.info('Migration: added volunteer_task_types.is_family_slot')
+    except Exception:
+        pass
+    # Backfill: shopping + delivery are family-specific; stock is not
+    conn.execute("UPDATE volunteer_task_types SET is_family_slot=1 WHERE slug IN ('shopping','delivery')")
+    conn.execute("UPDATE volunteer_task_types SET is_family_slot=0 WHERE slug='stock'")
+
     # ── Migration: rebuild volunteer_slots — remove UNIQUE + CHECK constraints ─
     _vs_ddl = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='volunteer_slots'"
@@ -944,6 +954,47 @@ def bootstrap_db():
         log.info('Migration: added volunteer_slots.prev_claimed_by')
     except Exception:
         pass
+
+    # ── Migration: volunteer_slots — expand status CHECK to include 'confirmed' ─
+    _vs_ddl2 = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='volunteer_slots'"
+    ).fetchone()
+    if _vs_ddl2 and "CHECK(status IN ('open','claimed','complete','cancelled'))" in (_vs_ddl2[0] or ''):
+        log.info("Migration: rebuilding volunteer_slots — adding 'confirmed' status")
+        try:
+            conn.execute('PRAGMA foreign_keys=OFF')
+            conn.executescript('''
+                ALTER TABLE volunteer_slots RENAME TO _vs_backup2;
+                CREATE TABLE volunteer_slots (
+                    id              TEXT PRIMARY KEY,
+                    cycle_id        TEXT NOT NULL,
+                    family_id       TEXT NOT NULL,
+                    task_type       TEXT NOT NULL,
+                    task_date       TEXT,
+                    claimed_by      TEXT,
+                    claimed_at      TEXT,
+                    completed_at    TEXT,
+                    status          TEXT NOT NULL DEFAULT 'open',
+                    notes           TEXT,
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT,
+                    prev_claimed_by TEXT,
+                    FOREIGN KEY (cycle_id)   REFERENCES delivery_cycles(id),
+                    FOREIGN KEY (family_id)  REFERENCES families(id),
+                    FOREIGN KEY (claimed_by) REFERENCES volunteers(id)
+                );
+                INSERT INTO volunteer_slots
+                    SELECT id, cycle_id, family_id, task_type, task_date,
+                           claimed_by, claimed_at, completed_at, status, notes,
+                           created_at, updated_at, prev_claimed_by
+                    FROM _vs_backup2;
+                DROP TABLE _vs_backup2;
+            ''')
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info("Migration: volunteer_slots rebuilt — 'confirmed' status now supported")
+        except Exception as _e:
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info(f'Migration: volunteer_slots confirm-rebuild skipped ({_e})')
 
     # ── order_change_requests table ──────────────────────────────────────────────
     conn.execute('''
@@ -1696,6 +1747,8 @@ def update_family(fid):
     new_phone = _normalize_phone(d.get('phone', row['phone']))
     new_size  = d.get('family_size', row['family_size'])
     new_code  = _make_family_code(new_phone, new_size, db_conn=db, exclude_id=fid)
+    prev_status = row['status']
+    new_status  = d.get('status', row['status'])
     db.execute(
         '''UPDATE families SET name=?,phone=?,address=?,city=?,family_size=?,children_count=?,
            dietary_notes=?,frequency=?,income_range=?,status=?,bundle_size=?,notes=?,family_code=?,
@@ -1704,13 +1757,21 @@ def update_family(fid):
          d.get('address', row['address']), d.get('city', row['city']),
          new_size, d.get('children_count', row['children_count']),
          d.get('dietary_notes', row['dietary_notes']), d.get('frequency', row['frequency']),
-         d.get('income_range', row['income_range']), d.get('status', row['status']),
+         d.get('income_range', row['income_range']), new_status,
          d.get('bundle_size', row['bundle_size']),
          d.get('notes', row['notes']), new_code,
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          now(), fid)
     )
     db.commit()
+    # Pre-create volunteer slots when a family is activated for the first time
+    if new_status == 'active' and prev_status != 'active':
+        try:
+            slots = _pre_create_slots_for_family(db, fid)
+            db.commit()
+            log.info(f'update_family: pre-created {slots} volunteer slots for newly active family {fid}')
+        except Exception as _e:
+            log.warning(f'update_family: slot pre-creation failed for family {fid}: {_e}')
     return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()))
 
 # ── Bundle size change request (family self-serve, coordinator must approve) ──
@@ -2526,20 +2587,23 @@ def auto_update_cycle_statuses(db):
 
 
 def _ensure_volunteer_slots(db, cycle_id, family_id):
-    """Create shopping + delivery slots for a family the moment their order is confirmed.
-    Idempotent — checks for an existing non-cancelled slot before inserting.
-    The UNIQUE constraint was removed from volunteer_slots, so INSERT OR IGNORE has no effect;
-    we must SELECT-first to guarantee exactly one open slot per family+task.
+    """Ensure open slots exist for a family in a cycle for all is_family_slot task types.
+    Idempotent — SELECT-first to avoid duplicates. Creates open slots only if absent.
     Returns the number of new slots created (0 if they already existed).
+    Called as a safety net on order confirmation, cycle creation, and family activation.
     """
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
     if not cycle:
         return 0
-    delivery_date = cycle['delivery_date_start']  # fixed date
+    delivery_date = cycle['delivery_date_start']
+    task_types = db.execute(
+        "SELECT slug FROM volunteer_task_types WHERE is_active=1 AND is_family_slot=1 ORDER BY display_order"
+    ).fetchall()
     created = 0
-    for task_type, task_date in [('shopping', None), ('delivery', delivery_date)]:
+    for tt_row in task_types:
+        task_type = tt_row['slug']
+        task_date = delivery_date if task_type == 'delivery' else None
         try:
-            # Only insert if no slot exists at all for this family+task in this cycle
             existing = db.execute(
                 "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND status!='cancelled'",
                 (cycle_id, family_id, task_type)
@@ -2553,6 +2617,32 @@ def _ensure_volunteer_slots(db, cycle_id, family_id):
         except Exception as e:
             log.warning(f'_ensure_volunteer_slots: could not create {task_type} slot for family {family_id}: {e}')
     return created
+
+
+def _pre_create_slots_for_cycle(db, cycle_id):
+    """Pre-create open slots for ALL active families in a cycle.
+    Called when a new cycle is created or seeded. Returns total slots created.
+    """
+    families = db.execute(
+        "SELECT id FROM families WHERE status='active'"
+    ).fetchall()
+    total = 0
+    for fam in families:
+        total += _ensure_volunteer_slots(db, cycle_id, fam['id'])
+    return total
+
+
+def _pre_create_slots_for_family(db, family_id):
+    """Pre-create open slots for a newly activated family across all future cycles.
+    Called when a family's status is set to 'active'. Returns total slots created.
+    """
+    future_cycles = db.execute(
+        "SELECT id FROM delivery_cycles WHERE status NOT IN ('delivered') AND delivery_date_start >= date('now')"
+    ).fetchall()
+    total = 0
+    for cyc in future_cycles:
+        total += _ensure_volunteer_slots(db, cyc['id'], family_id)
+    return total
 
 
 def _enroll_families_in_cycle(db, cycle_id, delivery_date_start):
@@ -2708,7 +2798,13 @@ def create_delivery_cycle():
          g.user['user_id'], now())
     )
     db.commit()
-    # Families are NOT auto-enrolled — they opt in via WA notification 7 days before delivery
+    # Pre-create volunteer slots for all active families in this new cycle
+    try:
+        slots_created = _pre_create_slots_for_cycle(db, cid)
+        db.commit()
+        log.info(f'create_delivery_cycle: pre-created {slots_created} volunteer slots for cycle {cid}')
+    except Exception as _e:
+        log.warning(f'create_delivery_cycle: slot pre-creation failed: {_e}')
     result = dict(db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone())
     return jsonify(result), 201
 
@@ -3486,8 +3582,56 @@ def submit_family_confirmation(token):
     else:
         _log_order_event(db, req['id'], 'confirmed', actor='family')
 
-    # Auto-create volunteer slots — delivery dates are fixed
+    # Ensure slots exist (safety net)
     _ensure_volunteer_slots(db, req['cycle_id'], req['family_id'])
+
+    # Confirm any claimed volunteer slots and notify those volunteers
+    cycle_row = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (req['cycle_id'],)).fetchone()
+    family_row = db.execute("SELECT * FROM families WHERE id=?", (req['family_id'],)).fetchone()
+    claimed_slots_conf = db.execute(
+        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.wa_phone, v.wa_apikey,
+                  f.address, f.city, f.name as family_name
+           FROM volunteer_slots vs
+           JOIN volunteers v ON vs.claimed_by = v.id
+           JOIN families f ON vs.family_id = f.id
+           WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') ''',
+        (req['cycle_id'], req['family_id'])
+    ).fetchall()
+    bundle_sz = family_row['bundle_size'] if family_row else 'M'
+    item_lines_conf = []
+    if claimed_slots_conf:
+        item_rows_conf = db.execute(
+            '''SELECT fi.name, fi.unit, bq.quantity, fc.name as category
+               FROM food_request_items fri
+               JOIN food_items fi ON fri.food_item_id = fi.id
+               JOIN food_categories fc ON fi.category_id = fc.id
+               LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = ?
+               WHERE fri.request_id = ? AND fri.selected = 1
+               ORDER BY fc.display_order, fi.name''',
+            (bundle_sz, req['id'])
+        ).fetchall()
+        for ir in item_rows_conf:
+            qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
+            item_lines_conf.append(f"  • {ir['name']}{(' — ' + qty_str) if qty_str else ''}")
+    for slot in claimed_slots_conf:
+        db.execute("UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?", (now(), slot['id']))
+        if slot['wa_phone'] and slot['wa_apikey']:
+            try:
+                if slot['task_type'] == 'shopping':
+                    items_text = '\n'.join(item_lines_conf) if item_lines_conf else '  (no items selected)'
+                    _wa_send(slot['wa_phone'], slot['wa_apikey'],
+                        f"✅ Order Confirmed — Shopping Task\n"
+                        f"Family: {slot['family_name']}\n"
+                        f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n\n"
+                        f"Shopping list:\n{items_text}\n\nJazakAllah Khair!")
+                else:
+                    _wa_send(slot['wa_phone'], slot['wa_apikey'],
+                        f"✅ Order Confirmed — Delivery Task\n"
+                        f"Family: {slot['family_name']}\n"
+                        f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n"
+                        f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\nJazakAllah Khair!")
+            except Exception:
+                pass
 
     db.commit()
     return jsonify({'ok': True, 'action': 'confirmed'})
@@ -3632,13 +3776,13 @@ def check_food_order_eligibility():
         bundle_size = sz['bundle_size'] if sz else 'M'
 
     today   = _today_central()
-    cutoff  = today + timedelta(days=30)
+    cutoff  = today + timedelta(days=365)  # 12-month visibility window
 
-    # Cycles within next 30 days that are still active (not delivered)
+    # All non-delivered cycles within next 12 months
     upcoming_rows = db.execute(
         """SELECT * FROM delivery_cycles
            WHERE delivery_date_start >= ? AND delivery_date_start <= ?
-             AND status IN ('upcoming','open','shopping')
+             AND status NOT IN ('delivered')
            ORDER BY delivery_date_start""",
         (today.isoformat(), cutoff.isoformat())
     ).fetchall()
@@ -3648,7 +3792,7 @@ def check_food_order_eligibility():
         """SELECT dc.* FROM food_requests fr
            JOIN delivery_cycles dc ON fr.cycle_id = dc.id
            WHERE fr.family_id=? AND fr.status NOT IN ('skipped','cancelled','delivered')
-             AND dc.status IN ('upcoming','open','shopping')
+             AND dc.status NOT IN ('delivered')
              AND (dc.delivery_date_start < ? OR dc.delivery_date_start > ?)
            ORDER BY dc.delivery_date_start""",
         (family['id'], today.isoformat(), cutoff.isoformat())
@@ -3793,6 +3937,22 @@ def check_food_order_eligibility():
         except Exception:
             pass
 
+        # Volunteer assignment — show who's signed up (name only, no contact info)
+        vol_slots = db.execute(
+            '''SELECT vs.task_type, vs.status as slot_status, v.name as vol_name
+               FROM volunteer_slots vs
+               JOIN volunteers v ON vs.claimed_by = v.id
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed')
+               ORDER BY vs.task_type''',
+            (cycle['id'], existing['family_id'] if hasattr(existing, 'keys') else family['id'])
+        ).fetchall()
+        volunteers = {}
+        for vs in vol_slots:
+            volunteers[vs['task_type']] = {
+                'name': vs['vol_name'],
+                'confirmed': vs['slot_status'] == 'confirmed',
+            }
+
         return {
             'id':                    existing['id'],
             'status':                existing['status'],
@@ -3804,6 +3964,7 @@ def check_food_order_eligibility():
             'can_request_change':    can_request_change,
             'pending_change_request': pending_change_request,
             'events':                events_list,
+            'volunteers':            volunteers,  # {shopping: {name, confirmed}, delivery: {name, confirmed}}
         }
 
     cycles_data = []
@@ -3919,8 +4080,61 @@ def submit_food_order():
             (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
         )
 
-    # Auto-create volunteer slots
+    # Ensure slots exist (safety net — should already be pre-created)
     slots_created = _ensure_volunteer_slots(db, data['cycle_id'], data['family_id'])
+
+    # Confirm any claimed volunteer slots and notify those volunteers
+    claimed_slots = db.execute(
+        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.wa_phone, v.wa_apikey,
+                  f.address, f.city, f.name as family_name, f.bundle_size as fam_bundle
+           FROM volunteer_slots vs
+           JOIN volunteers v ON vs.claimed_by = v.id
+           JOIN families f ON vs.family_id = f.id
+           WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') ''',
+        (data['cycle_id'], data['family_id'])
+    ).fetchall()
+
+    # Build item list for shoppers (fetch selected items + quantities)
+    item_lines = []
+    if claimed_slots:
+        item_rows = db.execute(
+            '''SELECT fi.name, fi.unit, bq.quantity, fc.name as category
+               FROM food_request_items fri
+               JOIN food_items fi ON fri.food_item_id = fi.id
+               JOIN food_categories fc ON fi.category_id = fc.id
+               LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = ?
+               WHERE fri.request_id = ? AND fri.selected = 1
+               ORDER BY fc.display_order, fi.name''',
+            (bundle_size, rid)
+        ).fetchall()
+        for ir in item_rows:
+            qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
+            item_lines.append(f"  • {ir['name']}{(' — ' + qty_str) if qty_str else ''}")
+
+    for slot in claimed_slots:
+        db.execute(
+            "UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?",
+            (now(), slot['id'])
+        )
+        if slot['wa_phone'] and slot['wa_apikey']:
+            try:
+                if slot['task_type'] == 'shopping':
+                    items_text = '\n'.join(item_lines) if item_lines else '  (no items selected)'
+                    msg = (f"✅ Order Confirmed — Shopping Task\n"
+                           f"Family: {slot['family_name']}\n"
+                           f"Delivery: {cycle['delivery_date_start']}\n\n"
+                           f"Shopping list:\n{items_text}\n\n"
+                           f"JazakAllah Khair!")
+                else:
+                    msg = (f"✅ Order Confirmed — Delivery Task\n"
+                           f"Family: {slot['family_name']}\n"
+                           f"Delivery: {cycle['delivery_date_start']}\n"
+                           f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\n"
+                           f"JazakAllah Khair!")
+                _wa_send(slot['wa_phone'], slot['wa_apikey'], msg)
+            except Exception:
+                pass
+
     db.commit()
 
     # Audit log + coordinator notification (after commit, non-fatal)
@@ -3943,7 +4157,7 @@ def submit_food_order():
     except Exception:
         pass
 
-    log.info(f'Food order placed: family {data["family_id"]} cycle {data["cycle_id"]} — {slots_created} slots created')
+    log.info(f'Food order placed: family {data["family_id"]} cycle {data["cycle_id"]} — {slots_created} new slots, {len(claimed_slots)} slots confirmed')
     return jsonify({
         'ok': True,
         'request_id': rid,
@@ -3987,17 +4201,16 @@ def cancel_food_order():
         if days_until < 1:
             return jsonify({'error': 'Orders can only be cancelled at least 1 day before delivery'}), 409
 
-        # Find claimed volunteers for this family/cycle BEFORE releasing slots (for notification)
+        # Find claimed/confirmed volunteers BEFORE releasing slots (for notification)
         claimed_volunteers = db.execute(
             '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
-               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' ''',
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') ''',
             (req['cycle_id'], family_id)
         ).fetchall()
 
         # Mark as cancelled (not skipped — this is family-initiated)
-        # updated_at may not exist on older DBs — use a safe fallback
         try:
             db.execute(
                 "UPDATE food_requests SET status='cancelled', updated_at=? WHERE id=?",
@@ -4009,15 +4222,15 @@ def cancel_food_order():
                 (request_id,)
             )
 
-        # Release volunteer slots back to open — preserve prev_claimed_by for portal history
+        # Release claimed + confirmed volunteer slots back to open
         try:
             db.execute(
-                "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status='claimed'",
+                "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
                 (now(), req['cycle_id'], family_id)
             )
         except Exception:
             db.execute(
-                "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open' WHERE cycle_id=? AND family_id=? AND status='claimed'",
+                "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open' WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
                 (req['cycle_id'], family_id)
             )
 
@@ -4435,6 +4648,11 @@ def reset_family_order(fid):
             "UPDATE order_change_requests SET status='retracted', reviewed_at=? WHERE request_id=? AND status='pending'",
             (ts, req['id'])
         )
+        # Release any claimed/confirmed volunteer slots back to open on reset
+        db.execute(
+            "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
+            (ts, req['cycle_id'], fid)
+        )
         _log_order_event(db, req['id'], 'order_reset', actor='admin', payload={'reset_by': g.user['username']})
         db.commit()
 
@@ -4443,6 +4661,93 @@ def reset_family_order(fid):
 
     except Exception as _e:
         log.exception(f'reset_family_order ERROR fid={fid}')
+        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+
+
+@app.route('/api/families/<fid>/cancel-order', methods=['POST'])
+@require_auth()
+def admin_cancel_family_order(fid):
+    """Admin cancels a family's order for a specific cycle (or most recent non-delivered).
+    Logs the cancellation with actor='admin' so the family portal can distinguish it from
+    a family-initiated cancellation. The order row is then deleted so the family can
+    re-order for that delivery slot.
+    Optional JSON body: { cycle_id: <id>, reason: <str> }
+    """
+    try:
+        db     = get_db()
+        data   = request.json or {}
+        reason = (data.get('reason') or '').strip()
+
+        family = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+        if not family:
+            return jsonify({'error': 'Family not found'}), 404
+
+        # Find the target order
+        if data.get('cycle_id'):
+            req = db.execute(
+                "SELECT fr.*, dc.title as cycle_title FROM food_requests fr "
+                "JOIN delivery_cycles dc ON fr.cycle_id=dc.id "
+                "WHERE fr.family_id=? AND fr.cycle_id=? AND fr.status != 'delivered' LIMIT 1",
+                (fid, data['cycle_id'])
+            ).fetchone()
+        else:
+            req = db.execute(
+                '''SELECT fr.*, dc.title as cycle_title FROM food_requests fr
+                   JOIN delivery_cycles dc ON fr.cycle_id = dc.id
+                   WHERE fr.family_id=? AND fr.status != 'delivered'
+                   ORDER BY dc.delivery_date_start DESC LIMIT 1''',
+                (fid,)
+            ).fetchone()
+
+        if not req:
+            return jsonify({'error': 'No active order found for this family'}), 404
+
+        # Release any claimed/confirmed volunteer slots back to open
+        try:
+            db.execute(
+                "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, "
+                "claimed_at=NULL, status='open', updated_at=? "
+                "WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
+                (now(), req['cycle_id'], fid)
+            )
+        except Exception:
+            db.execute(
+                "UPDATE volunteer_slots SET claimed_by=NULL, claimed_at=NULL, status='open' "
+                "WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
+                (req['cycle_id'], fid)
+            )
+
+        # Log BEFORE deleting so the event is recorded
+        _log_order_event(db, req['id'], 'cancelled', actor='admin',
+                         payload={'cancelled_by': g.user['username'],
+                                  'reason': reason or None,
+                                  'prev_status': req['status']})
+        db.commit()
+
+        # Now hard-delete the order row so the family can place a fresh order
+        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (req['id'],))
+        db.execute("DELETE FROM food_request_items    WHERE request_id=?", (req['id'],))
+        db.execute("DELETE FROM order_change_requests WHERE request_id=?", (req['id'],))
+        db.execute("DELETE FROM food_requests         WHERE id=?",         (req['id'],))
+        db.commit()
+
+        log.info(f'Order {req["id"]} admin-cancelled by {g.user["username"]} for family {fid}')
+
+        try:
+            _notify_coordinators(db,
+                f"Order admin-cancelled:\n"
+                f"Family: {family['name']}\n"
+                f"Cycle: {req['cycle_title']}\n"
+                f"Cancelled by: {g.user['username']}"
+                + (f"\nReason: {reason}" if reason else "")
+            )
+        except Exception:
+            pass
+
+        return jsonify({'ok': True, 'message': 'Order cancelled. Family can now place a fresh order.'})
+
+    except Exception as _e:
+        log.exception(f'admin_cancel_family_order ERROR fid={fid}')
         return jsonify({'error': f'Server error: {str(_e)}'}), 500
 
 
@@ -4546,7 +4851,7 @@ def edit_food_order_items():
         claimed_vols = db.execute(
             '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
                FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id
-               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' AND vs.task_type='shopping' ''',
+               WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') AND vs.task_type='shopping' ''',
             (req['cycle_id'], family['id'])
         ).fetchall()
         for vol in claimed_vols:
@@ -4656,12 +4961,12 @@ def portal_login():
 @app.route('/api/portal/cycles')
 @require_portal_auth()
 def portal_list_cycles():
-    """Return all upcoming/shopping cycles within the next 6 months — volunteers can sign up to any."""
-    cutoff = (datetime.utcnow() + timedelta(days=183)).strftime('%Y-%m-%d')
+    """Return all non-delivered cycles within the next 12 months — volunteers can sign up to any."""
+    cutoff = (datetime.utcnow() + timedelta(days=365)).strftime('%Y-%m-%d')
     today  = datetime.utcnow().strftime('%Y-%m-%d')
     rows = get_db().execute(
         """SELECT * FROM delivery_cycles
-           WHERE status IN ('upcoming','shopping')
+           WHERE status NOT IN ('delivered')
              AND delivery_date_start >= ?
              AND delivery_date_start <= ?
            ORDER BY delivery_date_start ASC""",
@@ -4757,15 +5062,15 @@ def portal_my_tasks():
     vol_id = g.pv['volunteer_id']
     db = get_db()
 
-    # Active + completed assignments
+    # Active + completed assignments (including confirmed slots)
     rows = db.execute(
         '''SELECT vs.*, f.name as family_name, f.address, f.city, f.family_size, f.family_code,
                   dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
            FROM volunteer_slots vs
            JOIN families f ON vs.family_id = f.id
            JOIN delivery_cycles dc ON vs.cycle_id = dc.id
-           WHERE vs.claimed_by=? AND vs.status IN ('claimed','complete')
-           ORDER BY dc.delivery_date_start DESC, vs.task_type''',
+           WHERE vs.claimed_by=? AND vs.status IN ('claimed','confirmed','complete')
+           ORDER BY dc.delivery_date_start ASC, vs.task_type''',
         (vol_id,)
     ).fetchall()
     result = []
@@ -4775,6 +5080,30 @@ def portal_my_tasks():
         if row['task_type'] == 'shopping':
             row['address'] = None
             row['city'] = None
+            # For confirmed shopping slots, include item list so shopper knows what to buy
+            if row['status'] == 'confirmed':
+                items = db.execute(
+                    '''SELECT fi.name, bq.qty_s, bq.qty_m, bq.qty_l, fr.bundle_size
+                       FROM food_requests fr
+                       JOIN food_request_items fri ON fri.request_id = fr.id
+                       JOIN food_items fi ON fi.id = fri.item_id
+                       LEFT JOIN bundle_quantities bq ON bq.item_id = fi.id
+                       WHERE fr.cycle_id=? AND fr.family_id=?
+                       ORDER BY fi.name''',
+                    (row['cycle_id'], row['family_id'])
+                ).fetchall()
+                shopping_items = []
+                for it in items:
+                    bundle = it['bundle_size'] or 'M'
+                    qty = it['qty_s'] if bundle == 'S' else it['qty_l'] if bundle == 'L' else it['qty_m']
+                    shopping_items.append({
+                        'name': it['name'],
+                        'qty': qty or 1,
+                        'bundle_size': bundle
+                    })
+                row['shopping_items'] = shopping_items
+            else:
+                row['shopping_items'] = None
         result.append(row)
 
     # Recently released slots — where this volunteer was the last holder
@@ -5242,7 +5571,7 @@ def update_volunteer_slot(sid):
 def list_task_types():
     db = get_db()
     rows = db.execute(
-        "SELECT slug, label, display_order, is_active FROM volunteer_task_types ORDER BY display_order, label"
+        "SELECT slug, label, display_order, is_active, is_family_slot FROM volunteer_task_types ORDER BY display_order, label"
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -5258,12 +5587,13 @@ def create_task_type():
     if db.execute("SELECT slug FROM volunteer_task_types WHERE slug=?", (slug,)).fetchone():
         return jsonify({'error': 'Task type already exists'}), 409
     order = db.execute("SELECT COALESCE(MAX(display_order),0)+1 FROM volunteer_task_types").fetchone()[0]
+    is_family_slot = 1 if d.get('is_family_slot') else 0
     db.execute(
-        "INSERT INTO volunteer_task_types (slug, label, display_order, is_active) VALUES (?,?,?,1)",
-        (slug, label, order)
+        "INSERT INTO volunteer_task_types (slug, label, display_order, is_active, is_family_slot) VALUES (?,?,?,1,?)",
+        (slug, label, order, is_family_slot)
     )
     db.commit()
-    return jsonify({'slug': slug, 'label': label, 'display_order': order, 'is_active': 1}), 201
+    return jsonify({'slug': slug, 'label': label, 'display_order': order, 'is_active': 1, 'is_family_slot': is_family_slot}), 201
 
 @app.route('/api/task-types/<slug>', methods=['PUT'])
 @require_auth(roles=['admin'])
@@ -5274,9 +5604,11 @@ def update_task_type(slug):
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
     db.execute(
-        "UPDATE volunteer_task_types SET label=?, display_order=?, is_active=? WHERE slug=?",
+        "UPDATE volunteer_task_types SET label=?, display_order=?, is_active=?, is_family_slot=? WHERE slug=?",
         (d.get('label', tt['label']), d.get('display_order', tt['display_order']),
-         int(d.get('is_active', tt['is_active'])), slug)
+         int(d.get('is_active', tt['is_active'])),
+         int(d.get('is_family_slot', tt['is_family_slot'] if 'is_family_slot' in tt.keys() else 0)),
+         slug)
     )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM volunteer_task_types WHERE slug=?", (slug,)).fetchone()))
@@ -5337,25 +5669,25 @@ def portal_get_families(cycle_id):
         return jsonify({'error': 'Cycle not found'}), 404
     vol_id = g.pv['volunteer_id']
 
+    # Show ALL active families regardless of whether they have placed an order yet
     families = db.execute(
-        '''SELECT f.id, f.name, f.family_size, f.family_code, f.address, f.city
-           FROM food_requests fr
-           JOIN families f ON fr.family_id = f.id
-           WHERE fr.cycle_id=? AND f.status='active'
-             AND fr.status IN ('confirmed','auto_confirmed')
+        '''SELECT f.id, f.name, f.family_size, f.family_code, f.address, f.city,
+                  fr.status as order_status, fr.id as request_id
+           FROM families f
+           LEFT JOIN food_requests fr ON fr.family_id = f.id AND fr.cycle_id = ?
+           WHERE f.status = 'active'
            ORDER BY f.name''',
         (cycle_id,)
     ).fetchall()
 
     task_types = db.execute(
-        "SELECT slug, label FROM volunteer_task_types WHERE is_active=1 ORDER BY display_order, label"
+        "SELECT slug, label, is_family_slot FROM volunteer_task_types WHERE is_active=1 ORDER BY display_order, label"
     ).fetchall()
 
     result = []
     for fam in families:
         fam_dict = dict(fam)
-        # Ensure open slots exist — families confirmed before _ensure_volunteer_slots was
-        # introduced won't have any. This is idempotent (SELECT-first inside).
+        # Ensure open slots exist (idempotent — creates only if missing)
         _ensure_volunteer_slots(db, cycle_id, fam['id'])
         slots = db.execute(
             '''SELECT vs.id, vs.task_type, vs.claimed_by, vs.status,
@@ -5366,22 +5698,24 @@ def portal_get_families(cycle_id):
                ORDER BY vs.claimed_at''',
             (cycle_id, fam['id'])
         ).fetchall()
-        my_slots    = {}   # {task_type: slot_id}  — slots I claimed
-        taken_by    = {}   # {task_type: volunteer_name}  — slots claimed by someone else
+        my_slots    = {}   # {task_type: slot_id}  — slots I claimed/confirmed
+        my_status   = {}   # {task_type: 'claimed'|'confirmed'}
+        taken_by    = {}   # {task_type: volunteer_name}  — slots taken by someone else
         vol_counts  = {}   # {task_type: total_count}
         for s in slots:
             tt = s['task_type']
             vol_counts[tt] = vol_counts.get(tt, 0) + 1
             if s['claimed_by'] == vol_id:
-                my_slots[tt] = s['id']
-            elif s['claimed_by'] and s['status'] == 'claimed':
-                # Another volunteer has this slot — record their name (first one wins)
+                my_slots[tt]  = s['id']
+                my_status[tt] = s['status']
+            elif s['claimed_by'] and s['status'] in ('claimed', 'confirmed'):
                 if tt not in taken_by:
                     taken_by[tt] = s['claimed_by_name'] or 'A volunteer'
         fam_dict['my_slots']         = my_slots
+        fam_dict['my_status']        = my_status   # 'claimed' = pending order, 'confirmed' = order placed
         fam_dict['taken_by']         = taken_by
         fam_dict['volunteer_counts'] = vol_counts
-        # Address only for volunteers signed up for delivery
+        # Address only for volunteers signed up for delivery on a confirmed order
         if 'delivery' not in my_slots:
             fam_dict['address'] = None
             fam_dict['city']    = None
@@ -5715,6 +6049,7 @@ def seed_cycles_2026():
     db.commit()
 
     created = 0
+    cycle_ids = []
     for c in cycles_to_seed:
         cid = str(uuid.uuid4())
         db.execute(
@@ -5727,9 +6062,18 @@ def seed_cycles_2026():
              g.user['user_id'], now())
         )
         created += 1
+        cycle_ids.append(cid)
     db.commit()
-    log.info(f'seed-cycles-2026: deleted={deleted}, created={created}')
-    return jsonify({'ok': True, 'created': created, 'deleted': deleted})
+    # Pre-create volunteer slots for all active families across all new cycles
+    total_slots = 0
+    try:
+        for cid in cycle_ids:
+            total_slots += _pre_create_slots_for_cycle(db, cid)
+        db.commit()
+    except Exception as _e:
+        log.warning(f'seed-cycles-2026: slot pre-creation failed: {_e}')
+    log.info(f'seed-cycles-2026: deleted={deleted}, created={created}, slots_created={total_slots}')
+    return jsonify({'ok': True, 'created': created, 'deleted': deleted, 'slots_created': total_slots})
 
 
 @app.route('/api/reminders/trigger', methods=['POST'])
@@ -5914,6 +6258,81 @@ def _skip_nonresponding_families():
     finally:
         conn.close()
 
+def _release_unconfirmed_slots_job():
+    """Daily job: release claimed slots where delivery is ≤3 days away and family has no confirmed order.
+    Sends WA to each released volunteer. Idempotent via reminder_log (key: slot_id + 'autorelease').
+    """
+    from datetime import date as _date, timedelta as _td
+    conn = _bootstrap_conn()
+    try:
+        conn.row_factory = sqlite3.Row
+        cutoff_date = (_date.today() + _td(days=3)).isoformat()
+        today_str   = _date.today().isoformat()
+
+        # Find claimed slots within 3 days where the family's order is NOT confirmed
+        slots = conn.execute(
+            '''SELECT vs.id, vs.task_type, vs.claimed_by,
+                      dc.delivery_date_start, dc.title as cycle_title,
+                      f.name as family_name, f.id as family_id,
+                      v.wa_phone, v.wa_apikey, v.name as vol_name
+               FROM volunteer_slots vs
+               JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+               JOIN families f ON vs.family_id = f.id
+               JOIN volunteers v ON vs.claimed_by = v.id
+               WHERE vs.status = 'claimed'
+                 AND dc.delivery_date_start >= ?
+                 AND dc.delivery_date_start <= ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM food_requests fr
+                     WHERE fr.cycle_id = vs.cycle_id
+                       AND fr.family_id = vs.family_id
+                       AND fr.status IN ('confirmed','auto_confirmed','submitted')
+                 )''',
+            (today_str, cutoff_date)
+        ).fetchall()
+
+        released = 0
+        for slot in slots:
+            # Idempotency: skip if already sent auto-release for this slot
+            already = conn.execute(
+                "SELECT id FROM reminder_log WHERE slot_id=? AND sent_to='autorelease'",
+                (slot['id'],)
+            ).fetchone()
+            if already:
+                continue
+
+            # Release the slot
+            conn.execute(
+                "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, "
+                "claimed_at=NULL, status='open', updated_at=? WHERE id=?",
+                (datetime.utcnow().isoformat(), slot['id'])
+            )
+            # Log idempotency guard
+            conn.execute(
+                "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
+                (str(uuid.uuid4()), slot['id'], 'autorelease', datetime.utcnow().isoformat())
+            )
+            conn.commit()
+            released += 1
+
+            # WA to volunteer
+            if slot['wa_phone'] and slot['wa_apikey']:
+                try:
+                    _wa_send(slot['wa_phone'], slot['wa_apikey'],
+                        f"Update — Slot Released\n"
+                        f"{slot['family_name']} has not placed an order for {slot['cycle_title']} "
+                        f"(delivery {slot['delivery_date_start']}).\n"
+                        f"Your {slot['task_type']} slot has been released — no action needed.\n"
+                        f"JazakAllah Khair for signing up!")
+                except Exception:
+                    pass
+
+        log.info(f'_release_unconfirmed_slots_job: released {released} slots (checked {len(slots)})')
+        return released
+    finally:
+        conn.close()
+
+
 # ── Bootstrap on startup (runs under both gunicorn and direct execution) ──────
 
 bootstrap_db()
@@ -5929,8 +6348,10 @@ try:
                        id='family_opt_in_notifications', replace_existing=True)
     _scheduler.add_job(_skip_nonresponding_families, 'cron', hour=9, minute=30,
                        id='family_cutoff_skip', replace_existing=True)
+    _scheduler.add_job(_release_unconfirmed_slots_job, 'cron', hour=10, minute=0,
+                       id='auto_release_unconfirmed_slots', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — volunteer reminders 08:00, family confirmations 09:00, auto-confirm 09:30 UTC')
+    log.info('APScheduler started — reminders 08:00, family confirmations 09:00, cutoff 09:30, auto-release slots 10:00 UTC')
 except ImportError:
     log.warning('APScheduler not installed. Run: pip install apscheduler')
 except Exception as _e:
