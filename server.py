@@ -3741,24 +3741,28 @@ def check_food_order_eligibility():
     except Exception:
         pass
 
-    # Family lookup — active only; exact match first, then fuzzy last-10-digits fallback
+    # Family lookup — active only.
+    # Normalise stored phones on comparison so dashes/spaces/country-codes never block login.
+    # Also auto-fix any un-normalised phone found, so the DB stays clean going forward.
     family = None
     try:
-        row = db.execute(
-            "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size "
-            "FROM families WHERE phone=? AND status='active'", (phone,)
-        ).fetchone()
-        if row:
-            family = dict(row)
-        else:
-            last10 = phone[-10:] if len(phone) >= 10 else phone
-            for r in db.execute(
-                "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
-                "FROM families WHERE status='active'"
-            ).fetchall():
-                if _normalize_phone(r['phone'] or '')[-10:] == last10:
-                    family = dict(r)
-                    break
+        last10 = phone[-10:] if len(phone) >= 10 else phone
+        for r in db.execute(
+            "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
+            "FROM families WHERE status='active' COLLATE NOCASE"
+        ).fetchall():
+            stored_norm = _normalize_phone(r['phone'] or '')
+            if stored_norm == phone or stored_norm[-10:] == last10:
+                family = dict(r)
+                # Auto-fix: if stored phone had dashes/spaces, clean it now
+                if r['phone'] != stored_norm:
+                    try:
+                        db.execute("UPDATE families SET phone=? WHERE id=?", (stored_norm, r['id']))
+                        db.commit()
+                        log.info(f'Auto-normalised phone for family {r["id"]}: {r["phone"]!r} → {stored_norm!r}')
+                    except Exception:
+                        pass
+                break
     except Exception as exc:
         log.exception(f'check_food_order_eligibility lookup error: {exc}')
         return jsonify({'error': f'DB error: {exc}'}), 500
