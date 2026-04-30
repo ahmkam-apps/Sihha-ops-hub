@@ -22,8 +22,6 @@ PORT            = int(os.environ.get('PORT', 5000))
 ALLOWED_EXT     = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'heic'}
 SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '')
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
-# Set WA_ENABLED=0 in Railway env to bypass all WhatsApp sends globally (useful during dev/testing)
-WA_ENABLED = os.environ.get('WA_ENABLED', '1').strip() not in ('0', 'false', 'no', 'off')
 
 # ── Twilio (SMS OTP) ──────────────────────────────────────────────────────────
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
@@ -689,7 +687,7 @@ def bootstrap_db():
         conn.commit()
         log.info(f'Migration: normalised {vupdated} volunteer phone numbers')
 
-    # ── Phase 5 migrations: family WhatsApp + food_request confirmation ──────────
+    # ── Phase 5 migrations: family phone fields + food_request confirmation ───────
 
     # Add wa_phone / wa_apikey to families (for confirmation messages)
     for _col in ['wa_phone', 'wa_apikey']:
@@ -1188,43 +1186,6 @@ def _recreate_users_table(conn):
         conn.execute('PRAGMA foreign_keys=ON')
         log.warning(f'_recreate_users_table: failed ({_e})')
 
-# ── WhatsApp (CallMeBot) ──────────────────────────────────────────────────────
-
-def _wa_send(phone, apikey, message):
-    """Send a WhatsApp message via CallMeBot. Free, no Twilio needed.
-    Volunteer opt-in: ask them to WhatsApp +1 (206) 337-5002 → they receive their apikey.
-    Returns True on success, False on failure (never raises).
-    No-ops silently when WA_ENABLED=0."""
-    if not WA_ENABLED:
-        log.info(f'WA disabled — skipping send to {phone}')
-        return True
-    import urllib.request, urllib.parse
-    try:
-        url = ('https://api.callmebot.com/whatsapp.php?'
-               + urllib.parse.urlencode({'phone': phone, 'text': message, 'apikey': apikey}))
-        urllib.request.urlopen(url, timeout=10)
-        log.info(f'WhatsApp sent to {phone}')
-        return True
-    except Exception as e:
-        log.warning(f'WhatsApp send failed to {phone}: {e}')
-        return False
-
-
-def _wa_send_async(sends):
-    """Fire a list of WA messages in a background thread so the caller returns immediately.
-    sends: list of (phone, apikey, message) tuples — items with missing phone/apikey are skipped.
-    No-ops silently when WA_ENABLED=0."""
-    if not WA_ENABLED:
-        return
-    import threading as _t
-    items = [(p, k, m) for p, k, m in sends if p and k]
-    if not items:
-        return
-    def _run():
-        for phone, apikey, msg in items:
-            _wa_send(phone, apikey, msg)
-    _t.Thread(target=_run, daemon=True).start()
-
 def _send_sms(phone_digits, message):
     """Send an SMS via Twilio. phone_digits = 10-digit US number (no country code).
     Returns True on success, False on failure. Never raises.
@@ -1243,6 +1204,19 @@ def _send_sms(phone_digits, message):
     except Exception as e:
         log.warning(f'SMS send failed to {phone_digits}: {e}')
         return False
+
+
+def _send_sms_async(sends):
+    """Fire a list of SMS messages in a background thread so the caller returns immediately.
+    sends: list of (phone_digits, message) tuples — items with missing phone are skipped."""
+    import threading as _t
+    items = [(p, m) for p, m in sends if p]
+    if not items:
+        return
+    def _run():
+        for phone, msg in items:
+            _send_sms(phone, msg)
+    _t.Thread(target=_run, daemon=True).start()
 
 
 def _today_central():
@@ -1274,13 +1248,16 @@ def _log_order_event(db, request_id, event_type, actor='system', payload=None):
         log.warning(f'_log_order_event failed ({event_type} on {request_id}): {_e}')
 
 def _notify_coordinators(db, message):
-    """Send WA to all active admin users — fires in background thread (non-blocking)."""
+    """Email all active admin users — fires in background thread (non-blocking)."""
     try:
         admins = db.execute(
-            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
+            "SELECT email FROM users WHERE role='admin' AND active=1 AND email IS NOT NULL AND TRIM(email)!=''"
         ).fetchall()
-        sends = [(a['wa_phone'], a['wa_apikey'], message) for a in admins]
-        _wa_send_async(sends)
+        import threading as _t
+        def _run():
+            for a in admins:
+                _email_send(a['email'], 'SIHAA Ops Alert', message)
+        _t.Thread(target=_run, daemon=True).start()
     except Exception as _e:
         log.warning(f'_notify_coordinators failed: {_e}')
 
@@ -1316,14 +1293,12 @@ def _email_send(to_email, subject, text_body):
         return False
 
 def _notify_treasurers(db, subject, message):
-    """Notify all active treasurer users via WhatsApp + email.
+    """Notify all active treasurer users via email.
     Used for new reimbursement requests, receipt submissions, etc."""
     treasurers = db.execute(
-        "SELECT name, email, wa_phone, wa_apikey FROM users WHERE role='treasurer' AND active=1"
+        "SELECT name, email FROM users WHERE role='treasurer' AND active=1"
     ).fetchall()
     for t in treasurers:
-        if t['wa_phone'] and t['wa_apikey']:
-            _wa_send(t['wa_phone'], t['wa_apikey'], message)
         if t['email']:
             _email_send(t['email'], subject, message)
     if not treasurers:
@@ -1855,18 +1830,15 @@ def request_bundle_change(fid):
         (new_size, now(), fid)
     )
     db.commit()
-    # Notify coordinator
-    coord = db.execute(
-        "SELECT name, wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
-    ).fetchone()
-    if coord and coord['wa_phone'] and coord['wa_apikey']:
-        sizes = {'S': 'Small', 'M': 'Medium', 'L': 'Large'}
-        msg = (f"Bundle size change request:\n"
-               f"Family: {family['name']} ({family['family_code']})\n"
-               f"Current: {sizes.get(family['bundle_size'] or 'M', family['bundle_size'])}\n"
-               f"Requested: {sizes.get(new_size, new_size)}\n"
-               f"Please log in to approve or deny.")
-        _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
+    # Notify coordinator via email
+    sizes = {'S': 'Small', 'M': 'Medium', 'L': 'Large'}
+    _notify_coordinators(db,
+        f"Bundle size change request:\n"
+        f"Family: {family['name']} ({family['family_code']})\n"
+        f"Current: {sizes.get(family['bundle_size'] or 'M', family['bundle_size'])}\n"
+        f"Requested: {sizes.get(new_size, new_size)}\n"
+        f"Please log in to approve or deny."
+    )
     log.info(f'Bundle change request: family {fid} → {new_size}')
     return jsonify({'ok': True, 'message': 'Your request has been sent. The coordinator will review it and let you know.'}), 200
 
@@ -2165,24 +2137,24 @@ def update_reimbursement(rid):
             (now(), row['receipt_id'])
         )
     db.commit()
-    # Notify volunteer via WhatsApp when payment is sent
+    # Notify volunteer via SMS when payment is sent
     if new_status == 'paid' and row['status'] != 'paid':
         try:
             vol = db.execute(
-                "SELECT name, wa_phone, wa_apikey FROM volunteers WHERE id=?", (row['volunteer_id'],)
+                "SELECT name, phone FROM volunteers WHERE id=?", (row['volunteer_id'],)
             ).fetchone()
-            if vol and vol['wa_phone'] and vol['wa_apikey']:
+            if vol and vol['phone']:
                 method = d.get('payment_method', row['payment_method']) or 'bank transfer'
                 ref    = d.get('payment_ref', row['payment_ref'])
                 amount = row['amount'] or 0
                 ref_line = f'\nReference: {ref}' if ref else ''
-                msg = (f'✅ SIHAA Reimbursement Sent!\n'
+                msg = (f'SIHAA Reimbursement Sent!\n'
                        f'Amount: ${amount:.2f}\n'
                        f'Method: {method.title()}{ref_line}\n'
                        f'JazakAllah Khair for your service!')
-                _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
+                _send_sms(_normalize_phone(vol['phone']), msg)
         except Exception as e:
-            log.warning(f'Volunteer payment notification failed: {e}')
+            log.warning(f'Volunteer payment SMS notification failed: {e}')
     return jsonify(dict(db.execute("SELECT * FROM reimbursements WHERE id=?", (rid,)).fetchone()))
 
 # ── Donations ─────────────────────────────────────────────────────────────────
@@ -2895,8 +2867,7 @@ def get_cycle_orders(cid):
     db = get_db()
     orders = db.execute(
         '''SELECT fr.*, f.name as family_name, f.phone as family_phone,
-                  f.address as family_address, f.city as family_city,
-                  f.family_code, f.wa_phone as family_wa_phone, f.wa_apikey as family_wa_apikey
+                  f.address as family_address, f.city as family_city, f.family_code
            FROM food_requests fr
            JOIN families f ON fr.family_id = f.id
            WHERE fr.cycle_id=?
@@ -3014,7 +2985,7 @@ def manual_confirm_family(fid):
 
     # Flip any already-claimed slots to confirmed — volunteer signed up before admin added the family
     claimed_slots = db.execute(
-        '''SELECT vs.*, v.name as vol_name, v.wa_phone, v.wa_apikey
+        '''SELECT vs.*, v.name as vol_name, v.phone as vol_phone
            FROM volunteer_slots vs
            JOIN volunteers v ON vs.claimed_by = v.id
            WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' ''',
@@ -3031,15 +3002,17 @@ def manual_confirm_family(fid):
                      payload={'new_status': 'confirmed', 'note': 'manual confirm by coordinator'})
     db.commit()
 
-    # Notify volunteers whose slots just became confirmed
+    # SMS volunteers whose slots just became confirmed
+    sms_sends = []
     for slot in claimed_slots:
-        try:
-            address_line = f"\n📍 {family['address']}, {family['city']}" if slot['task_type'] == 'delivery' and family.get('address') else ''
-            msg = (f"✅ Your {slot['task_type']} slot for family {family['family_code'] or fid[:8]} "
-                   f"({cycle['title']}) is now confirmed — the coordinator has added them to this delivery.{address_line}")
-            _send_wa(slot['wa_phone'], slot['wa_apikey'], msg)
-        except Exception as e:
-            log.warning(f'manual_confirm WA notify failed for slot {slot["id"]}: {e}')
+        p = _normalize_phone(slot['vol_phone'] or '')
+        if p:
+            address_line = f"\nAddress: {family['address']}, {family['city']}" if slot['task_type'] == 'delivery' and family.get('address') else ''
+            sms_sends.append((p,
+                f"Your {slot['task_type']} slot for family {family['family_code'] or fid[:8]} "
+                f"({cycle['title']}) is now confirmed — coordinator added them to this delivery.{address_line}"
+            ))
+    _send_sms_async(sms_sends)
 
     log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} — {slots_created} slots created, {slots_confirmed} slots confirmed')
     return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size,
@@ -3461,12 +3434,12 @@ def public_intake():
             return jsonify({
                 'error': 'duplicate',
                 'message': 'This phone number was previously registered but is no longer active. '
-                           'Please message your coordinator on WhatsApp to reactivate your account.'
+                           'Please contact your coordinator to reactivate your account.'
             }), 409
         return jsonify({
             'error': 'duplicate',
             'message': 'This phone number is already registered. '
-                       'If you cannot log in, please send a WhatsApp message to your coordinator.'
+                       'If you cannot log in, please contact a coordinator for help.'
         }), 409
     fid = str(uuid.uuid4())
     family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
@@ -3482,21 +3455,17 @@ def public_intake():
     )
     db.commit()
     log.info(f'New intake: {data["name"]} ({phone})')
-    # Notify coordinator via WhatsApp
     try:
-        coord = db.execute(
-            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
-        ).fetchone()
-        if coord and coord['wa_phone'] and coord['wa_apikey']:
-            msg = (f"New family intake submitted:\n"
-                   f"Name: {data['name']}\n"
-                   f"Phone: {phone}\n"
-                   f"City: {data.get('city') or '—'}\n"
-                   f"Family size: {data.get('family_size') or '—'}\n"
-                   f"Please log in to review and approve.")
-            _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
+        _notify_coordinators(db,
+            f"New family intake submitted:\n"
+            f"Name: {data['name']}\n"
+            f"Phone: {phone}\n"
+            f"City: {data.get('city') or '—'}\n"
+            f"Family size: {data.get('family_size') or '—'}\n"
+            f"Please log in to review and approve."
+        )
     except Exception as _e:
-        log.warning(f'Intake WA notify failed: {_e}')
+        log.warning(f'Intake notify failed: {_e}')
     return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
 
 @app.route('/api/volunteer-signup', methods=['POST'])
@@ -3528,21 +3497,17 @@ def public_volunteer_signup():
     )
     db.commit()
     log.info(f'New volunteer signup: {data["name"]} ({phone})')
-    # Notify coordinator via WhatsApp
     try:
-        coord = db.execute(
-            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
-        ).fetchone()
-        if coord and coord['wa_phone'] and coord['wa_apikey']:
-            role_label = {'shopper':'Shopper','delivery':'Delivery','both':'Shopper + Delivery','general':'General'}.get(data.get('role',''), data.get('role',''))
-            msg = (f"New volunteer signed up:\n"
-                   f"Name: {data['name']}\n"
-                   f"Phone: {phone}\n"
-                   f"Role: {role_label}\n"
-                   f"Please log in to review and activate.")
-            _wa_send(coord['wa_phone'], coord['wa_apikey'], msg)
+        role_label = {'shopper':'Shopper','delivery':'Delivery','both':'Shopper + Delivery','general':'General'}.get(data.get('role',''), data.get('role',''))
+        _notify_coordinators(db,
+            f"New volunteer signed up:\n"
+            f"Name: {data['name']}\n"
+            f"Phone: {phone}\n"
+            f"Role: {role_label}\n"
+            f"Please log in to review and activate."
+        )
     except Exception as _e:
-        log.warning(f'Volunteer signup WA notify failed: {_e}')
+        log.warning(f'Volunteer signup notify failed: {_e}')
     return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
 
 # ── Static Pages ──────────────────────────────────────────────────────────────
@@ -3672,10 +3637,10 @@ def submit_family_confirmation(token):
     _ensure_volunteer_slots(db, req['cycle_id'], req['family_id'])
 
     # Confirm any claimed volunteer slots and notify those volunteers
-    cycle_row = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (req['cycle_id'],)).fetchone()
+    cycle_row  = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (req['cycle_id'],)).fetchone()
     family_row = db.execute("SELECT * FROM families WHERE id=?", (req['family_id'],)).fetchone()
     claimed_slots_conf = db.execute(
-        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.wa_phone, v.wa_apikey,
+        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.phone as vol_phone,
                   f.address, f.city, f.name as family_name
            FROM volunteer_slots vs
            JOIN volunteers v ON vs.claimed_by = v.id
@@ -3698,27 +3663,28 @@ def submit_family_confirmation(token):
         ).fetchall()
         for ir in item_rows_conf:
             qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
-            item_lines_conf.append(f"  • {ir['name']}{(' — ' + qty_str) if qty_str else ''}")
-    wa_sends_conf = []
+            item_lines_conf.append(f"  - {ir['name']}{(' - ' + qty_str) if qty_str else ''}")
+    sms_sends_conf = []
     for slot in claimed_slots_conf:
         db.execute("UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?", (now(), slot['id']))
-        if slot['wa_phone'] and slot['wa_apikey']:
+        p = _normalize_phone(slot['vol_phone'] or '')
+        if p:
             if slot['task_type'] == 'shopping':
                 items_text = '\n'.join(item_lines_conf) if item_lines_conf else '  (no items selected)'
-                wa_sends_conf.append((slot['wa_phone'], slot['wa_apikey'],
-                    f"✅ Order Confirmed — Shopping Task\n"
+                sms_sends_conf.append((p,
+                    f"Order Confirmed - Shopping Task\n"
                     f"Family: {slot['family_name']}\n"
                     f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n\n"
                     f"Shopping list:\n{items_text}\n\nJazakAllah Khair!"))
             else:
-                wa_sends_conf.append((slot['wa_phone'], slot['wa_apikey'],
-                    f"✅ Order Confirmed — Delivery Task\n"
+                sms_sends_conf.append((p,
+                    f"Order Confirmed - Delivery Task\n"
                     f"Family: {slot['family_name']}\n"
                     f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n"
                     f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\nJazakAllah Khair!"))
 
     db.commit()
-    _wa_send_async(wa_sends_conf)  # fire-and-forget — response returns immediately
+    _send_sms_async(sms_sends_conf)
     return jsonify({'ok': True, 'action': 'confirmed'})
 
 # ── PWA assets ────────────────────────────────────────────────────────────────
@@ -3840,18 +3806,12 @@ def check_food_order_eligibility():
     if not family:
         all_phones = db.execute("SELECT phone, status FROM families").fetchall()
         log.warning(f'PHONE MISS — searched={phone!r} stored={[(r["phone"],r["status"]) for r in all_phones]}')
-        coord = db.execute(
-            "SELECT wa_phone FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL LIMIT 1"
-        ).fetchone()
-        coord_phone = coord['wa_phone'] if coord else None
-        wa_link = f'https://wa.me/{coord_phone}' if coord_phone else None
         return jsonify({
             'registered': False,
-            'coordinator_wa': wa_link,
             'message': (
                 'We could not find an active record for that phone number. '
                 'Make sure you are using the same number you registered with, '
-                'or send a WhatsApp message to your coordinator for help.'
+                'or contact a coordinator for help.'
             )
         })
 
@@ -4174,7 +4134,7 @@ def submit_food_order():
 
     # Confirm any claimed volunteer slots and notify those volunteers
     claimed_slots = db.execute(
-        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.wa_phone, v.wa_apikey,
+        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.phone as vol_phone,
                   f.address, f.city, f.name as family_name, f.bundle_size as fam_bundle
            FROM volunteer_slots vs
            JOIN volunteers v ON vs.claimed_by = v.id
@@ -4219,25 +4179,25 @@ def submit_food_order():
 
     db.commit()  # ← commit everything first, then notify in background
 
-    # Build all WA sends — snapshot to plain dicts (sqlite Row not safe across threads)
-    wa_sends = []
+    # Notify volunteers via SMS + coordinators via email — fire-and-forget
     cycle_start = cycle['delivery_date_start']
     items_text  = '\n'.join(item_lines) if item_lines else '  (no items selected)'
+    sms_sends = []
     for slot in [dict(s) for s in claimed_slots]:
-        if slot.get('wa_phone') and slot.get('wa_apikey'):
+        vol_phone = _normalize_phone(slot.get('vol_phone') or '')
+        if vol_phone:
             if slot['task_type'] == 'shopping':
-                msg = (f"✅ Order Confirmed — Shopping Task\n"
+                msg = (f"Order Confirmed - Shopping Task\n"
                        f"Family: {slot['family_name']}\n"
                        f"Delivery: {cycle_start}\n\n"
-                       f"Shopping list:\n{items_text}\n\n"
-                       f"JazakAllah Khair!")
+                       f"Shopping list:\n{items_text}\n\nJazakAllah Khair!")
             else:
-                msg = (f"✅ Order Confirmed — Delivery Task\n"
+                msg = (f"Order Confirmed - Delivery Task\n"
                        f"Family: {slot['family_name']}\n"
                        f"Delivery: {cycle_start}\n"
-                       f"Address: {slot.get('address') or 'TBD'}, {slot.get('city') or ''}\n\n"
-                       f"JazakAllah Khair!")
-            wa_sends.append((slot['wa_phone'], slot['wa_apikey'], msg))
+                       f"Address: {slot.get('address') or 'TBD'}, {slot.get('city') or ''}\n\nJazakAllah Khair!")
+            sms_sends.append((vol_phone, msg))
+    _send_sms_async(sms_sends)
 
     coord_msg = (
         f"New order placed via portal:\n"
@@ -4247,14 +4207,9 @@ def submit_food_order():
         + (f"\nNotes: {family_notes}" if family_notes else '')
     )
     try:
-        for a in db.execute(
-            "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
-        ).fetchall():
-            wa_sends.append((a['wa_phone'], a['wa_apikey'], coord_msg))
+        _notify_coordinators(db, coord_msg)
     except Exception:
         pass
-
-    _wa_send_async(wa_sends)  # fire-and-forget — response returns immediately
 
     log.info(f'Food order placed: family {data["family_id"]} cycle {data["cycle_id"]} — {slots_created} new slots, {len(claimed_slots)} slots confirmed')
     return jsonify({
@@ -4302,7 +4257,7 @@ def cancel_food_order():
 
         # Find claimed/confirmed volunteers BEFORE releasing slots (for notification)
         claimed_volunteers = db.execute(
-            '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
+            '''SELECT v.name, v.phone, vs.task_type
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') ''',
@@ -4336,8 +4291,9 @@ def cancel_food_order():
         _log_order_event(db, request_id, 'cancelled', actor='family',
                          payload={'days_until_delivery': days_until})
 
-        # Gather coordinator WA details before commit (still have DB context)
-        coord_sends = []
+        db.commit()
+
+        # Fire notifications in background
         try:
             coord_msg = (
                 f"Order cancelled by family:\n"
@@ -4346,26 +4302,19 @@ def cancel_food_order():
                 f"Days until delivery: {days_until}\n"
                 f"Volunteer slots released back to open."
             )
-            for a in db.execute(
-                "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
-            ).fetchall():
-                coord_sends.append((a['wa_phone'], a['wa_apikey'], coord_msg))
+            _notify_coordinators(db, coord_msg)
         except Exception:
             pass
 
-        # Gather volunteer notification sends
-        vol_sends = []
+        vol_sms = []
         for vol in claimed_volunteers:
-            if vol['wa_phone'] and vol['wa_apikey']:
-                vol_sends.append((vol['wa_phone'], vol['wa_apikey'],
-                    f"Update: {req['family_name']} has cancelled their food order for {req['cycle_title']}.\n"
+            p = _normalize_phone(vol['phone'] or '')
+            if p:
+                vol_sms.append((p,
+                    f"Update: {req['family_name']} cancelled their food order for {req['cycle_title']}.\n"
                     f"Your {vol['task_type']} slot has been released — no action needed."
                 ))
-
-        db.commit()
-
-        # Fire all WA notifications in background — response returns immediately
-        _wa_send_async(coord_sends + vol_sends)
+        _send_sms_async(vol_sms)
 
         log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
         return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
@@ -4578,7 +4527,7 @@ def approve_change_request(cr_id):
         db = get_db()
 
         cr = db.execute(
-            '''SELECT ocr.*, f.name as family_name, f.wa_phone, f.wa_apikey,
+            '''SELECT ocr.*, f.name as family_name, f.phone as family_phone,
                       dc.title as cycle_title, dc.status as cycle_status
                FROM order_change_requests ocr
                JOIN families f ON ocr.family_id = f.id
@@ -4647,12 +4596,12 @@ def approve_change_request(cr_id):
                          })
         db.commit()
 
-        # WA to family
-        if cr['wa_phone'] and cr['wa_apikey']:
-            msg = f"Your change request for {cr['cycle_title']} has been approved."
+        # SMS to family
+        if cr['family_phone']:
+            msg = f"SIHAA: Your change request for {cr['cycle_title']} has been approved."
             if admin_notes:
                 msg += f"\nCoordinator note: {admin_notes}"
-            _wa_send(cr['wa_phone'], cr['wa_apikey'], msg)
+            _send_sms(_normalize_phone(cr['family_phone']), msg)
 
         log.info(f'Change request {cr_id} approved by {g.user["username"]}')
         return jsonify({'ok': True})
@@ -4672,7 +4621,7 @@ def reject_change_request(cr_id):
         db = get_db()
 
         cr = db.execute(
-            '''SELECT ocr.*, f.name as family_name, f.wa_phone, f.wa_apikey,
+            '''SELECT ocr.*, f.name as family_name, f.phone as family_phone,
                       dc.title as cycle_title
                FROM order_change_requests ocr
                JOIN families f ON ocr.family_id = f.id
@@ -4693,12 +4642,12 @@ def reject_change_request(cr_id):
                          payload={'change_request_id': cr_id, 'admin_notes': admin_notes})
         db.commit()
 
-        # WA to family
-        if cr['wa_phone'] and cr['wa_apikey']:
-            msg = f"Your change request for {cr['cycle_title']} was not approved."
+        # SMS to family
+        if cr['family_phone']:
+            msg = f"SIHAA: Your change request for {cr['cycle_title']} was not approved."
             if admin_notes:
                 msg += f"\nCoordinator note: {admin_notes}"
-            _wa_send(cr['wa_phone'], cr['wa_apikey'], msg)
+            _send_sms(_normalize_phone(cr['family_phone']), msg)
 
         log.info(f'Change request {cr_id} rejected by {g.user["username"]}')
         return jsonify({'ok': True})
@@ -4962,21 +4911,20 @@ def edit_food_order_items():
             f"Added: {added_str}\n"
             f"Removed: {removed_str}"
         )
-        # Notify claimed volunteers (shopping list may have changed) — fire-and-forget
+        # Notify claimed shopping volunteers via SMS — fire-and-forget
         claimed_vols = db.execute(
-            '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
+            '''SELECT v.name, v.phone, vs.task_type
                FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') AND vs.task_type='shopping' ''',
             (req['cycle_id'], family['id'])
         ).fetchall()
-        vol_sends = [
-            (v['wa_phone'], v['wa_apikey'],
+        vol_sms = [
+            (_normalize_phone(v['phone'] or ''),
              f"Shopping list update: {req['family_name']} edited their order for {req['cycle_title']}.\n"
-             f"Added: {added_str}\nRemoved: {removed_str}\n"
-             f"Please check the updated shopping list.")
-            for v in claimed_vols if v['wa_phone'] and v['wa_apikey']
+             f"Added: {added_str}\nRemoved: {removed_str}\nPlease check the updated list.")
+            for v in claimed_vols if v['phone']
         ]
-        _wa_send_async(vol_sends)
+        _send_sms_async(vol_sms)
 
     log.info(f'Family {family["id"]} edited items for order {request_id}: +{added} -{removed}')
     return jsonify({'ok': True, 'added': added, 'removed': removed,
@@ -5259,14 +5207,14 @@ def portal_claim_slot():
     )
     db.commit()
 
-    # WhatsApp confirmation
+    # SMS confirmation to volunteer
     vol = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
     family = db.execute("SELECT * FROM families WHERE id=?", (slot['family_id'],)).fetchone()
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (slot['cycle_id'],)).fetchone()
-    if vol['wa_phone'] and vol['wa_apikey']:
+    if vol['phone']:
         fcode = family['family_code'] or ''
         if slot['task_type'] == 'delivery':
-            msg = (f"SIHAA Delivery Confirmed!\n"
+            msg = (f"SIHAA Delivery Signed Up!\n"
                    f"Family ID: {fcode}\n"
                    f"Address: {family['address']}, {family['city']}\n"
                    f"Deliver by: {cycle['delivery_date_end']} (by 5pm)\n"
@@ -5283,12 +5231,12 @@ def portal_claim_slot():
                    WHERE bq.bundle_size=? AND fi.is_active=1 ORDER BY fi.display_order''', (bsize,)
             ).fetchall()
             item_list = '\n'.join([f"- {i['name']}: {i['quantity']}" for i in items])
-            msg = (f"SIHAA Shopping Confirmed!\n"
+            msg = (f"SIHAA Shopping Signed Up!\n"
                    f"Family ID: {fcode} (Bundle {bsize})\n"
                    f"Shopping list:\n{item_list}\n"
                    f"Drop off at Abu Baqr by Sunday 2pm.\n"
                    f"Send receipt to treasurer. JazakAllah Khair!")
-        _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
+        _send_sms(_normalize_phone(vol['phone']), msg)
     return jsonify({'ok': True})
 
 
@@ -5771,27 +5719,26 @@ def update_volunteer_slot(sid):
     )
     db.commit()
 
-    # Notify the displaced volunteer via WA
+    # SMS the displaced volunteer
     if 'claimed_by' in d and old_claimed_by and old_claimed_by != d.get('claimed_by'):
         try:
             old_vol = db.execute(
-                "SELECT name, wa_phone, wa_apikey FROM volunteers WHERE id=?", (old_claimed_by,)
+                "SELECT name, phone FROM volunteers WHERE id=?", (old_claimed_by,)
             ).fetchone()
-            if old_vol and old_vol['wa_phone'] and old_vol['wa_apikey']:
-                # Get family name for context
+            if old_vol and old_vol['phone']:
                 fam = db.execute(
                     "SELECT f.name, dc.title FROM families f JOIN delivery_cycles dc ON dc.id=? WHERE f.id=?",
                     (slot['cycle_id'], slot['family_id'])
                 ).fetchone()
-                fam_name = fam['name'] if fam else 'a family'
+                fam_name    = fam['name']  if fam else 'a family'
                 cycle_title = fam['title'] if fam else ''
                 action = 'reassigned to another volunteer' if d.get('claimed_by') else 'released back to open'
-                _wa_send(old_vol['wa_phone'], old_vol['wa_apikey'],
-                    f"Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) has been {action} by a coordinator. "
-                    f"No action needed from you."
+                _send_sms(_normalize_phone(old_vol['phone']),
+                    f"SIHAA Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) "
+                    f"has been {action} by a coordinator. No action needed."
                 )
         except Exception as _e:
-            log.warning(f'update_volunteer_slot: WA notify failed: {_e}')
+            log.warning(f'update_volunteer_slot: SMS notify failed: {_e}')
 
     row = db.execute(
         """SELECT vs.*, v.name as volunteer_name
@@ -6026,21 +5973,21 @@ def portal_signup():
 
     db.commit()
 
-    # WhatsApp confirmation
+    # SMS confirmation to volunteer
     if claimed:
         vol_row = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
         vol = dict(vol_row) if vol_row else {}
         fam = dict(family) if family else {}
-        if vol.get('wa_phone') and vol.get('wa_apikey'):
+        if vol.get('phone'):
             fcode      = fam.get('family_code', '')
             task_label = ', '.join(t.capitalize() for t in claimed)
             msg = (f"SIHAA Confirmed: {task_label}\n"
-                   f"Family: {fcode} · Size: {fam.get('family_size', '?')}\n"
+                   f"Family: {fcode} - Size: {fam.get('family_size', '?')}\n"
                    f"Delivery: {cycle['delivery_date_start']}\n"
                    f"JazakAllah Khair!")
             if 'delivery' in claimed and fam.get('address'):
                 msg += f"\nAddress: {fam['address']}, {fam.get('city', '')}"
-            _wa_send(vol['wa_phone'], vol['wa_apikey'], msg)
+            _send_sms(_normalize_phone(vol['phone']), msg)
 
     return jsonify({'ok': True, 'claimed': claimed}), 201
 
@@ -6063,7 +6010,7 @@ def portal_cancel_slot(slot_id):
     db.commit()
     return jsonify({'ok': True})
 
-# ── WhatsApp Reminders ────────────────────────────────────────────────────────
+# ── SMS Reminders ─────────────────────────────────────────────────────────────
 
 def _send_reminders_job():
     """Core reminder logic. Called by scheduler and by the admin trigger endpoint.
@@ -6075,21 +6022,24 @@ def _send_reminders_job():
     try:
         target_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
         slots = conn.execute(
-            '''SELECT vs.*, v.name as vol_name, v.wa_phone, v.wa_apikey,
+            '''SELECT vs.*, v.name as vol_name, v.phone as vol_phone,
                       f.name as family_name, f.family_code, f.address, f.city
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                JOIN families f ON vs.family_id = f.id
-               WHERE vs.status='claimed' AND vs.task_date=?
-               AND v.wa_phone IS NOT NULL AND v.wa_apikey IS NOT NULL''',
+               WHERE vs.status IN ('claimed','confirmed') AND vs.task_date=?
+               AND v.phone IS NOT NULL AND TRIM(v.phone) != '' ''',
             (target_date,)
         ).fetchall()
         sent = 0
         for s in slots:
+            vol_phone = ''.join(c for c in (s['vol_phone'] or '') if c.isdigit())
+            if not vol_phone:
+                continue
             try:
                 conn.execute(
                     "INSERT INTO reminder_log (id,slot_id,sent_to,sent_at) VALUES (?,?,?,?)",
-                    (str(uuid.uuid4()), s['id'], s['wa_phone'], datetime.utcnow().isoformat())
+                    (str(uuid.uuid4()), s['id'], vol_phone, datetime.utcnow().isoformat())
                 )
                 conn.commit()
             except sqlite3.IntegrityError:
@@ -6105,9 +6055,9 @@ def _send_reminders_job():
                        f"Family ID: {fcode}\n"
                        f"Drop off at Abu Baqr by Sunday 2pm.\n"
                        f"Send receipt to treasurer. JazakAllah Khair!")
-            if _wa_send(s['wa_phone'], s['wa_apikey'], msg):
+            if _send_sms(vol_phone, msg):
                 sent += 1
-        log.info(f'Reminders: {sent} sent for target date {target_date}')
+        log.info(f'SMS Reminders: {sent} sent for target date {target_date}')
         return sent, target_date
     finally:
         conn.close()
@@ -6364,10 +6314,9 @@ def db_debug():
         return jsonify({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 def _send_family_confirmation_reminders():
-    """7 days before delivery: create food_requests for all active families then WhatsApp opt-in link.
-    Families who have wa_phone + wa_apikey get a WA message.
-    Families without WA credentials get a food_request created (admin handles manually).
-    Idempotent — confirmation_sent_at prevents double-sends; INSERT OR IGNORE prevents duplicate records."""
+    """7 days before delivery: create food_requests for all active families then SMS opt-in link.
+    All families with a phone number get an SMS. Idempotent — confirmation_sent_at prevents
+    double-sends; INSERT OR IGNORE prevents duplicate records."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -6424,10 +6373,10 @@ def _send_family_confirmation_reminders():
                     log.warning(f'_send_family_confirmation_reminders: insert error for family {fam["id"]}: {_e}')
             conn.commit()
 
-        # Now send WA to families who have credentials and haven't been notified yet
+        # SMS opt-in link to all families with phone who haven't been notified yet
         rows = conn.execute(
             '''SELECT fr.id, fr.confirmation_token, fr.bundle_size,
-                      f.name as family_name, f.wa_phone, f.wa_apikey,
+                      f.name as family_name, f.phone as family_phone,
                       dc.title as cycle_title, dc.delivery_date_start
                FROM food_requests fr
                JOIN families f ON fr.family_id = f.id
@@ -6435,27 +6384,28 @@ def _send_family_confirmation_reminders():
                WHERE dc.delivery_date_start = ?
                  AND fr.status = 'pending_confirmation'
                  AND fr.confirmation_sent_at IS NULL
-                 AND f.wa_phone IS NOT NULL AND f.wa_apikey IS NOT NULL''',
+                 AND f.phone IS NOT NULL AND TRIM(f.phone) != '' ''',
             (target,)
         ).fetchall()
 
         sent = 0
         for r in rows:
+            fam_phone = ''.join(c for c in (r['family_phone'] or '') if c.isdigit())
+            if not fam_phone:
+                continue
             link = f"{base_url}/confirm/{r['confirmation_token']}"
             msg  = (f"Assalamu Alaikum {r['family_name']}!\n\n"
                     f"SIHAA has a food delivery on {r['delivery_date_start']}.\n"
-                    f"Would you like to receive your bundle?\n\n"
                     f"Tap to review your items and confirm or decline:\n{link}\n\n"
-                    f"Please respond by {cutoff_date}.\n"
-                    f"JazakAllah Khair!")
-            if _wa_send(r['wa_phone'], r['wa_apikey'], msg):
+                    f"Please respond by {cutoff_date}.\nJazakAllah Khair!")
+            if _send_sms(fam_phone, msg):
                 conn.execute(
                     "UPDATE food_requests SET confirmation_sent_at=? WHERE id=?",
                     (datetime.utcnow().isoformat(), r['id'])
                 )
                 sent += 1
         conn.commit()
-        log.info(f'Family opt-in notifications: {sent} WA sent for delivery {target}')
+        log.info(f'Family opt-in notifications: {sent} SMS sent for delivery {target}')
         return sent
     finally:
         conn.close()
@@ -6511,7 +6461,7 @@ def _release_unconfirmed_slots_job():
             '''SELECT vs.id, vs.task_type, vs.claimed_by,
                       dc.delivery_date_start, dc.title as cycle_title,
                       f.name as family_name, f.id as family_id,
-                      v.wa_phone, v.wa_apikey, v.name as vol_name
+                      v.phone as vol_phone, v.name as vol_name
                FROM volunteer_slots vs
                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
                JOIN families f ON vs.family_id = f.id
@@ -6552,11 +6502,12 @@ def _release_unconfirmed_slots_job():
             conn.commit()
             released += 1
 
-            # WA to volunteer
-            if slot['wa_phone'] and slot['wa_apikey']:
+            # SMS to volunteer
+            vol_phone = ''.join(c for c in (slot['vol_phone'] or '') if c.isdigit())
+            if vol_phone:
                 try:
-                    _wa_send(slot['wa_phone'], slot['wa_apikey'],
-                        f"Update — Slot Released\n"
+                    _send_sms(vol_phone,
+                        f"SIHAA Update - Slot Released\n"
                         f"{slot['family_name']} has not placed an order for {slot['cycle_title']} "
                         f"(delivery {slot['delivery_date_start']}).\n"
                         f"Your {slot['task_type']} slot has been released — no action needed.\n"
