@@ -1902,14 +1902,13 @@ async function viewFamily(id) {
         </div>
       </div>` : '';
 
-    // ── Current cycle status ───────────────────────────────────────────────────
-    // Two independent questions:
-    // 1. Does this family have any active (non-terminal) order? → show it.
-    // 2. Is there an open cycle they haven't ordered for? → show "Add" nudge.
-    // These are decoupled so multiple open cycles don't cause confusion.
+    // ── Active orders ─────────────────────────────────────────────────────────
+    // Show every non-terminal order this family has placed (across any cycle).
+    // Separately: if there's an open cycle they haven't ordered for, show an Add button.
+    // No activeCycle matching — just look at what orders actually exist.
     const TERMINAL = ['delivered','cancelled','skipped'];
-    const activeOrder = orders.find(o => !TERMINAL.includes(o.status));
-    // Open cycle this family has NOT ordered for yet (coordinator can manually add them)
+    const activeOrders = orders.filter(o => !TERMINAL.includes(o.status));
+    // Is there an open cycle this family has NOT ordered for at all?
     const unorderedCycle = activeCycle && !orders.some(o => o.cycle_id === activeCycle.id)
       ? activeCycle : null;
 
@@ -1923,46 +1922,53 @@ async function viewFamily(id) {
       cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
     };
 
-    let cycleStrip = '';
-
-    if (activeOrder) {
-      const sc = scMap[activeOrder.status] || { bg:'#f5f5f0', color:'#888', label: activeOrder.status };
-      const overrideBtns = activeOrder.status === 'confirmed' || activeOrder.status === 'auto_confirmed'
-        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${activeOrder.id}','skipped','${activeOrder.cycle_id}','${fid}')">Mark Skipped</button>`
-        : activeOrder.status === 'skipped'
-        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${activeOrder.id}','confirmed','${activeOrder.cycle_id}','${fid}')">Mark Confirmed</button>`
-        : activeOrder.status === 'delivered'
-        ? ''
-        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;margin-right:4px;" onclick="overrideFoodRequest('${activeOrder.id}','confirmed','${activeOrder.cycle_id}','${fid}')">✓ Confirm</button>
-           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${activeOrder.id}','skipped','${activeOrder.cycle_id}','${fid}')">Skip</button>`;
-      cycleStrip = `
-        <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Active Order</span>
-          <span style="font-size:13px;font-weight:700;">${activeOrder.cycle_title}</span>
-          ${activeOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(activeOrder.delivery_date_start)}</span>` : ''}
-          <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">${overrideBtns}
-            ${activeOrder.status !== 'delivered' ? `
-              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" title="Cancels the order and frees the delivery slot." onclick="adminCancelOrder('${fid}','${activeOrder.cycle_id}','${r.name}')">✕ Cancel</button>
-              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" title="Rolls order back to pending (items cleared)." onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
+    const renderOrderRow = o => {
+      const sc = scMap[o.status] || { bg:'#f5f5f0', color:'#888', label: o.status };
+      const btns = o.status === 'confirmed' || o.status === 'auto_confirmed'
+        ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${o.id}','skipped','${o.cycle_id}','${fid}')">Mark Skipped</button>`
+        : o.status === 'skipped'
+        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${o.id}','confirmed','${o.cycle_id}','${fid}')">Mark Confirmed</button>`
+        : o.status === 'delivered' ? ''
+        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${o.id}','confirmed','${o.cycle_id}','${fid}')">✓ Confirm</button>
+           <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;margin-left:4px;" onclick="overrideFoodRequest('${o.id}','skipped','${o.cycle_id}','${fid}')">Skip</button>`;
+      return `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--gray-1);">
+          <span style="font-size:13px;font-weight:700;min-width:0;flex:1;">${o.cycle_title}</span>
+          ${o.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);white-space:nowrap;">${fmtDate(o.delivery_date_start)}</span>` : ''}
+          <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;white-space:nowrap;background:${sc.bg};color:${sc.color};">${sc.label}</span>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;">${btns}
+            ${o.status !== 'delivered' ? `
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="adminCancelOrder('${fid}','${o.cycle_id}','${r.name}')">✕ Cancel</button>
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
           </div>
-        </div>
-        ${unorderedCycle ? `
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px 20px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <span style="font-size:12px;color:#166534;">Also open: <strong>${unorderedCycle.title}</strong> — no order yet</span>
+        </div>`;
+    };
+
+    let cycleStrip = '';
+    if (activeOrders.length > 0 || unorderedCycle) {
+      const header = `<div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);padding-bottom:10px;border-bottom:1px solid var(--gray-2);margin-bottom:2px;">Food Orders</div>`;
+      const orderRows = activeOrders.map(renderOrderRow).join('');
+      const addRow = unorderedCycle ? `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;">
+          <span style="font-size:13px;font-weight:700;flex:1;">${unorderedCycle.title}</span>
+          <span style="font-size:11px;color:var(--gray-4);">No order yet</span>
           <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;margin-left:auto;"
-            onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Add to This Cycle</button>
-        </div>` : ''}`;
-    } else if (unorderedCycle) {
-      // No active order anywhere — show the open cycle with Add button
+            onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Add to Cycle</button>
+        </div>` : '';
       cycleStrip = `
-        <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
-          <span style="font-size:13px;font-weight:700;">${unorderedCycle.title}</span>
-          <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:var(--gray-1);color:var(--gray-4);">No order yet</span>
-          <div style="margin-left:auto;">
-            <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;"
-              onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Confirm for This Cycle</button>
+        <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
+          ${header}${orderRows}${addRow}
+        </div>`;
+    } else if (activeCycle) {
+      // No orders placed yet and there's an open cycle
+      cycleStrip = `
+        <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);padding-bottom:10px;border-bottom:1px solid var(--gray-2);margin-bottom:2px;">Food Orders</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;">
+            <span style="font-size:13px;font-weight:700;flex:1;">${activeCycle.title}</span>
+            <span style="font-size:11px;color:var(--gray-4);">No order yet</span>
+            <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;margin-left:auto;"
+              onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Add to Cycle</button>
           </div>
         </div>`;
     }
