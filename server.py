@@ -29,6 +29,13 @@ TWILIO_AUTH_TOKEN  = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_FROM        = os.environ.get('TWILIO_FROM', '')  # E.164 e.g. +15551234567
 SMS_ENABLED        = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM)
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+_early_log = logging.getLogger(__name__)
+_early_log.info(f'TWILIO_ACCOUNT_SID set={bool(TWILIO_ACCOUNT_SID)} len={len(TWILIO_ACCOUNT_SID)}')
+_early_log.info(f'TWILIO_AUTH_TOKEN  set={bool(TWILIO_AUTH_TOKEN)}  len={len(TWILIO_AUTH_TOKEN)}')
+_early_log.info(f'TWILIO_FROM        set={bool(TWILIO_FROM)}        val={TWILIO_FROM!r}')
+_early_log.info(f'SMS_ENABLED={SMS_ENABLED}')
+
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
