@@ -20,8 +20,10 @@ UPLOAD_FOLDER   = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
 SESSION_HOURS   = int(os.environ.get('SESSION_EXPIRY_HOURS', 24))
 PORT            = int(os.environ.get('PORT', 5000))
 ALLOWED_EXT     = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'heic'}
-SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY', '')
+SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '')
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
+# Set WA_ENABLED=0 in Railway env to bypass all WhatsApp sends globally (useful during dev/testing)
+WA_ENABLED = os.environ.get('WA_ENABLED', '1').strip() not in ('0', 'false', 'no', 'off')
 
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -1175,7 +1177,11 @@ def _recreate_users_table(conn):
 def _wa_send(phone, apikey, message):
     """Send a WhatsApp message via CallMeBot. Free, no Twilio needed.
     Volunteer opt-in: ask them to WhatsApp +1 (206) 337-5002 → they receive their apikey.
-    Returns True on success, False on failure (never raises)."""
+    Returns True on success, False on failure (never raises).
+    No-ops silently when WA_ENABLED=0."""
+    if not WA_ENABLED:
+        log.info(f'WA disabled — skipping send to {phone}')
+        return True
     import urllib.request, urllib.parse
     try:
         url = ('https://api.callmebot.com/whatsapp.php?'
@@ -1191,7 +1197,9 @@ def _wa_send(phone, apikey, message):
 def _wa_send_async(sends):
     """Fire a list of WA messages in a background thread so the caller returns immediately.
     sends: list of (phone, apikey, message) tuples — items with missing phone/apikey are skipped.
-    """
+    No-ops silently when WA_ENABLED=0."""
+    if not WA_ENABLED:
+        return
     import threading as _t
     items = [(p, k, m) for p, k, m in sends if p and k]
     if not items:
