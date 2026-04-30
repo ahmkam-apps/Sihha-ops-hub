@@ -1882,6 +1882,26 @@ async function viewFamily(id) {
         <span id="fam-saved-${fid}" style="font-size:13px;font-weight:600;color:#1a8754;min-width:70px;text-align:right;"></span>
       </div>`;
 
+    // ── Pending bundle change alert ────────────────────────────────────────────
+    const bundleChangeAlert = r.pending_bundle_size ? `
+      <div style="background:#fff8e6;border:1px solid #f0c040;border-radius:12px;padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <span style="font-size:18px;">📦</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#7a4f00;margin-bottom:2px;">Bundle Size Change Request</div>
+          <div style="font-size:12px;color:#92400e;">
+            Family requested to change bundle from
+            <strong>${bundleLabel[r.bundle_size]||r.bundle_size||'—'}</strong>
+            → <strong>${bundleLabel[r.pending_bundle_size]||r.pending_bundle_size}</strong>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm" style="font-size:12px;padding:4px 14px;background:#1a8754;color:#fff;"
+            onclick="approveBundleChange('${fid}','approve','${r.name}')">✓ Approve</button>
+          <button class="btn btn-sm btn-outline" style="font-size:12px;padding:4px 14px;color:#c00;border-color:#c00;"
+            onclick="approveBundleChange('${fid}','deny','${r.name}')">✕ Deny</button>
+        </div>
+      </div>` : '';
+
     // ── Current cycle status ───────────────────────────────────────────────────
     // Find the order specifically for the active cycle (not just the most recent order)
     const currentOrder = activeCycle
@@ -1927,7 +1947,9 @@ async function viewFamily(id) {
           ${currentOrder.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);">${fmtDate(currentOrder.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">${overrideBtns}
-            ${currentOrder.status !== 'delivered' ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
+            ${currentOrder.status !== 'delivered' ? `
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" title="Cancels the order and frees the delivery slot — family can place a fresh order." onclick="adminCancelOrder('${fid}','${currentOrder.cycle_id}','${r.name}')">✕ Cancel</button>
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" title="Rolls a confirmed order back to pending (items cleared). For already-cancelled orders, deletes the record." onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
           </div>
         </div>`;
     }
@@ -2106,7 +2128,7 @@ async function viewFamily(id) {
         }
       </div>`;
 
-    document.getElementById('content').innerHTML = waBanner + summaryStrip + cycleStrip + editGrid + historySection;
+    document.getElementById('content').innerHTML = waBanner + summaryStrip + bundleChangeAlert + cycleStrip + editGrid + historySection;
     // Show Save button now that fields are rendered
     const saveBtn = document.getElementById('fam-save-btn');
     if (saveBtn) saveBtn.style.display = 'inline-flex';
@@ -2299,12 +2321,15 @@ async function renderTaskTypes() {
         <div class="table-header">
           <span class="table-title">Volunteer Task Types</span>
           <div style="display:flex;gap:8px;align-items:center;">
-            <input id="new-tt-label" class="search-input" placeholder="New task type name…" style="width:200px;">
+            <input id="new-tt-label" class="search-input" placeholder="New task type name…" style="width:180px;">
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;" title="Create one slot per family per cycle">
+              <input type="checkbox" id="new-tt-fslot" style="width:14px;height:14px;cursor:pointer;"> Per family
+            </label>
             <button class="btn btn-sm" onclick="addTaskType()">+ Add</button>
           </div>
         </div>
         <table>
-          <thead><tr><th>Label</th><th>Slug</th><th>Order</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Label</th><th>Slug</th><th>Order</th><th>Create slot per family</th><th>Status</th><th></th></tr></thead>
           <tbody id="tt-tbody">
             ${types.map(t => `
               <tr id="tt-${t.slug}">
@@ -2320,6 +2345,11 @@ async function renderTaskTypes() {
                     style="border:none;border-bottom:1px solid var(--gray-2);font-size:13px;font-family:var(--font-body);background:transparent;width:50px;outline:none;"
                     onfocus="this.style.borderBottomColor='var(--black)'"
                     onblur="this.style.borderBottomColor='var(--gray-2)'">
+                </td>
+                <td style="text-align:center;">
+                  <input type="checkbox" id="tt-fslot-${t.slug}" ${t.is_family_slot ? 'checked' : ''}
+                    title="When checked, one slot is automatically created for each active family every cycle"
+                    style="width:16px;height:16px;cursor:pointer;">
                 </td>
                 <td>${t.is_active
                   ? '<span style="color:#1a7a3c;font-size:12px;font-weight:600;">● Active</span>'
@@ -2340,22 +2370,25 @@ async function renderTaskTypes() {
 }
 
 async function addTaskType() {
-  const inp = document.getElementById('new-tt-label');
-  const label = inp.value.trim();
+  const inp          = document.getElementById('new-tt-label');
+  const fslot        = document.getElementById('new-tt-fslot');
+  const label        = inp.value.trim();
+  const is_family_slot = fslot?.checked ? 1 : 0;
   if (!label) return;
   try {
-    await POST('/task-types', { label });
-    inp.value = '';
+    await POST('/task-types', { label, is_family_slot });
+    inp.value = ''; if (fslot) fslot.checked = false;
     renderTaskTypes();
   } catch(e) { alert(e.message); }
 }
 
 async function saveTaskType(slug) {
-  const label = document.getElementById('tt-label-' + slug)?.value.trim();
-  const order = parseInt(document.getElementById('tt-order-' + slug)?.value) || 0;
+  const label        = document.getElementById('tt-label-'  + slug)?.value.trim();
+  const order        = parseInt(document.getElementById('tt-order-' + slug)?.value) || 0;
+  const is_family_slot = document.getElementById('tt-fslot-' + slug)?.checked ? 1 : 0;
   if (!label) return;
   try {
-    await PUT('/task-types/' + slug, { label, display_order: order });
+    await PUT('/task-types/' + slug, { label, display_order: order, is_family_slot });
     renderTaskTypes();
   } catch(e) { alert(e.message); }
 }
@@ -3634,11 +3667,31 @@ async function manualConfirmFamily(familyId, familyName) {
 }
 
 async function resetFamilyOrder(familyId, familyName) {
-  if (!confirm(`Reset ${familyName}'s current order?\n\nThis clears their order back to pending and cancels any open change requests. No notification will be sent to the family.`)) return;
+  if (!confirm(`Reset ${familyName}'s current order?\n\nFor confirmed orders: clears items and resets back to pending.\nFor cancelled/skipped orders: deletes the record so the family can re-order.\n\nNo notification will be sent to the family.`)) return;
   try {
     await POST('/families/' + familyId + '/reset-order', {});
     viewFamily(familyId);
   } catch(e) { alert('Could not reset order: ' + e.message); }
+}
+
+async function adminCancelOrder(familyId, cycleId, familyName) {
+  const reason = prompt(`Cancel ${familyName}'s order?\n\nOptional: enter a reason (shown in admin logs). Leave blank to cancel without a reason.`);
+  if (reason === null) return; // user hit Cancel on the prompt
+  try {
+    await POST('/families/' + familyId + '/cancel-order', { cycle_id: cycleId, reason: reason.trim() });
+    alert(`Order cancelled. ${familyName} can now place a fresh order for this delivery.`);
+    viewFamily(familyId);
+  } catch(e) { alert('Could not cancel order: ' + e.message); }
+}
+
+async function approveBundleChange(familyId, action, familyName) {
+  const label = action === 'approve' ? 'approve' : 'deny';
+  if (!confirm(`${label.charAt(0).toUpperCase()+label.slice(1)} bundle size change for ${familyName}?`)) return;
+  try {
+    const res = await POST('/families/' + familyId + '/approve-bundle-change', { action });
+    alert(res.message || (action === 'approve' ? 'Bundle size updated.' : 'Request denied.'));
+    viewFamily(familyId);
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // ── Change Requests Inbox ─────────────────────────────────────────────────────
@@ -3880,11 +3933,12 @@ async function renderCatalog() {
             </tr></thead>
             <tbody>
               ${items.length ? items.map(item => {
-                const bqs = item.bundle_quantities || {};
                 return `<tr>
                   <td><strong>${item.name}</strong></td>
-                  <td style="font-size:12px;color:var(--gray-4)">${item.unit}</td>
-                  <td style="font-size:12px">—</td><td style="font-size:12px">—</td><td style="font-size:12px">—</td>
+                  <td style="font-size:12px;color:var(--gray-4)">${item.unit||'—'}</td>
+                  <td style="font-size:12px" data-bq="${item.id}_S">—</td>
+                  <td style="font-size:12px" data-bq="${item.id}_M">—</td>
+                  <td style="font-size:12px" data-bq="${item.id}_L">—</td>
                   <td><span class="badge ${item.is_active?'badge-active':'badge-inactive'}">${item.is_active?'Active':'Hidden'}</span></td>
                   <td><button class="btn btn-outline btn-sm" onclick="openItemForm('${item.id}')">Edit</button></td>
                 </tr>`;
@@ -3905,22 +3959,11 @@ async function renderCatalog() {
 async function loadBundleQtysIntoTable() {
   try {
     const bqs = await GET('/bundle-quantities');
-    // Map bqs by item_id + size
     const map = {};
     bqs.forEach(bq => { map[bq.food_item_id + '_' + bq.bundle_size] = bq.quantity; });
-
-    // Update all table cells for S/M/L
-    _catalogItems.forEach(item => {
-      const row = document.querySelector(`tr[data-item="${item.id}"]`);
-      // Since we used template literals, let's just find cells by traversal
-      // Re-render with quantities inline instead
-    });
-
-    // Simpler: re-render the quantities directly in cells
-    const tds = document.querySelectorAll('td[data-bq]');
-    tds.forEach(td => {
-      const key = td.getAttribute('data-bq');
-      td.textContent = map[key] || '—';
+    document.querySelectorAll('td[data-bq]').forEach(td => {
+      const val = map[td.getAttribute('data-bq')];
+      td.textContent = (val !== undefined && val !== null && val !== '') ? val : '—';
     });
   } catch(e) {}
 }
@@ -3968,12 +4011,28 @@ async function saveCategory() {
   } catch(e) { showErr(e.message); }
 }
 
-function openItemForm(id, defaultCatId) {
+async function openItemForm(id, defaultCatId) {
   STATE.editId = id || null;
   const item = id ? _catalogItems.find(i => i.id === id) : null;
   const catOptions = _catalogCats.map(c =>
     `<option value="${c.id}" ${(item?.category_id||defaultCatId)===c.id?'selected':''}>${c.name}</option>`
   ).join('');
+
+  // Pre-load existing quantities if editing
+  let qtyS = '', qtyM = '', qtyL = '';
+  if (id) {
+    try {
+      const bqs = await GET('/bundle-quantities');
+      bqs.forEach(bq => {
+        if (bq.food_item_id === id) {
+          if (bq.bundle_size === 'S') qtyS = bq.quantity;
+          else if (bq.bundle_size === 'M') qtyM = bq.quantity;
+          else if (bq.bundle_size === 'L') qtyL = bq.quantity;
+        }
+      });
+    } catch(e) {}
+  }
+
   openDrawer(id ? 'Edit Food Item' : 'Add Food Item', `
     <div class="form-group">
       <label>Category *</label>
@@ -3996,7 +4055,23 @@ function openItemForm(id, defaultCatId) {
         </select>
       </div>
     </div>
-    <p style="font-size:11px;color:var(--gray-4);margin-top:4px">After saving, use "Edit Quantities" to set S/M/L amounts for this item.</p>
+    <div style="margin-top:12px;margin-bottom:4px">
+      <label style="font-size:12px;font-weight:600;color:var(--gray-5)">Quantity per Bundle Size</label>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Small</label>
+        <input type="number" id="item-qty-s" min="0" step="0.5" placeholder="—" value="${qtyS}" style="text-align:center">
+      </div>
+      <div class="form-group">
+        <label>Medium</label>
+        <input type="number" id="item-qty-m" min="0" step="0.5" placeholder="—" value="${qtyM}" style="text-align:center">
+      </div>
+      <div class="form-group">
+        <label>Large</label>
+        <input type="number" id="item-qty-l" min="0" step="0.5" placeholder="—" value="${qtyL}" style="text-align:center">
+      </div>
+    </div>
     <div class="alert alert-error" id="item-err"></div>`,
     `<button class="btn" onclick="saveItem()">Save</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
@@ -4015,8 +4090,27 @@ async function saveItem() {
     is_active: parseInt(document.getElementById('item-active').value)
   };
   try {
-    if (STATE.editId) await PUT('/food-items/' + STATE.editId, payload);
-    else await POST('/food-items', payload);
+    let itemId = STATE.editId;
+    if (itemId) {
+      await PUT('/food-items/' + itemId, payload);
+    } else {
+      const res = await POST('/food-items', payload);
+      itemId = res.id;
+    }
+
+    // Save S/M/L quantities (batch PUT expects an array)
+    const qtyEntries = [
+      { size: 'S', val: document.getElementById('item-qty-s').value },
+      { size: 'M', val: document.getElementById('item-qty-m').value },
+      { size: 'L', val: document.getElementById('item-qty-l').value },
+    ];
+    const bqPayload = qtyEntries
+      .filter(({ val }) => val !== '' && !isNaN(parseFloat(val)))
+      .map(({ size, val }) => ({ food_item_id: itemId, bundle_size: size, quantity: parseFloat(val) }));
+    if (bqPayload.length > 0) {
+      await PUT('/bundle-quantities', bqPayload).catch(() => {}); // non-fatal
+    }
+
     closeDrawer(); renderCatalog();
   } catch(e) { showErr(e.message); }
 }
