@@ -509,7 +509,8 @@ function buildFamilyCard(fam, task_types, cycle) {
   const addressBox = fam.address
     ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
 
-  const orderBadge = fam.order_status
+  const orderConfirmed = ['confirmed','submitted','delivered'].includes(fam.order_status);
+  const orderBadge = orderConfirmed
     ? `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#e6f4ea;color:#1a7a3c;border-radius:3px;white-space:nowrap;">✓ Order placed</span>`
     : `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#fff8e1;color:#b45309;border-radius:3px;white-space:nowrap;">⏳ No order yet</span>`;
 
