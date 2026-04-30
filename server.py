@@ -1196,7 +1196,11 @@ def _send_sms(phone_digits, message):
         return False
     try:
         from twilio.rest import Client
-        to = '+1' + phone_digits if not phone_digits.startswith('+') else phone_digits
+        # Normalize to E.164: strip to digits, drop leading 1 if 11-digit, prepend +1
+        digits = ''.join(c for c in phone_digits if c.isdigit())
+        if len(digits) == 11 and digits.startswith('1'):
+            digits = digits[1:]
+        to = '+1' + digits
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         client.messages.create(body=message, from_=TWILIO_FROM, to=to)
         log.info(f'SMS sent to {phone_digits}')
