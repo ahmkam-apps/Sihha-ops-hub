@@ -3264,6 +3264,7 @@ async function renderOrders() {
   try {
     const cycles = await GET('/delivery-cycles');
     const defaultCycle = cycles.find(c => c.status === 'shopping')
+                      || cycles.find(c => c.status === 'open')
                       || cycles.find(c => c.status === 'upcoming') || cycles[0];
     const defaultCycleId = defaultCycle ? defaultCycle.id : null;
 
