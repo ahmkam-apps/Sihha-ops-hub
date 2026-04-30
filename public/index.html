@@ -795,21 +795,22 @@ async function renderDashboard() {
     ]);
 
     // ── Active Delivery Banner ──────────────────────────────────────────────────
-    const activeCycle = cycles.find(c => c.status === 'shopping')
+    const activeCycle = cycles.find(c => c.status === 'open')
+                     || cycles.find(c => c.status === 'shopping')
                      || cycles.find(c => c.status === 'upcoming')
                      || cycles[0];
 
-    const statusColors = { upcoming:'#1a8754', shopping:'#2e86c1', delivered:'#555' };
-    const statusBg     = { upcoming:'#f0faf5', shopping:'#eaf4fb', delivered:'#f5f5f5' };
+    const statusColors = { upcoming:'#1a8754', open:'#e07b00', shopping:'#2e86c1', delivered:'#555' };
+    const statusBg     = { upcoming:'#f0faf5', open:'#fff8f0', shopping:'#eaf4fb', delivered:'#f5f5f5' };
 
     let cycleHTML = '';
     if (activeCycle) {
       const sc = statusColors[activeCycle.status] || '#888';
       const sb = statusBg[activeCycle.status]     || '#f9f9f9';
       const actions = [];
-      if (['upcoming','shopping'].includes(activeCycle.status))
+      if (['upcoming','open','shopping'].includes(activeCycle.status))
         actions.push(`<button class="btn btn-sm" onclick="nav('orders')">Orders</button>`);
-      if (['upcoming','shopping'].includes(activeCycle.status)) {
+      if (['upcoming','open','shopping'].includes(activeCycle.status)) {
         actions.push(`<button class="btn btn-sm" onclick="generateSlotsFromDash('${activeCycle.id}')">Slots</button>`);
         actions.push(`<button class="btn btn-sm" onclick="triggerRemindersFromDash()">Remind</button>`);
       }
