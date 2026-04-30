@@ -2973,14 +2973,41 @@ def manual_confirm_family(fid):
             (str(uuid.uuid4()), rid, item['id'])
         )
 
-    # Auto-create volunteer slots immediately
+    # Auto-create volunteer slots immediately (creates open slots if absent)
     slots_created = _ensure_volunteer_slots(db, cycle['id'], fid)
+
+    # Flip any already-claimed slots to confirmed — volunteer signed up before admin added the family
+    claimed_slots = db.execute(
+        '''SELECT vs.*, v.name as vol_name, v.wa_phone, v.wa_apikey
+           FROM volunteer_slots vs
+           JOIN volunteers v ON vs.claimed_by = v.id
+           WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status='claimed' ''',
+        (cycle['id'], fid)
+    ).fetchall()
+    for slot in claimed_slots:
+        db.execute(
+            "UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?",
+            (now(), slot['id'])
+        )
+    slots_confirmed = len(claimed_slots)
 
     _log_order_event(db, rid, 'admin_override', actor='admin',
                      payload={'new_status': 'confirmed', 'note': 'manual confirm by coordinator'})
     db.commit()
-    log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} by coordinator — {slots_created} slots created')
-    return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size, 'slots_created': slots_created}), 201
+
+    # Notify volunteers whose slots just became confirmed
+    for slot in claimed_slots:
+        try:
+            address_line = f"\n📍 {family['address']}, {family['city']}" if slot['task_type'] == 'delivery' and family.get('address') else ''
+            msg = (f"✅ Your {slot['task_type']} slot for family {family['family_code'] or fid[:8]} "
+                   f"({cycle['title']}) is now confirmed — the coordinator has added them to this delivery.{address_line}")
+            _send_wa(slot['wa_phone'], slot['wa_apikey'], msg)
+        except Exception as e:
+            log.warning(f'manual_confirm WA notify failed for slot {slot["id"]}: {e}')
+
+    log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} — {slots_created} slots created, {slots_confirmed} slots confirmed')
+    return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size,
+                    'slots_created': slots_created, 'slots_confirmed': slots_confirmed}), 201
 
 @app.route('/api/delivery-cycles/<cid>/shopping-list', methods=['GET'])
 @require_auth()
