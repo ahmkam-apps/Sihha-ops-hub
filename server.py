@@ -25,6 +25,12 @@ NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
 # Set WA_ENABLED=0 in Railway env to bypass all WhatsApp sends globally (useful during dev/testing)
 WA_ENABLED = os.environ.get('WA_ENABLED', '1').strip() not in ('0', 'false', 'no', 'off')
 
+# ── Twilio (SMS OTP) ──────────────────────────────────────────────────────────
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN  = os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_FROM        = os.environ.get('TWILIO_FROM', '')  # E.164 e.g. +15551234567
+SMS_ENABLED        = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM)
+
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -838,6 +844,16 @@ def bootstrap_db():
             FOREIGN KEY (volunteer_id) REFERENCES volunteers(id)
         );
 
+        CREATE TABLE IF NOT EXISTS otp_tokens (
+            id         TEXT PRIMARY KEY,
+            phone      TEXT NOT NULL,
+            code       TEXT NOT NULL,
+            type       TEXT NOT NULL DEFAULT 'volunteer',
+            expires_at TEXT NOT NULL,
+            used       INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS reminder_log (
             id       TEXT PRIMARY KEY,
             slot_id  TEXT NOT NULL,
@@ -1208,6 +1224,26 @@ def _wa_send_async(sends):
         for phone, apikey, msg in items:
             _wa_send(phone, apikey, msg)
     _t.Thread(target=_run, daemon=True).start()
+
+def _send_sms(phone_digits, message):
+    """Send an SMS via Twilio. phone_digits = 10-digit US number (no country code).
+    Returns True on success, False on failure. Never raises.
+    No-ops if TWILIO env vars are not set."""
+    if not SMS_ENABLED:
+        log.warning(f'SMS not configured — skipping send to {phone_digits}. '
+                    'Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM in Railway.')
+        return False
+    try:
+        from twilio.rest import Client
+        to = '+1' + phone_digits if not phone_digits.startswith('+') else phone_digits
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(body=message, from_=TWILIO_FROM, to=to)
+        log.info(f'SMS sent to {phone_digits}')
+        return True
+    except Exception as e:
+        log.warning(f'SMS send failed to {phone_digits}: {e}')
+        return False
+
 
 def _today_central():
     """Return today's date in US Central time (America/Chicago).
@@ -5011,6 +5047,126 @@ def serve_upload(filename):
 def portal_page():
     return send_from_directory('public', 'portal.html')
 
+# ── OTP Authentication ────────────────────────────────────────────────────────
+
+@app.route('/api/otp/request', methods=['POST'])
+def otp_request():
+    """Step 1: validate phone, generate PIN, send via SMS.
+    Body: {phone, type}  where type='family'|'volunteer'
+    """
+    import random
+    data  = request.json or {}
+    phone = _normalize_phone(data.get('phone') or '')
+    kind  = data.get('type', 'volunteer')
+
+    if not phone:
+        return jsonify({'error': 'Phone number required'}), 400
+    if kind not in ('family', 'volunteer'):
+        return jsonify({'error': 'Invalid type'}), 400
+
+    db = get_db()
+
+    # Validate phone exists and is active
+    if kind == 'volunteer':
+        row = db.execute(
+            "SELECT id FROM volunteers WHERE phone=? AND status='active'", (phone,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'No active volunteer found with this number. '
+                                     'Contact a coordinator if you need help.'}), 404
+    else:
+        row = db.execute(
+            "SELECT id FROM families WHERE phone=? AND status='active'", (phone,)
+        ).fetchone()
+        if not row:
+            # Try fuzzy match (same logic as food-order/check)
+            all_fams = db.execute("SELECT id, phone FROM families WHERE status='active'").fetchall()
+            row = next(
+                (f for f in all_fams if _normalize_phone(f['phone'] or '') == phone), None
+            )
+        if not row:
+            return jsonify({'error': 'No active family account found with this number. '
+                                     'Contact us if you need help.'}), 404
+
+    # Expire any existing unused tokens for this phone+type
+    db.execute(
+        "UPDATE otp_tokens SET used=1 WHERE phone=? AND type=? AND used=0",
+        (phone, kind)
+    )
+
+    # Generate 6-digit code
+    code = str(random.randint(100000, 999999))
+    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    db.execute(
+        "INSERT INTO otp_tokens (id, phone, code, type, expires_at, used, created_at) VALUES (?,?,?,?,?,0,?)",
+        (str(uuid.uuid4()), phone, code, kind, expires_at, now())
+    )
+    db.commit()
+
+    # Send SMS
+    msg = f'Your SIHAA verification code is: {code}\nExpires in 10 minutes. Do not share this code.'
+    sent = _send_sms(phone, msg)
+    if not sent:
+        log.error(f'OTP SMS failed for {phone} — code was {code}')
+        return jsonify({'error': 'Could not send SMS. Please try again or contact a coordinator.'}), 500
+
+    return jsonify({'sent': True})
+
+
+@app.route('/api/otp/verify', methods=['POST'])
+def otp_verify():
+    """Step 2: verify PIN, issue session.
+    Body: {phone, code, type}
+    For volunteers: returns {token, volunteer}
+    For families:   returns {verified: true, phone}
+    """
+    data  = request.json or {}
+    phone = _normalize_phone(data.get('phone') or '')
+    code  = str(data.get('code') or '').strip()
+    kind  = data.get('type', 'volunteer')
+
+    if not phone or not code:
+        return jsonify({'error': 'Phone and code required'}), 400
+
+    db = get_db()
+    token_row = db.execute(
+        """SELECT * FROM otp_tokens
+           WHERE phone=? AND code=? AND type=? AND used=0
+             AND expires_at > ?
+           ORDER BY created_at DESC LIMIT 1""",
+        (phone, code, kind, now())
+    ).fetchone()
+
+    if not token_row:
+        return jsonify({'error': 'Invalid or expired code. Request a new one.'}), 400
+
+    # Burn the token
+    db.execute("UPDATE otp_tokens SET used=1 WHERE id=?", (token_row['id'],))
+    db.commit()
+
+    if kind == 'volunteer':
+        vol = db.execute(
+            "SELECT * FROM volunteers WHERE phone=? AND status='active'", (phone,)
+        ).fetchone()
+        if not vol:
+            return jsonify({'error': 'Volunteer account not found'}), 404
+        session_token = str(uuid.uuid4())
+        expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
+        db.execute(
+            "INSERT INTO portal_sessions (token, volunteer_id, expires_at, created_at) VALUES (?,?,?,?)",
+            (session_token, vol['id'], expires_at, now())
+        )
+        db.commit()
+        return jsonify({
+            'token': session_token,
+            'volunteer': {'id': vol['id'], 'name': vol['name'],
+                          'phone': vol['phone'], 'role': vol['role']}
+        })
+    else:
+        # Family — stateless, just return verified phone
+        return jsonify({'verified': True, 'phone': phone})
+
+
 @app.route('/api/portal/login', methods=['POST'])
 def portal_login():
     data = request.json or {}
@@ -6431,8 +6587,24 @@ try:
                        id='family_cutoff_skip', replace_existing=True)
     _scheduler.add_job(_release_unconfirmed_slots_job, 'cron', hour=10, minute=0,
                        id='auto_release_unconfirmed_slots', replace_existing=True)
+
+    def _purge_otp_tokens():
+        """Delete used or expired OTP tokens daily — housekeeping only."""
+        try:
+            import sqlite3 as _sq
+            _db = _sq.connect(DB_PATH)
+            _db.row_factory = _sq.Row
+            _db.execute("DELETE FROM otp_tokens WHERE used=1 OR expires_at < ?", (now(),))
+            _db.commit()
+            _db.close()
+            log.info('OTP token cleanup complete')
+        except Exception as _e:
+            log.warning(f'OTP purge failed: {_e}')
+
+    _scheduler.add_job(_purge_otp_tokens, 'cron', hour=3, minute=0,
+                       id='otp_token_cleanup', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — reminders 08:00, family confirmations 09:00, cutoff 09:30, auto-release slots 10:00 UTC')
+    log.info('APScheduler started — reminders 08:00, family confirmations 09:00, cutoff 09:30, auto-release slots 10:00, OTP cleanup 03:00 UTC')
 except ImportError:
     log.warning('APScheduler not installed. Run: pip install apscheduler')
 except Exception as _e:

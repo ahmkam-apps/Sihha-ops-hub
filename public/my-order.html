@@ -471,14 +471,33 @@
   <div class="container">
     <div class="login-card">
       <h1 data-en="My Deliveries" data-ar="طلباتي">My Deliveries</h1>
-      <p data-en="Enter the phone number you registered with to manage your food orders." data-ar="أدخل رقم الهاتف الذي سجّلت به لإدارة طلباتك.">Enter the phone number you registered with to manage your food orders.</p>
 
-      <label class="field-label" for="phone-input" data-en="Phone Number" data-ar="رقم الهاتف">Phone Number</label>
-      <input type="tel" id="phone-input" placeholder="e.g. 5551234567" autocomplete="tel" inputmode="numeric">
+      <!-- Step 1: Phone -->
+      <div id="login-step-phone">
+        <p data-en="Enter the phone number you registered with." data-ar="أدخل رقم الهاتف الذي سجّلت به.">Enter the phone number you registered with.</p>
+        <label class="field-label" for="phone-input" data-en="Phone Number" data-ar="رقم الهاتف">Phone Number</label>
+        <input type="tel" id="phone-input" placeholder="e.g. 5551234567" autocomplete="tel" inputmode="numeric"
+               onkeydown="if(event.key==='Enter') doRequestOtp()">
+        <button class="btn-primary" onclick="doRequestOtp()" id="login-btn">
+          <span data-en="SEND CODE" data-ar="إرسال الرمز">SEND CODE</span>
+        </button>
+      </div>
 
-      <button class="btn-primary" onclick="doLogin()" id="login-btn">
-        <span data-en="VIEW MY DELIVERIES" data-ar="عرض طلباتي">VIEW MY DELIVERIES</span>
-      </button>
+      <!-- Step 2: PIN -->
+      <div id="login-step-pin" style="display:none">
+        <p id="pin-sent-msg">A 6-digit code was sent to your phone. Enter it below.</p>
+        <label class="field-label" for="pin-input" data-en="Verification Code" data-ar="رمز التحقق">Verification Code</label>
+        <input type="text" id="pin-input" placeholder="123456" inputmode="numeric" maxlength="6"
+               autocomplete="one-time-code" onkeydown="if(event.key==='Enter') doVerifyPin()"
+               style="letter-spacing:6px;font-size:22px;text-align:center">
+        <button class="btn-primary" onclick="doVerifyPin()" id="verify-btn">
+          <span data-en="VERIFY" data-ar="تحقق">VERIFY</span>
+        </button>
+        <div style="text-align:center;margin-top:12px">
+          <button onclick="resetLoginToPhone()" style="background:none;border:none;color:var(--gray-4);font-size:13px;cursor:pointer;text-decoration:underline"
+                  data-en="← Use a different number" data-ar="← استخدم رقماً آخر">← Use a different number</button>
+        </div>
+      </div>
 
       <div class="error-msg" id="login-error">
         <span id="login-error-text"></span><br>
@@ -580,10 +599,36 @@ const EVENT_LABELS = {
   order_reset:      { en: '⟳ Order reset by coordinator',   ar: '⟳ تمت إعادة تعيين الطلب' },
 };
 
-// ── Login ──────────────────────────────────────────────────────────────────────
-document.getElementById('phone-input').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+// ── Login (OTP two-step) ───────────────────────────────────────────────────────
+let _otpPhone = ''; // holds phone between step 1 and step 2
 
-async function doLogin() {
+// Restore session from localStorage on page load
+(function restoreSession() {
+  const savedPhone = localStorage.getItem('family_phone');
+  if (savedPhone) {
+    _otpPhone = savedPhone;
+    _loadAndShow(savedPhone);
+  }
+})();
+
+async function _loadAndShow(phone) {
+  try {
+    const res  = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
+    const data = await res.json();
+    if (!data.registered) { localStorage.removeItem('family_phone'); return; }
+    STATE.phone      = phone;
+    STATE.family     = data.family_name;
+    STATE.familyId   = data.family_id;
+    STATE.bundleSize = data.bundle_size;
+    STATE.cycles     = data.cycles  || [];
+    STATE.history    = data.history || [];
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('dashboard').style.display    = 'block';
+    renderAll();
+  } catch(e) { localStorage.removeItem('family_phone'); }
+}
+
+async function doRequestOtp() {
   const raw   = document.getElementById('phone-input').value.trim();
   const phone = raw.replace(/\D/g, '');
   if (!phone) {
@@ -592,33 +637,69 @@ async function doLogin() {
   }
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
+  hideLoginError();
   try {
-    const res  = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
+    const res  = await fetch('/api/otp/request', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({phone, type: 'family'})
+    });
     const data = await res.json();
-    if (!data.registered) {
-      showLoginError(
-        data.message || (currentLang === 'ar'
-          ? 'لم نجد رقمك. تأكد من استخدام نفس الرقم الذي سجّلت به.'
-          : 'Phone number not found. Make sure you use the number you registered with.'),
-        data.coordinator_wa
-      );
+    if (!res.ok) {
+      showLoginError(data.error || (currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong.'),
+                     data.coordinator_wa);
       btn.disabled = false;
       return;
     }
-    STATE.phone       = raw;
-    STATE.family      = data.family_name;
-    STATE.familyId    = data.family_id;
-    STATE.bundleSize  = data.bundle_size;
-    STATE.cycles      = data.cycles  || [];
-    STATE.history     = data.history || [];
-
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('dashboard').style.display    = 'block';
-    renderAll();
+    _otpPhone = phone;
+    // Show PIN step
+    document.getElementById('login-step-phone').style.display = 'none';
+    document.getElementById('login-step-pin').style.display   = 'block';
+    document.getElementById('pin-input').value = '';
+    document.getElementById('pin-input').focus();
   } catch(e) {
     showLoginError(currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
     btn.disabled = false;
   }
+}
+
+async function doVerifyPin() {
+  const code = document.getElementById('pin-input').value.trim().replace(/\D/g, '');
+  if (code.length < 6) {
+    showLoginError(currentLang === 'ar' ? 'أدخل الرمز المكون من 6 أرقام.' : 'Please enter the 6-digit code.');
+    return;
+  }
+  const btn = document.getElementById('verify-btn');
+  btn.disabled = true;
+  hideLoginError();
+  try {
+    const res  = await fetch('/api/otp/verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({phone: _otpPhone, code, type: 'family'})
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showLoginError(data.error || (currentLang === 'ar' ? 'رمز غير صحيح أو منتهي.' : 'Invalid or expired code.'));
+      btn.disabled = false;
+      return;
+    }
+    // Verified — load family data
+    localStorage.setItem('family_phone', _otpPhone);
+    await _loadAndShow(_otpPhone);
+    resetLoginToPhone();
+  } catch(e) {
+    showLoginError(currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');
+    btn.disabled = false;
+  }
+}
+
+function resetLoginToPhone() {
+  document.getElementById('login-step-phone').style.display = 'block';
+  document.getElementById('login-step-pin').style.display   = 'none';
+  document.getElementById('login-btn').disabled = false;
+  document.getElementById('pin-input').value = '';
+  hideLoginError();
 }
 
 function showLoginError(msg, waLink) {
@@ -626,22 +707,23 @@ function showLoginError(msg, waLink) {
   const errText = document.getElementById('login-error-text');
   const waEl    = document.getElementById('wa-coordinator-link');
   errText.textContent = msg;
-  if (waLink) {
-    waEl.href = waLink;
-    waEl.style.display = 'inline';
-  } else {
-    waEl.style.display = 'none';
-  }
+  if (waLink) { waEl.href = waLink; waEl.style.display = 'inline'; }
+  else         { waEl.style.display = 'none'; }
   errEl.style.display = 'block';
+}
+
+function hideLoginError() {
+  document.getElementById('login-error').style.display = 'none';
 }
 
 function doLogout() {
   STATE.familyId = null; STATE.family = null; STATE.cycles = []; STATE.history = [];
+  localStorage.removeItem('family_phone');
+  _otpPhone = '';
   document.getElementById('dashboard').style.display    = 'none';
   document.getElementById('login-screen').style.display = 'block';
-  document.getElementById('phone-input').value  = '';
-  document.getElementById('login-error').style.display = 'none';
-  document.getElementById('login-btn').disabled = false;
+  document.getElementById('phone-input').value = '';
+  resetLoginToPhone();
 }
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
