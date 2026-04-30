@@ -345,6 +345,7 @@ async function doLogin() {
 }
 
 function logout() {
+  stopPolling();
   localStorage.removeItem('portal_token');
   localStorage.removeItem('portal_vol');
   TOKEN = null; VOL = null;
@@ -367,9 +368,42 @@ function switchTab(tab) {
     document.getElementById('tab-' + t).classList.toggle('active', t === tab);
     document.getElementById('pane-' + t).style.display = t === tab ? '' : 'none';
   });
-  if (tab === 'main')    { refreshAll(); }
-  if (tab === 'history') { loadHistory(); }
+  if (tab === 'main')    { refreshAll(); startPolling(); }
+  if (tab === 'history') { stopPolling(); loadHistory(); }
 }
+
+// ── Background polling — keeps shopping list current ──────────────────────────
+let _pollTimer = null;
+const POLL_INTERVAL = 60000; // 60 seconds
+
+function startPolling() {
+  stopPolling();
+  _pollTimer = setInterval(() => {
+    if (document.visibilityState !== 'hidden') silentRefreshTasks();
+  }, POLL_INTERVAL);
+}
+
+function stopPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+// Silently re-fetch tasks + receipts only (not the full family list)
+async function silentRefreshTasks() {
+  try {
+    const [tasks, receipts] = await Promise.all([
+      GET('/portal/my-tasks'),
+      GET('/portal/receipts').catch(() => [])
+    ]);
+    renderMySignups(tasks, receipts);
+  } catch(e) {
+    if (e.message.includes('expired')) { logout(); }
+  }
+}
+
+// Pause polling when browser tab is hidden, resume when visible
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _pollTimer) silentRefreshTasks();
+});
 
 // Refresh both sections together
 async function refreshAll() {
