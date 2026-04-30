@@ -84,8 +84,15 @@
   .btn-disabled { background: var(--gray-3); cursor: not-allowed; }
   .error { color: var(--red); font-size: 13px; margin-top: 10px; display: none; }
 
-  /* Tabs */
-  .tabs {
+  /* Section headings (main page sections) */
+  .section-divider {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--gray-4); margin: 28px 0 12px; padding-bottom: 8px;
+    border-bottom: 2px solid var(--gray-2); display: flex; align-items: center;
+    justify-content: space-between;
+  }
+  /* History tab */
+  .tab-bar {
     display: flex; border-bottom: 2px solid var(--gray-2); margin-bottom: 24px;
     position: sticky; top: 0; background: var(--off-white); z-index: 50;
   }
@@ -232,34 +239,47 @@
 
 <!-- MAIN APP (hidden until logged in) -->
 <div id="app-screen" style="display:none">
-  <div class="container">
-    <div class="tabs">
-      <div class="tab active" id="tab-open"    onclick="showTab('open')">Sign Up</div>
-      <div class="tab"        id="tab-mytasks" onclick="showTab('mytasks')">My Tasks</div>
-      <div class="tab"        id="tab-history" onclick="showTab('history')">History</div>
-    </div>
 
-    <!-- SIGN UP TAB -->
-    <div id="pane-open">
+  <!-- MAIN VIEW: Tasks + Sign Up on one page -->
+  <div id="pane-main">
+    <div class="container">
+
+      <!-- MY TASKS section -->
+      <div class="section-divider">
+        <span>My Tasks</span>
+        <a href="#" onclick="showHistory();return false;"
+           style="font-size:11px;font-weight:600;color:var(--gray-4);text-decoration:none;text-transform:uppercase;letter-spacing:.05em;">
+          History →
+        </a>
+      </div>
+      <div id="tasks-content"><div class="spinner">Loading…</div></div>
+
+      <!-- SIGN UP section -->
+      <div class="section-divider" style="margin-top:32px;">
+        <span>Sign Up for Deliveries</span>
+      </div>
       <div class="cycle-select-wrap">
         <label style="margin:0;white-space:nowrap">Delivery:</label>
         <select id="cycle-select" onchange="loadFamilies()">
           <option value="">Loading…</option>
         </select>
       </div>
-      <div id="slots-content"><div class="empty">Select a delivery above to sign up.</div></div>
-    </div>
+      <div id="slots-content"><div class="empty">Loading deliveries…</div></div>
 
-    <!-- MY TASKS TAB -->
-    <div id="pane-mytasks" style="display:none">
-      <div id="tasks-content"><div class="spinner">Loading…</div></div>
     </div>
+  </div>
 
-    <!-- HISTORY TAB -->
-    <div id="pane-history" style="display:none">
+  <!-- HISTORY VIEW: separate page -->
+  <div id="pane-history" style="display:none">
+    <div class="container">
+      <div class="tab-bar">
+        <div class="tab active" onclick="showMain()">← Back</div>
+        <div class="tab" style="flex:2;pointer-events:none;color:var(--black);">History</div>
+      </div>
       <div id="history-content"><div class="spinner">Loading…</div></div>
     </div>
   </div>
+
 </div>
 
 <div class="footer">
@@ -351,35 +371,20 @@ async function showApp() {
   document.getElementById('app-screen').style.display   = 'block';
   document.getElementById('vol-name-display').textContent = VOL.name;
   document.getElementById('logout-btn').style.display = 'inline-block';
+  // Load both sections in parallel
   loadCycles();
-  // Pre-fetch tasks + receipts; auto-switch to My Tasks if volunteer has active commitments
-  try {
-    const [tasks, receipts] = await Promise.all([
-      GET('/portal/my-tasks'),
-      GET('/portal/receipts').catch(() => [])
-    ]);
-    const hasActive = tasks.some(t => !t.was_released && ['claimed','confirmed'].includes(t.status));
-    if (hasActive) {
-      // Switch tab without triggering another fetch — tasks are already loaded below
-      ['open', 'mytasks', 'history'].forEach(t => {
-        document.getElementById('pane-' + t).style.display = t === 'mytasks' ? '' : 'none';
-        document.getElementById('tab-'  + t).classList.toggle('active', t === 'mytasks');
-      });
-    }
-    _renderMyTasksData(tasks, receipts);
-  } catch(e) {
-    // Fallback: stay on Sign Up tab; My Tasks will load on demand when tab is clicked
-  }
+  refreshTasks();
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
-function showTab(tab) {
-  ['open', 'mytasks', 'history'].forEach(t => {
-    document.getElementById('pane-' + t).style.display = tab === t ? '' : 'none';
-    document.getElementById('tab-'  + t).classList.toggle('active', tab === t);
-  });
-  if (tab === 'mytasks') loadMyTasks();
-  if (tab === 'history') loadHistory();
+function showMain() {
+  document.getElementById('pane-main').style.display    = '';
+  document.getElementById('pane-history').style.display = 'none';
+}
+
+function showHistory() {
+  document.getElementById('pane-main').style.display    = 'none';
+  document.getElementById('pane-history').style.display = '';
+  loadHistory();
 }
 
 // ── Cycles ────────────────────────────────────────────────────────────────────
@@ -513,7 +518,7 @@ async function signUp(cycleId, familyId, taskType) {
   try {
     await POST('/portal/signup', { cycle_id: cycleId, family_id: familyId, task_types: [taskType] });
     loadFamilies();
-    loadMyTasks();
+    refreshTasks();
   } catch(e) { alert(e.message); }
 }
 
@@ -522,12 +527,26 @@ async function cancelSignup(slotId, familyId) {
   try {
     await api('DELETE', '/portal/cancel/' + slotId);
     loadFamilies();
-    loadMyTasks();
+    refreshTasks();
   } catch(e) { alert(e.message); }
 }
 
 // ── My Tasks ──────────────────────────────────────────────────────────────────
 let _receipts = [];  // cached receipt list for cross-referencing
+
+// Fetch + render tasks section (used on login and after sign-up/cancel)
+async function refreshTasks() {
+  try {
+    const [tasks, receipts] = await Promise.all([
+      GET('/portal/my-tasks'),
+      GET('/portal/receipts').catch(() => [])
+    ]);
+    _renderMyTasksData(tasks, receipts);
+  } catch(e) {
+    if (e.message.includes('expired')) { logout(); return; }
+    document.getElementById('tasks-content').innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
 
 // Pure render — called by both loadMyTasks() and showApp()
 function _renderMyTasksData(tasks, receipts) {
@@ -710,7 +729,7 @@ async function completeTask(slotId) {
   if (!confirm('Mark this task as complete?')) return;
   try {
     await POST('/portal/complete/' + slotId, {});
-    loadMyTasks();
+    refreshTasks();
   } catch(e) { alert(e.message); }
 }
 
@@ -794,7 +813,7 @@ async function submitReceipt() {
     });
 
     closeReceiptModal();
-    loadMyTasks();
+    refreshTasks();
     const msg = res.updated
       ? '✅ Receipt updated! The treasurer has been notified and will re-review your reimbursement.'
       : '✅ Receipt submitted! The treasurer will review and process your reimbursement.';
