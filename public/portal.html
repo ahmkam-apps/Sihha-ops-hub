@@ -396,6 +396,11 @@ async function loadCycles() {
     sel.innerHTML = cycles.map(c =>
       `<option value="${c.id}">${c.title} · ${fmtDate(c.delivery_date_start)}</option>`
     ).join('');
+    // Default to the most actionable cycle: open (families ordering) → shopping → first
+    const best = cycles.find(c => c.status === 'open')
+              || cycles.find(c => c.status === 'shopping')
+              || cycles[0];
+    sel.value = best.id;
     loadFamilies();
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
