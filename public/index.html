@@ -1903,14 +1903,17 @@ async function viewFamily(id) {
       </div>` : '';
 
     // ── Current cycle status ───────────────────────────────────────────────────
-    // Find the order specifically for the active cycle (not just the most recent order)
+    // Prefer the order for the active cycle; fall back to any non-terminal order
+    // (handles the case where family ordered for a different open cycle than activeCycle)
+    const TERMINAL = ['delivered','cancelled','skipped'];
     const currentOrder = activeCycle
-      ? orders.find(o => o.cycle_id === activeCycle.id)
-      : orders[0];
+      ? (orders.find(o => o.cycle_id === activeCycle.id)
+         || orders.find(o => !TERMINAL.includes(o.status)))
+      : (orders.find(o => !TERMINAL.includes(o.status)) || orders[0]);
     let cycleStrip = '';
 
     if (activeCycle && !currentOrder) {
-      // Family has no order yet for the active cycle — show "Add to Cycle" button
+      // Family has no order at all — show "Add to Cycle" button
       cycleStrip = `
         <div style="background:#fff;border-radius:12px;padding:14px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);">Current Cycle</span>
