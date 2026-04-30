@@ -1230,13 +1230,13 @@ def _log_order_event(db, request_id, event_type, actor='system', payload=None):
         log.warning(f'_log_order_event failed ({event_type} on {request_id}): {_e}')
 
 def _notify_coordinators(db, message):
-    """Send WA to all active admin users who have WA credentials configured."""
+    """Send WA to all active admin users — fires in background thread (non-blocking)."""
     try:
         admins = db.execute(
             "SELECT wa_phone, wa_apikey FROM users WHERE role='admin' AND active=1 AND wa_phone IS NOT NULL AND wa_apikey IS NOT NULL"
         ).fetchall()
-        for a in admins:
-            _wa_send(a['wa_phone'], a['wa_apikey'], message)
+        sends = [(a['wa_phone'], a['wa_apikey'], message) for a in admins]
+        _wa_send_async(sends)
     except Exception as _e:
         log.warning(f'_notify_coordinators failed: {_e}')
 
@@ -3628,27 +3628,26 @@ def submit_family_confirmation(token):
         for ir in item_rows_conf:
             qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
             item_lines_conf.append(f"  • {ir['name']}{(' — ' + qty_str) if qty_str else ''}")
+    wa_sends_conf = []
     for slot in claimed_slots_conf:
         db.execute("UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?", (now(), slot['id']))
         if slot['wa_phone'] and slot['wa_apikey']:
-            try:
-                if slot['task_type'] == 'shopping':
-                    items_text = '\n'.join(item_lines_conf) if item_lines_conf else '  (no items selected)'
-                    _wa_send(slot['wa_phone'], slot['wa_apikey'],
-                        f"✅ Order Confirmed — Shopping Task\n"
-                        f"Family: {slot['family_name']}\n"
-                        f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n\n"
-                        f"Shopping list:\n{items_text}\n\nJazakAllah Khair!")
-                else:
-                    _wa_send(slot['wa_phone'], slot['wa_apikey'],
-                        f"✅ Order Confirmed — Delivery Task\n"
-                        f"Family: {slot['family_name']}\n"
-                        f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n"
-                        f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\nJazakAllah Khair!")
-            except Exception:
-                pass
+            if slot['task_type'] == 'shopping':
+                items_text = '\n'.join(item_lines_conf) if item_lines_conf else '  (no items selected)'
+                wa_sends_conf.append((slot['wa_phone'], slot['wa_apikey'],
+                    f"✅ Order Confirmed — Shopping Task\n"
+                    f"Family: {slot['family_name']}\n"
+                    f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n\n"
+                    f"Shopping list:\n{items_text}\n\nJazakAllah Khair!"))
+            else:
+                wa_sends_conf.append((slot['wa_phone'], slot['wa_apikey'],
+                    f"✅ Order Confirmed — Delivery Task\n"
+                    f"Family: {slot['family_name']}\n"
+                    f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n"
+                    f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\nJazakAllah Khair!"))
 
     db.commit()
+    _wa_send_async(wa_sends_conf)  # fire-and-forget — response returns immediately
     return jsonify({'ok': True, 'action': 'confirmed'})
 
 # ── PWA assets ────────────────────────────────────────────────────────────────
@@ -4670,6 +4669,7 @@ def reset_family_order(fid):
             db.execute("DELETE FROM food_request_items      WHERE request_id=?", (req['id'],))
             db.execute("DELETE FROM order_change_requests   WHERE request_id=?", (req['id'],))
             db.execute("DELETE FROM food_requests           WHERE id=?",         (req['id'],))
+            db.execute("UPDATE families SET pending_bundle_size=NULL WHERE id=? AND pending_bundle_size IS NOT NULL", (fid,))
             db.commit()
             log.info(f'Order {req["id"]} DELETED (status={req["status"]}) by admin {g.user["username"]} for family {fid}')
             return jsonify({'ok': True, 'message': 'Order cleared. Family can now place a fresh order.'})
@@ -4695,6 +4695,8 @@ def reset_family_order(fid):
             "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
             (ts, req['cycle_id'], fid)
         )
+        # Clear any pending bundle size change request
+        db.execute("UPDATE families SET pending_bundle_size=NULL WHERE id=? AND pending_bundle_size IS NOT NULL", (fid,))
         _log_order_event(db, req['id'], 'order_reset', actor='admin', payload={'reset_by': g.user['username']})
         db.commit()
 
@@ -4889,20 +4891,21 @@ def edit_food_order_items():
             f"Added: {added_str}\n"
             f"Removed: {removed_str}"
         )
-        # Notify claimed volunteers (shopping list may have changed)
+        # Notify claimed volunteers (shopping list may have changed) — fire-and-forget
         claimed_vols = db.execute(
             '''SELECT v.name, v.wa_phone, v.wa_apikey, vs.task_type
                FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') AND vs.task_type='shopping' ''',
             (req['cycle_id'], family['id'])
         ).fetchall()
-        for vol in claimed_vols:
-            if vol['wa_phone'] and vol['wa_apikey']:
-                _wa_send(vol['wa_phone'], vol['wa_apikey'],
-                    f"Shopping list update: {req['family_name']} edited their order for {req['cycle_title']}.\n"
-                    f"Added: {added_str}\nRemoved: {removed_str}\n"
-                    f"Please check the updated shopping list."
-                )
+        vol_sends = [
+            (v['wa_phone'], v['wa_apikey'],
+             f"Shopping list update: {req['family_name']} edited their order for {req['cycle_title']}.\n"
+             f"Added: {added_str}\nRemoved: {removed_str}\n"
+             f"Please check the updated shopping list.")
+            for v in claimed_vols if v['wa_phone'] and v['wa_apikey']
+        ]
+        _wa_send_async(vol_sends)
 
     log.info(f'Family {family["id"]} edited items for order {request_id}: +{added} -{removed}')
     return jsonify({'ok': True, 'added': added, 'removed': removed,
