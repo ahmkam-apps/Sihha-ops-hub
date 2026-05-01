@@ -655,7 +655,7 @@ async function doRequestOtp() {
     // Show PIN step
     document.getElementById('login-step-phone').style.display = 'none';
     document.getElementById('login-step-pin').style.display   = 'block';
-    document.getElementById('pin-input').value = '';
+    document.getElementById('pin-input').value = data.code || '';
     document.getElementById('pin-input').focus();
   } catch(e) {
     showLoginError(currentLang === 'ar' ? 'حدث خطأ. حاول مجدداً.' : 'Something went wrong. Please try again.');

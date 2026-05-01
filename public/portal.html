@@ -373,7 +373,7 @@ async function doRequestOtp() {
     _otpPhone = phone;
     document.getElementById('login-step-phone').style.display = 'none';
     document.getElementById('login-step-pin').style.display   = 'block';
-    document.getElementById('login-pin').value = '';
+    document.getElementById('login-pin').value = data.code || '';
     document.getElementById('login-pin').focus();
   } catch(e) {
     err.textContent = e.message;
