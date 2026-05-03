@@ -3422,7 +3422,10 @@ async function viewCycleDetail(cycleId) {
      <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
+    const [orders, slots] = await Promise.all([
+      GET('/delivery-cycles/' + cycleId + '/orders'),
+      GET('/volunteer-slots?cycle_id=' + cycleId)
+    ]);
 
     // Tally confirmation statuses
     const confirmed      = orders.filter(o => o.status === 'confirmed').length;
@@ -3492,7 +3495,69 @@ async function viewCycleDetail(cycleId) {
               '<tr class="empty-row"><td colspan="6">No families notified yet — notifications send 7 days before delivery</td></tr>'}
           </tbody>
         </table>
-      </div>`;
+      </div>
+      ${(() => {
+        // ── Volunteer Coverage ─────────────────────────────────────────────────
+        const confirmedOrders = orders.filter(o => o.status === 'confirmed');
+        if (!confirmedOrders.length) return '';
+
+        // Build slot lookup: family_id → {shopping: slot, delivery: slot}
+        const slotMap = {};
+        slots.forEach(s => {
+          if (!slotMap[s.family_id]) slotMap[s.family_id] = {};
+          // Keep the most relevant slot per task type (prefer claimed/confirmed over open)
+          const existing = slotMap[s.family_id][s.task_type];
+          const rank = {confirmed:3, claimed:2, complete:2, open:1, cancelled:0};
+          if (!existing || (rank[s.status]||0) > (rank[existing.status]||0)) {
+            slotMap[s.family_id][s.task_type] = s;
+          }
+        });
+
+        const slotBadge = slot => {
+          if (!slot) return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:#c00">⚠ No slot</span>';
+          if (slot.status === 'open')      return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:#c00">⚠ Open</span>';
+          if (slot.status === 'claimed')   return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fff8e6;color:#7a6000">⏳ ${slot.claimed_by_name||'?'}</span>`;
+          if (slot.status === 'confirmed') return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ ${slot.claimed_by_name||'?'}</span>`;
+          if (slot.status === 'complete')  return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ Done</span>`;
+          return `<span style="font-size:11px;padding:2px 8px;background:var(--gray-1);color:var(--gray-4)">${slot.status}</span>`;
+        };
+
+        const needsShopper  = confirmedOrders.filter(o => { const s = slotMap[o.family_id]?.shopping;  return !s || s.status === 'open'; }).length;
+        const needsDelivery = confirmedOrders.filter(o => { const s = slotMap[o.family_id]?.delivery; return !s || s.status === 'open'; }).length;
+
+        const summaryParts = [];
+        if (needsShopper)  summaryParts.push(`<span style="color:#c00;font-weight:700">${needsShopper}</span> need a shopper`);
+        if (needsDelivery) summaryParts.push(`<span style="color:#c00;font-weight:700">${needsDelivery}</span> need a deliverer`);
+        const summaryHtml = summaryParts.length
+          ? summaryParts.join(' · ')
+          : '<span style="color:#1a5e34;font-weight:700">All families have volunteers ✓</span>';
+
+        const rows = confirmedOrders.map(o => {
+          const shopSlot = slotMap[o.family_id]?.shopping;
+          const delSlot  = slotMap[o.family_id]?.delivery;
+          const needsAttn = (!shopSlot || shopSlot.status==='open') || (!delSlot || delSlot.status==='open');
+          return `<tr style="${needsAttn ? 'background:#fffaf8' : ''}">
+            <td><strong>${o.family_name}</strong><br><span style="font-size:11px;color:var(--gray-4);font-family:monospace">${o.family_code||''}</span></td>
+            <td style="font-size:12px">${{S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size}</td>
+            <td>${slotBadge(shopSlot)}</td>
+            <td>${slotBadge(delSlot)}</td>
+          </tr>`;
+        }).join('');
+
+        return `
+        <div class="table-card" style="margin-top:16px">
+          <div class="table-header">
+            <span class="table-title">Volunteer Coverage</span>
+            <span style="font-size:12px">${summaryHtml}</span>
+          </div>
+          <table>
+            <thead><tr>
+              <th>Family</th><th>Bundle</th><th>Shopper</th><th>Deliverer</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      })()}`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
