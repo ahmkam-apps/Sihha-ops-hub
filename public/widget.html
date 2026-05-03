@@ -274,6 +274,26 @@
 const API = '/api/donate-stats';
 let chart = null;
 
+// Interpolate red → orange → green based on 0–100 pct
+function barColor(pct) {
+  const p = Math.min(1, pct / 100);
+  let r, g, b;
+  if (p < 0.5) {
+    // red (#c0392b) → orange (#e67e22)
+    const t = p / 0.5;
+    r = Math.round(192 + (230 - 192) * t);
+    g = Math.round(57  + (126 - 57)  * t);
+    b = Math.round(43  + (34  - 43)  * t);
+  } else {
+    // orange (#e67e22) → green (#27ae60)
+    const t = (p - 0.5) / 0.5;
+    r = Math.round(230 + (39  - 230) * t);
+    g = Math.round(126 + (174 - 126) * t);
+    b = Math.round(34  + (96  - 34)  * t);
+  }
+  return `rgb(${r},${g},${b})`;
+}
+
 function fmt(n) {
   if (n == null) return '—';
   return '$' + Math.round(n).toLocaleString('en-US');
@@ -310,24 +330,30 @@ function render(d) {
   const goalMet = adjTarget === 0 && monthlyNeed > 0;
   const barGoal = goalMet ? monthlyNeed : adjTarget;
 
+  const barRed = document.getElementById('bar-red');
+  const barGreen = document.getElementById('bar-green');
+
   if (goalMet) {
-    document.getElementById('bar-red').style.width   = '100%';
-    document.getElementById('bar-green').style.width = '0%';
+    barRed.style.width      = '100%';
+    barRed.style.background = barColor(100);
+    barGreen.style.width    = '0%';
     document.getElementById('goal-met-banner').style.display = 'block';
     document.getElementById('progress-pct').textContent  = '100% · fully covered by last month\'s surplus';
     document.getElementById('surplus-note').textContent  = '';
   } else if (collected >= barGoal && barGoal > 0) {
     const redPct   = Math.round(barGoal / collected * 100);
     const greenPct = 100 - redPct;
-    document.getElementById('bar-red').style.width   = redPct + '%';
-    document.getElementById('bar-green').style.width = greenPct + '%';
+    barRed.style.width      = redPct + '%';
+    barRed.style.background = barColor(100);
+    barGreen.style.width    = greenPct + '%';
     document.getElementById('goal-met-banner').style.display = 'none';
     document.getElementById('progress-pct').textContent  = '100% · goal reached';
     document.getElementById('surplus-note').textContent  = '+' + fmt(collected - barGoal) + ' surplus this month';
   } else {
     const pct = barGoal > 0 ? Math.min(99, Math.round(collected / barGoal * 100)) : 0;
-    document.getElementById('bar-red').style.width   = pct + '%';
-    document.getElementById('bar-green').style.width = '0%';
+    barRed.style.width      = pct + '%';
+    barRed.style.background = barColor(pct);
+    barGreen.style.width    = '0%';
     document.getElementById('goal-met-banner').style.display = 'none';
     document.getElementById('progress-pct').textContent  = pct + '% of Monthly Goal';
     document.getElementById('surplus-note').textContent  =
