@@ -20,7 +20,7 @@
   html, body {
     font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
     background: transparent;
-    color: inherit;
+    color: #ffffff;
     font-size: 14px;
     line-height: 1.4;
   }
@@ -307,8 +307,7 @@ function render(d) {
     ...projVals
   ];
 
-  // Detect text colour from body for theming
-  const textColor = getComputedStyle(document.body).color || '#111';
+  const textColor = '#ffffff';
 
   const goalPlugin = {
     id: 'goalPlugin',
@@ -401,14 +400,14 @@ function render(d) {
         x: {
           grid: { display: false },
           border: { display: false },
-          ticks: { color: 'rgba(128,128,128,0.6)', font: { size: 10 } }
+          ticks: { color: 'rgba(255,255,255,0.4)', font: { size: 10 } }
         },
         y: {
           grid: { display: false },
           border: { display: false },
           beginAtZero: true,
           ticks: {
-            color: 'rgba(128,128,128,0.6)',
+            color: 'rgba(255,255,255,0.4)',
             font: { size: 10 },
             callback: v => fmt(v)
           }
