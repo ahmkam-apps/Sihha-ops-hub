@@ -3442,9 +3442,15 @@ def update_cycle_assignment(aid):
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()))
 
+@app.route('/family')
+def family_page():
+    return send_from_directory('public', 'family.html')
+
 @app.route('/my-order')
-def my_order_page():
-    return send_from_directory('public', 'my-order.html')
+def my_order_redirect():
+    """Legacy redirect — keep so old bookmarks/SMS links still work."""
+    from flask import redirect
+    return redirect('/family', code=301)
 
 @app.route('/volunteer-signup')
 def volunteer_signup_page():

@@ -577,7 +577,7 @@
       </div>
 
       <div class="nav-section">Public Links</div>
-      <div class="nav-item" onclick="window.open('/my-order','_blank')" style="font-size:12px;">
+      <div class="nav-item" onclick="window.open('/family','_blank')" style="font-size:12px;">
         <span class="icon">⇗</span> My Order (Families)
       </div>
       <div class="nav-item" onclick="window.open('/intake','_blank')" style="font-size:12px;">
@@ -3300,7 +3300,7 @@ async function loadOrdersForCycle(cycleId) {
     wrap.innerHTML = `
       <div style="padding:32px;text-align:center;color:var(--gray-4);">
         No orders for this delivery yet.<br>
-        <a href="/my-order" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order portal →</a>
+        <a href="/family" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order portal →</a>
       </div>`;
     return;
   }

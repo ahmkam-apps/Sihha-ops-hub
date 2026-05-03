@@ -1,6 +1,6 @@
-// SIHAA Service Worker — v3
-const CACHE = 'sihaa-v3';
-const PAGES = ['/order', '/portal', '/intake', '/volunteer'];
+// SIHAA Service Worker — v4
+const CACHE = 'sihaa-v4';
+const PAGES = ['/family', '/portal', '/intake', '/volunteer'];
 
 // ── Install: pre-cache public pages ──────────────────────────────────────────
 self.addEventListener('install', e => {
