@@ -1,5 +1,5 @@
-// SIHAA Service Worker — v2
-const CACHE = 'sihaa-v2';
+// SIHAA Service Worker — v3
+const CACHE = 'sihaa-v3';
 const PAGES = ['/order', '/portal', '/intake', '/volunteer'];
 
 // ── Install: pre-cache public pages ──────────────────────────────────────────
