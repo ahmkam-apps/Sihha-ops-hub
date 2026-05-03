@@ -1,5 +1,5 @@
 """
-SIHAA Ops Hub — Live Smoke Test
+Sihha Ops Hub — Live Smoke Test
 Hits the real Railway deployment to verify core routes are up and responding correctly.
 Usage:
     python3 tests/smoke_test.py
@@ -56,7 +56,7 @@ def post(path, body, token=None):
     except Exception as e:
         return 0, {'error': str(e)}
 
-print(f'\n  SIHAA Ops Hub — Smoke Test')
+print(f'\n  Sihha Ops Hub — Smoke Test')
 print(f'  Target: {BASE_URL}')
 print(f'  {"-" * 52}')
 

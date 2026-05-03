@@ -1,4 +1,4 @@
-// SIHAA Service Worker — v4
+// Sihha Service Worker — v4
 const CACHE = 'sihaa-v4';
 const PAGES = ['/family', '/portal', '/intake', '/volunteer'];
 
@@ -63,7 +63,7 @@ function offlinePage() {
   return new Response(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Offline — SIHAA</title>
+<title>Offline — Sihha</title>
 <style>
   body{font-family:Helvetica,Arial,sans-serif;background:#111;color:#fff;
     display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px}
@@ -73,7 +73,7 @@ function offlinePage() {
 <body>
   <div>
     <h1>You're offline</h1>
-    <p>SIHAA needs an internet connection to submit requests.<br>Please reconnect and try again.</p>
+    <p>Sihha needs an internet connection to submit requests.<br>Please reconnect and try again.</p>
   </div>
 </body></html>`, {
     status: 503,

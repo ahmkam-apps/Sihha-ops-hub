@@ -1,5 +1,5 @@
 """
-Test fixtures for SIHAA Ops Hub.
+Test fixtures for Sihha Ops Hub.
 Sets DB_PATH to a temp file and mocks APScheduler + _wa_send before importing server,
 so tests are fully isolated and never touch the real DB or real WhatsApp.
 """

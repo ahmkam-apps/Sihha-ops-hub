@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-seed_cycles.py — Create all 2026 bi-weekly delivery cycles for SIHAA.
+seed_cycles.py — Create all 2026 bi-weekly delivery cycles for Sihha.
 
 Usage:
     python3 seed_cycles.py

@@ -1268,7 +1268,7 @@ def _notify_coordinators(db, message):
         import threading as _t
         def _run():
             for a in admins:
-                _email_send(a['email'], 'SIHAA Ops Alert', message)
+                _email_send(a['email'], 'Sihha Ops Alert', message)
         _t.Thread(target=_run, daemon=True).start()
     except Exception as _e:
         log.warning(f'_notify_coordinators failed: {_e}')
@@ -1283,7 +1283,7 @@ def _email_send(to_email, subject, text_body):
         return False
     payload = _json.dumps({
         'personalizations': [{'to': [{'email': to_email}]}],
-        'from': {'email': NOTIFY_FROM_EMAIL, 'name': 'SIHAA Ops Hub'},
+        'from': {'email': NOTIFY_FROM_EMAIL, 'name': 'Sihha Ops Hub'},
         'subject': subject,
         'content': [{'type': 'text/plain', 'value': text_body}]
     }).encode('utf-8')
@@ -2140,7 +2140,7 @@ def create_receipt():
         amount = data.get('amount') or 0
         store  = data.get('store') or 'unknown store'
         subject = f'New Reimbursement Request — ${amount:.2f} from {vol_name}'
-        msg = (f'New receipt submitted on SIHAA Ops Hub.\n'
+        msg = (f'New receipt submitted on Sihha Ops Hub.\n'
                f'Volunteer: {vol_name}\n'
                f'Store: {store}\n'
                f'Amount: ${amount:.2f}\n'
@@ -2249,7 +2249,7 @@ def update_reimbursement(rid):
                 ref    = d.get('payment_ref', row['payment_ref'])
                 amount = row['amount'] or 0
                 ref_line = f'\nReference: {ref}' if ref else ''
-                msg = (f'SIHAA Reimbursement Sent!\n'
+                msg = (f'Sihha Reimbursement Sent!\n'
                        f'Amount: ${amount:.2f}\n'
                        f'Method: {method.title()}{ref_line}\n'
                        f'JazakAllah Khair for your service!')
@@ -3298,14 +3298,14 @@ def _print_page(title, subtitle, body_html, cycle_title=''):
   </button>
 </div>
 <div class="header">
-  <div><div class="sub">SIHAA Food Charity — Operations Hub</div>
+  <div><div class="sub">Sihha Food Charity — Operations Hub</div>
     <h1>{cycle_title}</h1>
     <div class="sub">{subtitle}</div></div>
   <div class="right"><strong>{title}</strong><br>Generated {generated}</div>
 </div>
 {body_html}
 <div class="footer">
-  <span>SIHAA Food Charity — Operations Hub</span>
+  <span>Sihha Food Charity — Operations Hub</span>
   <span>Generated {generated}</span>
 </div>
 <script>
@@ -4765,7 +4765,7 @@ def approve_change_request(cr_id):
 
         # SMS to family
         if cr['family_phone']:
-            msg = f"SIHAA: Your change request for {cr['cycle_title']} has been approved."
+            msg = f"Sihha: Your change request for {cr['cycle_title']} has been approved."
             if admin_notes:
                 msg += f"\nCoordinator note: {admin_notes}"
             _send_sms(_normalize_phone(cr['family_phone']), msg)
@@ -4811,7 +4811,7 @@ def reject_change_request(cr_id):
 
         # SMS to family
         if cr['family_phone']:
-            msg = f"SIHAA: Your change request for {cr['cycle_title']} was not approved."
+            msg = f"Sihha: Your change request for {cr['cycle_title']} was not approved."
             if admin_notes:
                 msg += f"\nCoordinator note: {admin_notes}"
             _send_sms(_normalize_phone(cr['family_phone']), msg)
@@ -5219,7 +5219,7 @@ def otp_request():
     db.commit()
 
     # Send SMS
-    msg = f'Your SIHAA verification code is: {code}\nExpires in 10 minutes. Do not share this code.'
+    msg = f'Your Sihha verification code is: {code}\nExpires in 10 minutes. Do not share this code.'
     sent = _send_sms(phone, msg)
 
     # DEV MODE: always return code in response (Twilio may accept but carrier silently drops)
@@ -5388,7 +5388,7 @@ def portal_claim_slot():
     if vol['phone']:
         fcode = family['family_code'] or ''
         if slot['task_type'] == 'delivery':
-            msg = (f"SIHAA Delivery Signed Up!\n"
+            msg = (f"Sihha Delivery Signed Up!\n"
                    f"Family ID: {fcode}\n"
                    f"Address: {family['address']}, {family['city']}\n"
                    f"Deliver by: {cycle['delivery_date_end']} (by 5pm)\n"
@@ -5405,7 +5405,7 @@ def portal_claim_slot():
                    WHERE bq.bundle_size=? AND fi.is_active=1 ORDER BY fi.display_order''', (bsize,)
             ).fetchall()
             item_list = '\n'.join([f"- {i['name']}: {i['quantity']}" for i in items])
-            msg = (f"SIHAA Shopping Signed Up!\n"
+            msg = (f"Sihha Shopping Signed Up!\n"
                    f"Family ID: {fcode} (Bundle {bsize})\n"
                    f"Shopping list:\n{item_list}\n"
                    f"Drop off at Abu Baqr by Sunday 2pm.\n"
@@ -5908,7 +5908,7 @@ def update_volunteer_slot(sid):
                 cycle_title = fam['title'] if fam else ''
                 action = 'reassigned to another volunteer' if d.get('claimed_by') else 'released back to open'
                 _send_sms(_normalize_phone(old_vol['phone']),
-                    f"SIHAA Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) "
+                    f"Sihha Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) "
                     f"has been {action} by a coordinator. No action needed."
                 )
         except Exception as _e:
@@ -6155,7 +6155,7 @@ def portal_signup():
         if vol.get('phone'):
             fcode      = fam.get('family_code', '')
             task_label = ', '.join(t.capitalize() for t in claimed)
-            msg = (f"SIHAA Confirmed: {task_label}\n"
+            msg = (f"Sihha Confirmed: {task_label}\n"
                    f"Family: {fcode} - Size: {fam.get('family_size', '?')}\n"
                    f"Delivery: {cycle['delivery_date_start']}\n"
                    f"JazakAllah Khair!")
@@ -6220,12 +6220,12 @@ def _send_reminders_job():
                 continue  # Already sent to this volunteer for this slot
             fcode = s['family_code'] or ''
             if s['task_type'] == 'delivery':
-                msg = (f"SIHAA Reminder: Delivery in 2 days!\n"
+                msg = (f"Sihha Reminder: Delivery in 2 days!\n"
                        f"Family ID: {fcode}\n"
                        f"Address: {s['address']}, {s['city']}\n"
                        f"Deliver by 5pm. JazakAllah Khair!")
             else:
-                msg = (f"SIHAA Reminder: Shopping in 2 days!\n"
+                msg = (f"Sihha Reminder: Shopping in 2 days!\n"
                        f"Family ID: {fcode}\n"
                        f"Drop off at Abu Baqr by Sunday 2pm.\n"
                        f"Send receipt to treasurer. JazakAllah Khair!")
@@ -6569,7 +6569,7 @@ def _send_family_confirmation_reminders():
                 continue
             link = f"{base_url}/confirm/{r['confirmation_token']}"
             msg  = (f"Assalamu Alaikum {r['family_name']}!\n\n"
-                    f"SIHAA has a food delivery on {r['delivery_date_start']}.\n"
+                    f"Sihha has a food delivery on {r['delivery_date_start']}.\n"
                     f"Tap to review your items and confirm or decline:\n{link}\n\n"
                     f"Please respond by {cutoff_date}.\nJazakAllah Khair!")
             if _send_sms(fam_phone, msg):
@@ -6681,7 +6681,7 @@ def _release_unconfirmed_slots_job():
             if vol_phone:
                 try:
                     _send_sms(vol_phone,
-                        f"SIHAA Update - Slot Released\n"
+                        f"Sihha Update - Slot Released\n"
                         f"{slot['family_name']} has not placed an order for {slot['cycle_title']} "
                         f"(delivery {slot['delivery_date_start']}).\n"
                         f"Your {slot['task_type']} slot has been released — no action needed.\n"
@@ -6738,5 +6738,5 @@ except Exception as _e:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    log.info(f'SIHAA Ops Hub starting on port {PORT}')
+    log.info(f'Sihha Ops Hub starting on port {PORT}')
     app.run(host='0.0.0.0', port=PORT, debug=False)

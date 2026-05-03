@@ -1,5 +1,5 @@
 """
-SIHAA Ops Hub — Full System Test Suite
+Sihha Ops Hub — Full System Test Suite
 Covers all API routes, business rules, privacy rules, and portal flows.
 Run: pytest tests/ -v
 """

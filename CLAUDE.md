@@ -1,4 +1,4 @@
-# CLAUDE.md — SIHAA Ops Hub
+# CLAUDE.md — Sihha Ops Hub
 
 **Read this file at the start of every dev session before touching server.py or any DB/route code.**
 
@@ -6,7 +6,7 @@
 
 ## 1. App Overview
 
-**SIHAA Ops Hub** is the operations backend for SIHAA Food Charity — a Muslim community food-aid organization in Rochester, NY that runs bi-weekly grocery delivery cycles for enrolled families, using a volunteer shopper/delivery model.
+**Sihha Ops Hub** is the operations backend for Sihha Food Charity — a Muslim community food-aid organization in Rochester, NY that runs bi-weekly grocery delivery cycles for enrolled families, using a volunteer shopper/delivery model.
 
 ### What it does
 - Manages families, volunteers, delivery cycles, food requests, and reimbursements
