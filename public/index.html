@@ -1215,11 +1215,15 @@ async function renderDashboard() {
       const projVals   = [];
       if (activeDm.length) {
         const lastDate = new Date(activeDm[activeDm.length-1].month + '-01');
+        // Use 3-month server average as projection base (smoother than last month's volatile value)
+        // Dampen negative trend: cap downside at -5% of avg base per month to avoid cliff-diving
+        const projBase = avgMonthly || lineLastTotal;
+        const maxDrop  = projBase * 0.05;
+        const trendDampened = monthlyTrend >= 0 ? monthlyTrend : Math.max(monthlyTrend, -maxDrop);
         for (let i = 1; i <= 6; i++) {
           const d = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
           projLabels.push(d.toLocaleDateString('en-US', {month:'short'}));
-          // Floor at 0, cap projection growth to be reasonable
-          const projected = Math.max(0, Math.round(lineLastTotal + monthlyTrend * i));
+          const projected = Math.max(0, Math.round(projBase + trendDampened * i));
           projVals.push(projected);
         }
       }
