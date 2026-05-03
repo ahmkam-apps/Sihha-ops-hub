@@ -16,8 +16,8 @@
     line-height:1.4;
   }
   #widget { padding:16px 16px 14px; width:100%; }
-  .bar-track { width:100%; background:rgba(255,255,255,0.1); overflow:hidden; }
-  .bar-fill   { height:100%; flex-shrink:0; transition:width 1.2s cubic-bezier(0.4,0,0.2,1); }
+  .bar-track { width:100%; background:rgba(255,255,255,0.18); overflow:hidden; }
+  .bar-fill   { height:100%; background:#000000; transition:width 1.2s cubic-bezier(0.4,0,0.2,1); }
   .w-footer   { font-size:9px; color:rgba(255,255,255,0.2); text-align:right; margin-top:10px; letter-spacing:0.4px; }
 </style>
 </head>
@@ -30,23 +30,6 @@ let lastData = null, lastMode = null;
 function fmt(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'); }
 function isMobile() { return window.innerWidth < 600; }
 
-function barColor(pct) {
-  const p = Math.min(1, pct / 100);
-  let r, g, b;
-  if (p < 0.5) {
-    const t = p / 0.5;
-    r = Math.round(192 + (230 - 192) * t);
-    g = Math.round(57  + (126 - 57)  * t);
-    b = Math.round(43  + (34  - 43)  * t);
-  } else {
-    const t = (p - 0.5) / 0.5;
-    r = Math.round(230 + (39  - 230) * t);
-    g = Math.round(126 + (174 - 126) * t);
-    b = Math.round(34  + (96  - 34)  * t);
-  }
-  return `rgb(${r},${g},${b})`;
-}
-
 function calcBar(d) {
   const monthlyNeed = d.monthly_need || 0;
   const adjTarget   = d.this_month_adjusted_target != null ? d.this_month_adjusted_target : monthlyNeed;
@@ -54,23 +37,20 @@ function calcBar(d) {
   const collected   = d.month_raised || 0;
   const goalMet     = adjTarget === 0 && monthlyNeed > 0;
   const barGoal     = goalMet ? monthlyNeed : adjTarget;
-  let redPct = 0, greenPct = 0, color = '#c0392b', pctLabel = '', surplusNote = '';
+  let fillPct = 0, pctLabel = '', surplusNote = '';
   if (goalMet) {
-    redPct = 100; color = barColor(100);
+    fillPct  = 100;
     pctLabel = "100% · fully covered by last month's surplus";
   } else if (collected >= barGoal && barGoal > 0) {
-    redPct   = Math.round(barGoal / collected * 100);
-    greenPct = 100 - redPct;
-    color    = barColor(100);
+    fillPct     = 100;
     pctLabel    = '100% · goal reached';
     surplusNote = '+' + fmt(collected - barGoal) + ' surplus this month';
   } else {
-    const pct = barGoal > 0 ? Math.min(99, Math.round(collected / barGoal * 100)) : 0;
-    redPct = pct; color = barColor(pct);
-    pctLabel    = pct + '% of Monthly Goal';
+    fillPct     = barGoal > 0 ? Math.min(99, Math.round(collected / barGoal * 100)) : 0;
+    pctLabel    = fillPct + '% of Monthly Goal';
     surplusNote = surplus > 0 ? '+' + fmt(surplus) + ' surplus from last month' : '';
   }
-  return { redPct, greenPct, color, pctLabel, surplusNote, goalMet, monthlyNeed, collected };
+  return { fillPct, pctLabel, surplusNote, goalMet, monthlyNeed, collected };
 }
 
 function renderDesktop(d) {
@@ -81,17 +61,14 @@ function renderDesktop(d) {
       <div style="font-family:'AreaExtrabold',sans-serif;font-size:32px;font-weight:800;letter-spacing:-0.03em;line-height:1;">${fmt(b.collected)}</div>
       <div style="font-size:12px;opacity:0.55;">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
     </div>
-    <div class="bar-track" style="height:24px;">
-      <div style="display:flex;height:24px;">
-        <div class="bar-fill" style="width:${b.redPct}%;background:${b.color};"></div>
-        <div class="bar-fill" style="width:${b.greenPct}%;background:#27ae60;"></div>
-      </div>
+    <div class="bar-track" style="height:30px;">
+      <div class="bar-fill" style="width:${b.fillPct}%;height:30px;"></div>
     </div>
     <div style="display:flex;justify-content:space-between;margin-top:6px;">
       <div style="font-size:11px;opacity:0.45;">${b.pctLabel}</div>
-      <div style="font-size:11px;color:#27ae60;font-weight:700;">${b.surplusNote}</div>
+      <div style="font-size:11px;opacity:0.45;">${b.surplusNote}</div>
     </div>
-    ${b.goalMet ? `<div style="margin-top:8px;font-size:12px;color:#27ae60;font-weight:700;">✓ This month's goal is fully covered by last month's surplus</div>` : ''}
+    ${b.goalMet ? `<div style="margin-top:8px;font-size:12px;opacity:0.6;font-weight:700;">✓ This month&#39;s goal is fully covered by last month&#39;s surplus</div>` : ''}
     <div class="w-footer">Updated every 5 min · Sihha</div>`;
 }
 
@@ -101,15 +78,12 @@ function renderMobile(d) {
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:rgba(255,255,255,0.35);margin-bottom:6px;">Donation Progress</div>
     <div style="font-family:'AreaExtrabold',sans-serif;font-size:38px;font-weight:800;letter-spacing:-0.03em;line-height:1;">${fmt(b.collected)}</div>
     <div style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:4px;">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
-    <div class="bar-track" style="height:20px;margin-top:12px;">
-      <div style="display:flex;height:20px;">
-        <div class="bar-fill" style="width:${b.redPct}%;background:${b.color};"></div>
-        <div class="bar-fill" style="width:${b.greenPct}%;background:#27ae60;"></div>
-      </div>
+    <div class="bar-track" style="height:30px;margin-top:12px;">
+      <div class="bar-fill" style="width:${b.fillPct}%;height:30px;"></div>
     </div>
     <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:5px;">${b.pctLabel}</div>
-    ${b.surplusNote ? `<div style="font-size:11px;color:#27ae60;font-weight:700;margin-top:3px;">${b.surplusNote}</div>` : ''}
-    ${b.goalMet ? `<div style="font-size:11px;color:#27ae60;font-weight:700;margin-top:3px;">✓ Fully covered by last month's surplus</div>` : ''}
+    ${b.surplusNote ? `<div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:3px;">${b.surplusNote}</div>` : ''}
+    ${b.goalMet ? `<div style="font-size:11px;color:rgba(255,255,255,0.5);font-weight:700;margin-top:3px;">&#10003; Fully covered by last month&#39;s surplus</div>` : ''}
     <div class="w-footer">Updated every 5 min · Sihha</div>`;
 }
 
