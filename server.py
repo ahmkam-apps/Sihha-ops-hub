@@ -5066,12 +5066,14 @@ def otp_request():
     # Send SMS
     msg = f'Your SIHAA verification code is: {code}\nExpires in 10 minutes. Do not share this code.'
     sent = _send_sms(phone, msg)
+
+    # DEV MODE: always return code in response (Twilio may accept but carrier silently drops)
+    dev_mode = os.environ.get('OTP_DEV_MODE', '').lower() == 'true'
+    if dev_mode:
+        log.warning(f'OTP DEV MODE — code for {phone} is: {code}')
+        return jsonify({'sent': True, 'dev': True, 'code': code})
+
     if not sent:
-        # DEV FALLBACK: log the code so it can be used manually during testing
-        dev_mode = os.environ.get('OTP_DEV_MODE', '').lower() == 'true'
-        if dev_mode:
-            log.warning(f'OTP DEV MODE — code for {phone} is: {code}')
-            return jsonify({'sent': True, 'dev': True, 'code': code})
         log.error(f'OTP SMS failed for {phone} — code was {code}')
         return jsonify({'error': 'Could not send SMS. Please try again or contact a coordinator.'}), 500
 
