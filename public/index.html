@@ -2145,6 +2145,7 @@ async function renderVolunteers(filter, search) {
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-outline" onclick="renderTaskTypes()" style="margin-right:8px;">⚙ Task Types</button>
+    <button class="btn btn-outline" onclick="renderVolunteerActivityReport()" style="margin-right:8px;">📊 Activity Report</button>
     <button class="btn" onclick="openVolunteerForm()">+ Add Volunteer</button>`;
 
   let url = '/volunteers';
@@ -2204,6 +2205,104 @@ async function renderVolunteers(filter, search) {
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+async function renderVolunteerActivityReport() {
+  document.getElementById('page-title').textContent = 'Volunteer Activity Report';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="renderVolunteers()">← Back to Volunteers</button>
+     <button class="btn btn-outline" onclick="exportVolunteerActivityCSV()">⬇ Export CSV</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const data = await GET('/reports/volunteer-activity');
+    window._volActivityData = data;
+
+    const totalTasks    = data.reduce((s, v) => s + (v.total_tasks || 0), 0);
+    const totalShopping = data.reduce((s, v) => s + (v.shopping_count || 0), 0);
+    const totalDelivery = data.reduce((s, v) => s + (v.delivery_count || 0), 0);
+    const activeVols    = data.filter(v => v.total_tasks > 0).length;
+
+    const fmtDate = d => d ? d.slice(0,10) : '—';
+    const statusPill = s => {
+      const styles = {active:'background:#e8f5e9;color:#1a5e34', pending:'background:#fff8e6;color:#7a6000', inactive:'background:var(--gray-1);color:var(--gray-4)'};
+      return `<span style="font-size:11px;font-weight:700;padding:2px 8px;${styles[s]||''}">${s}</span>`;
+    };
+
+    document.getElementById('content').innerHTML = `
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Active Volunteers</div>
+          <div style="font-size:28px;font-weight:700">${activeVols}</div>
+        </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Total Tasks Done</div>
+          <div style="font-size:28px;font-weight:700">${totalTasks}</div>
+        </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Shopping Runs</div>
+          <div style="font-size:28px;font-weight:700">${totalShopping}</div>
+        </div>
+        <div style="flex:1;min-width:100px;padding:14px 18px;border:1px solid var(--gray-2)">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px">Deliveries</div>
+          <div style="font-size:28px;font-weight:700">${totalDelivery}</div>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">All Volunteers</span>
+          <span style="font-size:12px;color:var(--gray-4)">${data.length} volunteers · sorted by tasks completed</span>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Volunteer</th>
+            <th>Status</th>
+            <th style="text-align:center">Tasks Done</th>
+            <th style="text-align:center">Shopping</th>
+            <th style="text-align:center">Deliveries</th>
+            <th style="text-align:center">Cycles</th>
+            <th style="text-align:center">Families Served</th>
+            <th>Last Active</th>
+          </tr></thead>
+          <tbody>
+            ${data.length ? data.map(v => `
+              <tr style="${!v.total_tasks ? 'color:var(--gray-4)' : ''}">
+                <td>
+                  <strong style="cursor:pointer;text-decoration:underline" onclick="viewVolunteer('${v.id}')">${v.name}</strong>
+                  ${v.phone ? `<br><span style="font-size:11px;color:var(--gray-4)">${v.phone}</span>` : ''}
+                </td>
+                <td>${statusPill(v.status)}</td>
+                <td style="text-align:center;font-weight:${v.total_tasks ? '700' : '400'}">${v.total_tasks || 0}</td>
+                <td style="text-align:center">${v.shopping_count || 0}</td>
+                <td style="text-align:center">${v.delivery_count || 0}</td>
+                <td style="text-align:center">${v.cycles_count || 0}</td>
+                <td style="text-align:center">${v.families_served || 0}</td>
+                <td style="font-size:12px">${fmtDate(v.last_active)}</td>
+              </tr>`).join('') :
+              '<tr class="empty-row"><td colspan="8">No volunteers found</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+function exportVolunteerActivityCSV() {
+  const data = window._volActivityData;
+  if (!data || !data.length) return;
+  const headers = ['Name','Phone','Status','Tasks Done','Shopping','Deliveries','Cycles','Families Served','Last Active'];
+  const rows = data.map(v => [
+    v.name, v.phone||'', v.status,
+    v.total_tasks||0, v.shopping_count||0, v.delivery_count||0,
+    v.cycles_count||0, v.families_served||0,
+    v.last_active ? v.last_active.slice(0,10) : ''
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'sihaa-volunteer-activity.csv';
+  a.click();
 }
 
 async function renderTaskTypes() {

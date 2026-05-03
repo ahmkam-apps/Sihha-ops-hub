@@ -3088,6 +3088,30 @@ def get_cycle_shopping_list(cid):
         'generated_at': now()  # UTC — volunteers can see if list was generated before recent edits
     })
 
+# ── Volunteer Activity Report ─────────────────────────────────────────────────
+
+@app.route('/api/reports/volunteer-activity', methods=['GET'])
+@require_auth()
+def report_volunteer_activity():
+    """Per-volunteer lifetime stats: tasks completed, shopping/delivery breakdown,
+    cycles participated in, unique families served, last active date."""
+    db = get_db()
+    rows = db.execute(
+        '''SELECT v.id, v.name, v.phone, v.status,
+                  COUNT(DISTINCT CASE WHEN vs.status='complete' THEN vs.id END)          AS total_tasks,
+                  COUNT(DISTINCT CASE WHEN vs.status='complete' AND vs.task_type='shopping'  THEN vs.id END) AS shopping_count,
+                  COUNT(DISTINCT CASE WHEN vs.status='complete' AND vs.task_type='delivery'  THEN vs.id END) AS delivery_count,
+                  COUNT(DISTINCT CASE WHEN vs.status='complete' THEN vs.cycle_id END)    AS cycles_count,
+                  COUNT(DISTINCT CASE WHEN vs.status='complete' THEN vs.family_id END)   AS families_served,
+                  MAX(vs.completed_at)                                                    AS last_active
+           FROM volunteers v
+           LEFT JOIN volunteer_slots vs ON vs.claimed_by = v.id
+           GROUP BY v.id
+           ORDER BY total_tasks DESC, v.name ASC'''
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 # ── Print Reports (HTML → browser PDF) ────────────────────────────────────────
 
 PRINT_CSS = """
