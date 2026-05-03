@@ -789,16 +789,18 @@ async function renderDashboard() {
      <button class="btn btn-outline" onclick="dbDebug()" style="margin-left:8px;font-size:11px;">DB Debug</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const [s, cycles] = await Promise.all([
+    const [s, pendingFamilies, pendingVols] = await Promise.all([
       GET('/dashboard/stats'),
-      GET('/delivery-cycles')
+      GET('/families?status=pending'),
+      GET('/volunteers?status=pending')
     ]);
 
     // ── Active Delivery Banner ──────────────────────────────────────────────────
-    const activeCycle = cycles.find(c => c.status === 'open')
-                     || cycles.find(c => c.status === 'shopping')
-                     || cycles.find(c => c.status === 'upcoming')
-                     || cycles[0];
+    const activeCycle = s.upcoming_cycles
+      ? (s.upcoming_cycles.find(c => c.status === 'open') ||
+         s.upcoming_cycles.find(c => c.status === 'shopping') ||
+         s.upcoming_cycles.find(c => c.status === 'upcoming'))
+      : null;
 
     const statusColors = { upcoming:'#1a8754', open:'#e07b00', shopping:'#2e86c1', delivered:'#555' };
     const statusBg     = { upcoming:'#f0faf5', open:'#fff8f0', shopping:'#eaf4fb', delivered:'#f5f5f5' };
@@ -887,28 +889,97 @@ async function renderDashboard() {
         ✓ All clear — nothing needs attention
       </div>`;
 
+    // ── Quick Actions ─────────────────────────────────────────────────────────
+    const qaItems = [];
+    pendingFamilies.slice(0, 3).forEach(f => {
+      qaItems.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fff;border:1px solid #e0e0e0;border-left:3px solid #e07b00;border-radius:4px;gap:10px;">
+          <div style="min-width:0;">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${f.name}</div>
+            <div style="font-size:11px;color:var(--gray-4);">Family · pending approval</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 10px;font-size:11px;"
+              onclick="dashApprove('family','${f.id}','${f.name}')">Approve</button>
+            <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;"
+              onclick="viewFamily('${f.id}')">View</button>
+          </div>
+        </div>`);
+    });
+    pendingVols.slice(0, 3).forEach(v => {
+      qaItems.push(`
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fff;border:1px solid #e0e0e0;border-left:3px solid #2e86c1;border-radius:4px;gap:10px;">
+          <div style="min-width:0;">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${v.name}</div>
+            <div style="font-size:11px;color:var(--gray-4);">Volunteer · pending approval</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 10px;font-size:11px;"
+              onclick="dashApprove('volunteer','${v.id}','${v.name}')">Approve</button>
+            <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;"
+              onclick="viewVolunteer('${v.id}')">View</button>
+          </div>
+        </div>`);
+    });
+    const extraCount = Math.max(0, (pendingFamilies.length - 3)) + Math.max(0, (pendingVols.length - 3));
+    const quickActionsHTML = qaItems.length ? `
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:8px;">Quick Actions</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${qaItems.join('')}
+          ${extraCount > 0 ? `<div style="font-size:12px;color:var(--gray-4);padding:4px 12px;">+ ${extraCount} more pending — <span style="cursor:pointer;text-decoration:underline;" onclick="nav('families')">view all</span></div>` : ''}
+        </div>
+      </div>` : '';
+
+    // ── Upcoming Cycles ───────────────────────────────────────────────────────
+    const statusColors = { upcoming:'#1a8754', open:'#e07b00', shopping:'#2e86c1', delivered:'#555' };
+    const upcomingCycles = s.upcoming_cycles || [];
+    const upcomingHTML = upcomingCycles.length ? `
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:8px;">Upcoming Deliveries</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
+          ${upcomingCycles.map(c => {
+            const sc = statusColors[c.status] || '#888';
+            const slotsTotal = (c.slots_open||0) + (c.slots_filled||0);
+            const slotsPct = slotsTotal > 0 ? Math.round((c.slots_filled||0) / slotsTotal * 100) : 0;
+            return `
+            <div style="padding:12px 14px;border:1px solid #e0e0e0;border-top:3px solid ${sc};cursor:pointer;background:#fff;"
+                 onclick="viewCycleDetail('${c.id}')">
+              <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:2px;">${c.title}</div>
+              <div style="font-size:11px;color:var(--gray-4);margin-bottom:8px;">
+                ${fmtDateShort(c.delivery_date_start)} – ${fmtDateShort(c.delivery_date_end)}
+                &nbsp;·&nbsp;<span style="font-weight:700;color:${sc};text-transform:uppercase;">${c.status}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:4px;">
+                <span>${c.confirmed_orders||0} confirmed orders</span>
+                <span>${c.slots_filled||0}/${slotsTotal} slots filled</span>
+              </div>
+              ${slotsTotal > 0 ? `
+              <div style="background:#e0e0e0;height:4px;border-radius:2px;">
+                <div style="background:${sc};height:4px;border-radius:2px;width:${slotsPct}%;"></div>
+              </div>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
     // ── Stats Grid ───────────────────────────────────────────────────────────
     const statsHTML = `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
         <div class="stat-card" onclick="nav('families')" style="cursor:pointer;">
-          <div class="stat-label">Families</div>
-          <div class="stat-value">${s.families_total}</div>
-          <div class="stat-sub">${s.families_active} active · ${s.families_pending} pending</div>
+          <div class="stat-label">Active Families</div>
+          <div class="stat-value">${s.families_active}</div>
+          <div class="stat-sub">${s.families_pending} pending · ${s.families_total} total</div>
         </div>
         <div class="stat-card" onclick="nav('volunteers')" style="cursor:pointer;">
-          <div class="stat-label">Volunteers</div>
-          <div class="stat-value">${s.volunteers_total}</div>
-          <div class="stat-sub">${s.volunteers_active} active · ${s.volunteers_pending} pending</div>
+          <div class="stat-label">Active Volunteers</div>
+          <div class="stat-value">${s.volunteers_active}</div>
+          <div class="stat-sub">${s.volunteers_pending} pending · ${s.volunteers_total} total</div>
         </div>
         <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Reimb. Pending</div>
           <div class="stat-value" style="color:${s.reimb_pending_count > 0 ? '#c0392b' : 'inherit'}">${fmtMoney(s.reimb_pending_amount)}</div>
           <div class="stat-sub">${s.reimb_pending_count} request${s.reimb_pending_count !== 1 ? 's' : ''}</div>
-        </div>
-        <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
-          <div class="stat-label">Paid This Month</div>
-          <div class="stat-value">${fmtMoney(s.reimb_paid_month)}</div>
-          <div class="stat-sub">${fmtMoney(s.reimb_paid_total)} all time</div>
         </div>
         <div class="stat-card" onclick="nav('payments')" style="cursor:pointer;">
           <div class="stat-label">Spend This Month</div>
@@ -922,30 +993,33 @@ async function renderDashboard() {
     const mLabel = iso => new Date(+iso.slice(0,4), +iso.slice(5,7)-1, 1)
                             .toLocaleDateString('en-US', {month:'short'});
 
-    const DONATION_GOAL = 1000;
-    const gap = Math.max(0, DONATION_GOAL - (s.donations_month || 0));
+    // Smart donation goal: active families × $200/month
+    const DONATION_GOAL  = s.monthly_need || 0;      // dynamic: families × $200
+    const lastMonthDon   = s.last_month_donations || 0;
+    const nextMonthNeeds = s.next_month_target    || 0;  // max(0, need - last month collected)
+    const thisMonthGap   = Math.max(0, DONATION_GOAL - (s.donations_month || 0));
 
     const kpiRow = `
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
         <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
-          <div style="font-size:11px;color:#888;margin-bottom:4px;">This month</div>
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">This month collected</div>
           <div style="font-size:22px;font-weight:700;color:#1a8754;">${fmtMoney(s.donations_month)}</div>
-          <div style="font-size:11px;color:#888;margin-top:2px;">vs ${fmtMoney(DONATION_GOAL)} goal</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">need ${fmtMoney(DONATION_GOAL)}/mo for ${s.families_active} families</div>
         </div>
         <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
-          <div style="font-size:11px;color:#888;margin-bottom:4px;">Recurring / mo</div>
-          <div style="font-size:22px;font-weight:700;color:#2e86c1;">${fmtMoney(s.donations_recurring_month)}</div>
-          <div style="font-size:11px;color:#888;margin-top:2px;">predictable base</div>
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">Last month collected</div>
+          <div style="font-size:22px;font-weight:700;color:#2e86c1;">${fmtMoney(lastMonthDon)}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">${s.last_month ? s.last_month : ''}</div>
         </div>
         <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
           <div style="font-size:11px;color:#888;margin-bottom:4px;">All time</div>
           <div style="font-size:22px;font-weight:700;color:#333;">${fmtMoney(s.donations_total)}</div>
-          <div style="font-size:11px;color:#888;margin-top:2px;">since Feb 2026</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">${s.donations_count} donations</div>
         </div>
-        <div style="background:${gap>0?'#fffbec':'#f0faf5'};border-radius:8px;padding:12px 14px;">
-          <div style="font-size:11px;color:${gap>0?'#b8860b':'#1a8754'};margin-bottom:4px;">Goal gap</div>
-          <div style="font-size:22px;font-weight:700;color:${gap>0?'#e0a800':'#1a8754'};">${gap>0?fmtMoney(gap):'✓ Met'}</div>
-          <div style="font-size:11px;color:#888;margin-top:2px;">${gap>0?'still needed/month':'donations sufficient'}</div>
+        <div style="background:${nextMonthNeeds>0?'#fffbec':'#f0faf5'};border-radius:8px;padding:12px 14px;">
+          <div style="font-size:11px;color:${nextMonthNeeds>0?'#b8860b':'#1a8754'};margin-bottom:4px;">Next month target</div>
+          <div style="font-size:22px;font-weight:700;color:${nextMonthNeeds>0?'#e0a800':'#1a8754'};">${nextMonthNeeds>0?fmtMoney(nextMonthNeeds):'✓ Covered'}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">${nextMonthNeeds>0?`need − last month collected`:'last month exceeded need'}</div>
         </div>
       </div>`;
 
@@ -1042,7 +1116,7 @@ async function renderDashboard() {
     const monthlyTrend         = s.proj_monthly_trend        || 0; // $ change per month
     const currentRecurBase     = lastTotal;
 
-    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + statsHTML + donationsHTML;
+    document.getElementById('content').innerHTML = cycleHTML + attentionHTML + quickActionsHTML + upcomingHTML + statsHTML + donationsHTML;
 
     // ── Draw charts ──────────────────────────────────────────────────────────
     if (typeof Chart !== 'undefined') {
@@ -1232,6 +1306,17 @@ async function renderDashboard() {
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+async function dashApprove(type, id, name) {
+  try {
+    if (type === 'family') {
+      await PUT('/families/' + id, { status: 'active' });
+    } else {
+      await PUT('/volunteers/' + id, { status: 'active' });
+    }
+    renderDashboard(); // refresh
+  } catch(e) { alert('Failed to approve ' + name + ': ' + e.message); }
 }
 
 function switchDonTab(tab) {

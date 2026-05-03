@@ -1671,23 +1671,25 @@ def dashboard_stats():
     stats['proj_avg_monthly']          = round(avg_monthly, 2)
     stats['proj_monthly_trend']        = monthly_trend  # $ change per month
 
-    # Active cycle stats
-    active_cycle = db.execute(
-        "SELECT id, title, status FROM delivery_cycles WHERE status IN ('upcoming','shopping') ORDER BY delivery_date_start LIMIT 1"
-    ).fetchone()
+    # Active cycle stats — prefer open > shopping > upcoming
+    active_cycle = (
+        db.execute("SELECT id,title,status,delivery_date_start,delivery_date_end FROM delivery_cycles WHERE status='open' ORDER BY delivery_date_start LIMIT 1").fetchone() or
+        db.execute("SELECT id,title,status,delivery_date_start,delivery_date_end FROM delivery_cycles WHERE status='shopping' ORDER BY delivery_date_start LIMIT 1").fetchone() or
+        db.execute("SELECT id,title,status,delivery_date_start,delivery_date_end FROM delivery_cycles WHERE status='upcoming' ORDER BY delivery_date_start LIMIT 1").fetchone()
+    )
     if active_cycle:
         cid = active_cycle['id']
         stats['cycle_id']      = cid
         stats['cycle_title']   = active_cycle['title']
         stats['cycle_status']  = active_cycle['status']
         stats['orders_this_cycle'] = db.execute(
-            "SELECT COUNT(*) FROM food_requests WHERE cycle_id=?", (cid,)
+            "SELECT COUNT(*) FROM food_requests WHERE cycle_id=? AND status='confirmed'", (cid,)
         ).fetchone()[0]
         stats['slots_open']    = db.execute(
             "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='open'", (cid,)
         ).fetchone()[0]
         stats['slots_claimed'] = db.execute(
-            "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='claimed'", (cid,)
+            "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status IN ('claimed','confirmed')", (cid,)
         ).fetchone()[0]
         stats['slots_complete']= db.execute(
             "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='complete'", (cid,)
@@ -1695,6 +1697,39 @@ def dashboard_stats():
     else:
         stats.update({'cycle_id': None, 'cycle_title': None, 'cycle_status': None,
                       'orders_this_cycle': 0, 'slots_open': 0, 'slots_claimed': 0, 'slots_complete': 0})
+
+    # Upcoming cycles — next 4 (excluding delivered)
+    upcoming_rows = db.execute(
+        """SELECT dc.id, dc.title, dc.status, dc.delivery_date_start, dc.delivery_date_end,
+                  COUNT(DISTINCT CASE WHEN fr.status='confirmed' THEN fr.id END) AS confirmed_orders,
+                  COUNT(DISTINCT CASE WHEN vs.status='open' THEN vs.id END) AS slots_open,
+                  COUNT(DISTINCT CASE WHEN vs.status IN ('claimed','confirmed') THEN vs.id END) AS slots_filled
+           FROM delivery_cycles dc
+           LEFT JOIN food_requests fr ON fr.cycle_id = dc.id
+           LEFT JOIN volunteer_slots vs ON vs.cycle_id = dc.id
+           WHERE dc.status != 'delivered'
+           GROUP BY dc.id
+           ORDER BY dc.delivery_date_start ASC
+           LIMIT 4"""
+    ).fetchall()
+    stats['upcoming_cycles'] = [dict(r) for r in upcoming_rows]
+
+    # Smart donation goal: active_families × $200/month = monthly need
+    # Next month's fundraising target = monthly_need - last_month_donations
+    last_month = (datetime.utcnow().replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+    last_month_donations = db.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ?",
+        (f'{last_month}%',)
+    ).fetchone()[0]
+    cost_per_family       = 200  # $200 per active family per month
+    monthly_need          = stats['families_active'] * cost_per_family
+    next_month_target     = max(0, monthly_need - last_month_donations)
+
+    stats['cost_per_family']       = cost_per_family
+    stats['monthly_need']          = monthly_need
+    stats['last_month_donations']  = last_month_donations
+    stats['next_month_target']     = next_month_target
+    stats['last_month']            = last_month
 
     return jsonify(stats)
 
