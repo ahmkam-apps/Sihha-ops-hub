@@ -151,40 +151,49 @@
   /* ── Stat cards ──────────────────────────────────── */
   .stat-cards {
     display: flex;
-    gap: 12px;
+    flex-direction: column;
+    gap: 10px;
     margin-top: 20px;
   }
 
   .stat-card {
-    flex: 1;
-    border: 1px solid rgba(255,255,255,0.12);
-    padding: 14px 16px;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .stat-card-box {
+    flex-shrink: 0;
+    width: 64px;
+    height: 64px;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .stat-card-value {
     font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 800;
     letter-spacing: -0.03em;
     line-height: 1;
-    color: #ffffff;
+    color: #111111;
   }
 
   .stat-card-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-    opacity: 0.45;
-    margin-top: 4px;
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    color: #ffffff;
+    line-height: 1.15;
   }
 
   .stat-card-sub {
     font-size: 11px;
     opacity: 0.5;
-    margin-top: 2px;
+    margin-top: 3px;
+    color: #ffffff;
   }
 
   /* ── Footer ──────────────────────────────────────── */
@@ -199,8 +208,9 @@
   @media (max-width: 480px) {
     .progress-collected { font-size: 20px; }
     .chart-title { font-size: 12px; }
-    .stat-cards { flex-direction: column; gap: 8px; }
-    .stat-card-value { font-size: 22px; }
+    .stat-card-box { width: 52px; height: 52px; }
+    .stat-card-value { font-size: 20px; }
+    .stat-card-label { font-size: 17px; }
   }
 </style>
 </head>
@@ -253,17 +263,25 @@
   <!-- Stat cards -->
   <div class="stat-cards">
     <div class="stat-card">
-      <div class="stat-card-value" id="stat-lives">—</div>
+      <div class="stat-card-box">
+        <div class="stat-card-value" id="stat-lives">—</div>
+      </div>
       <div class="stat-card-label">Lives Impacted</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-value" id="stat-volunteers">—</div>
-      <div class="stat-card-label">Volunteers</div>
+      <div class="stat-card-box">
+        <div class="stat-card-value" id="stat-volunteers">—</div>
+      </div>
+      <div class="stat-card-label">Volunteers Mobilized</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-value" id="stat-delivery">—</div>
-      <div class="stat-card-label">Next Delivery</div>
-      <div class="stat-card-sub" id="stat-delivery-sub"></div>
+      <div class="stat-card-box">
+        <div class="stat-card-value" id="stat-delivery">—</div>
+      </div>
+      <div>
+        <div class="stat-card-label">Next Delivery</div>
+        <div class="stat-card-sub" id="stat-delivery-sub"></div>
+      </div>
     </div>
   </div>
 
