@@ -74,6 +74,7 @@ function calcDelivery(d) {
 function renderDesktop(d) {
   const del = calcDelivery(d);
   document.getElementById('widget').innerHTML = `
+    <div style="font-family:'AreaExtrabold',sans-serif;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:14px;">Community Impact</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div style="display:flex;align-items:center;gap:20px;">
         <div class="stat-box" style="width:64px;height:64px;">
@@ -114,6 +115,7 @@ function renderDesktop(d) {
 function renderMobile(d) {
   const del = calcDelivery(d);
   document.getElementById('widget').innerHTML = `
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:rgba(255,255,255,0.35);margin-bottom:10px;">Community Impact</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div style="display:flex;align-items:center;gap:14px;">
         <div class="stat-box" style="width:52px;height:52px;">
