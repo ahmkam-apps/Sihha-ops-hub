@@ -1555,7 +1555,7 @@ def public_donate_stats():
 
     # Next delivery — earliest open/shopping/upcoming cycle
     next_cycle = db.execute("""
-        SELECT title, delivery_date_start
+        SELECT title, delivery_date_start, delivery_date_end
         FROM delivery_cycles
         WHERE status IN ('open','shopping','upcoming')
           AND delivery_date_start IS NOT NULL
@@ -1564,15 +1564,23 @@ def public_donate_stats():
     """).fetchone()
     if next_cycle:
         next_delivery_date = next_cycle['delivery_date_start']
+        next_delivery_end  = next_cycle['delivery_date_end']
         try:
-            nd = datetime.strptime(next_delivery_date[:10], '%Y-%m-%d').date()
-            days_to_delivery = (nd - datetime.utcnow().date()).days
+            today      = datetime.utcnow().date()
+            nd         = datetime.strptime(next_delivery_date[:10], '%Y-%m-%d').date()
+            days_to_delivery = (nd - today).days
+            cycle_start = nd - timedelta(days=30)
+            cycle_elapsed = max(0, (today - cycle_start).days)
+            cycle_pct   = min(100, round(cycle_elapsed / 30 * 100))
         except Exception:
             days_to_delivery = None
+            cycle_pct        = None
         next_cycle_title = next_cycle['title']
     else:
         next_delivery_date = None
+        next_delivery_end  = None
         days_to_delivery   = None
+        cycle_pct          = None
         next_cycle_title   = None
 
     return jsonify({
@@ -1591,7 +1599,9 @@ def public_donate_stats():
         'this_month_adjusted_target':   this_month_adjusted_target,
         'cost_per_family':              cost_per_family,
         'next_delivery_date':           next_delivery_date,
+        'next_delivery_end':            next_delivery_end,
         'days_to_delivery':             days_to_delivery,
+        'cycle_pct':                    cycle_pct,
         'next_cycle_title':             next_cycle_title,
     })
 
