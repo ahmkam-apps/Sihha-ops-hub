@@ -932,7 +932,6 @@ async function renderDashboard() {
       </div>` : '';
 
     // ── Upcoming Cycles ───────────────────────────────────────────────────────
-    const statusColors = { upcoming:'#1a8754', open:'#e07b00', shopping:'#2e86c1', delivered:'#555' };
     const upcomingCycles = s.upcoming_cycles || [];
     const upcomingHTML = upcomingCycles.length ? `
       <div style="margin-bottom:20px;">
