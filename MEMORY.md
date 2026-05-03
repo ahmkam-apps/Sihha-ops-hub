@@ -1,6 +1,6 @@
 # SIHAA Food Charity — Operations Hub Memory
 
-_Last updated: 2026-05-02 (latest commit: 991bf3c — fix OTP dev mode: always return code when OTP_DEV_MODE=true)_
+_Last updated: 2026-05-02 (latest commit: a120244 — rename /my-order → /family, volunteer activity report, coverage view)_
 
 ---
 
@@ -27,7 +27,7 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 | Public Intake | /intake |
 | Public Volunteer Signup | /volunteer |
 | Public Volunteer Portal | /portal |
-| Family Order Portal | /my-order |
+| Family Order Portal | /family (was /my-order — 301 redirect kept) |
 | Family Bundle Opt-In | /confirm/<token> |
 | Public Donate Stats Widget | /donate-stats |
 | order.html | ⚠️ RETIRED — shows WA flow explanation + link to /intake |
@@ -77,7 +77,8 @@ sihaa-ops-hub/
 │   ├── intake.html        # Public family registration
 │   ├── volunteer.html     # Public volunteer signup
 │   ├── portal.html        # Volunteer portal (Sign Up / My Tasks / History + receipts)
-│   ├── my-order.html      # Family self-service portal (view order, cancel, request change)
+│   ├── family.html        # Family self-service portal (view order, cancel, request change) — was my-order.html
+│   ├── my-order.html      # RETIRED — 301 redirect to /family (keep for old SMS links)
 │   ├── confirm.html       # Family bundle opt-in (token-based) ✅
 │   ├── order.html         # RETIRED — informational redirect page
 │   └── donate-stats.html  # Donation stats widget (iframe embed for Wix)
@@ -188,7 +189,7 @@ reminder_log    ← idempotency guard for WA volunteer reminders
 
 ---
 
-## Family Self-Service Portal (`/my-order` → `my-order.html`) — Current State ✅
+## Family Self-Service Portal (`/family` → `family.html`) — Current State ✅
 
 - Phone-based login (fuzzy phone number lookup)
 - **Two tabs: "My Deliveries" | "History"**
@@ -246,7 +247,8 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📋 Change
 ### Deliveries
 - Table: all cycles, clickable rows → detail view
 - Status advance: upcoming → open → shopping → delivered (manual)
-- Detail view: confirmation response board — Confirmed / No WA / No Response stats + per-family override buttons
+- Detail view: confirmation response board — Confirmed / Declined / No Response stats + per-family override buttons
+- **Volunteer Coverage table** (NEW): below Family Responses — shows each confirmed family's Shopper + Deliverer slot status. Red = open (no volunteer), amber = claimed, green = confirmed. Summary: "X need a shopper · Y need a deliverer"
 
 ### Families
 - Table: all families, clickable rows → full-page family profile
@@ -261,6 +263,7 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📋 Change
 - Table: all volunteers, clickable rows → profile
 - Profile: role switcher, task history
 - Task Types manager: `is_family_slot` checkbox ("Per family" — creates a slot per family per cycle for this task type). Shopping + Delivery default to 1.
+- **📊 Activity Report** (NEW): per-volunteer lifetime stats — tasks done, shopping/delivery breakdown, cycles, families served, last active. CSV export. Accessed via button in Volunteers topbar. API: `GET /api/reports/volunteer-activity`
 
 ### Finance
 - Donations, Receipts, Reimbursements, Users
@@ -369,8 +372,6 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 | Item | Notes |
 |------|-------|
-| Shopping list / coverage view | Show which confirmed families have no volunteer signed up yet — admin can see at a glance who needs outreach |
-| Volunteer activity report | Per-volunteer lifetime stats, exportable |
 | Phase 4D: Financial reconciliation | Stripe + bank CSV import, donation matching — needs Stripe MCP plugin |
 
 ### 🔐 Auth — SMS OTP (LIVE ✅)
@@ -389,7 +390,7 @@ SMS OTP login is live on both portals. Phone number → 6-digit PIN via Twilio �
 |------|-------|
 | SMS OTP login — families + volunteers | ✅ LIVE — dev mode auto-fill active |
 | 10DLC A2P registration | 🔲 Pending — complete in Twilio console, then remove OTP_DEV_MODE |
-| Rename /my-order → /family | 🔲 Backlog — "Family Portal" more accurate |
+| Rename /my-order → /family | ✅ DONE — /my-order kept as 301 redirect |
 
 ### 📲 SMS Notifications (backlog — grouped)
 
@@ -444,6 +445,9 @@ WA is fully stripped from the system. All notifications will go via Twilio SMS o
 | Volunteer portal: Available Families loads ALL open/shopping cycles in parallel — no cycle selector needed ✅ |
 | OTP SMS login: Twilio integration, otp_tokens table, two-step login on both portals ✅ |
 | OTP dev mode fix: always return code in JSON when OTP_DEV_MODE=true (Twilio accepts but carrier silently drops) ✅ |
+| Volunteer coverage table in cycle detail: confirmed families × shopper/deliverer slot status, red/amber/green ✅ |
+| Volunteer activity report: lifetime stats per volunteer, CSV export, GET /api/reports/volunteer-activity ✅ |
+| Renamed /my-order → /family (family.html); /my-order kept as 301 redirect; SW bumped to v4 ✅ |
 | WhatsApp fully stripped from admin UI (index.html): WA columns, filter tabs, setup page, banners, profile fields, form fields all removed ✅ |
 | Service worker cache bumped to v3: forces fresh page loads for all users ✅ |
 | nixpacks.toml deleted: was causing `No module named pip` build errors; nixpacks now auto-detects correctly ✅ |
