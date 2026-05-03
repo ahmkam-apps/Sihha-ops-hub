@@ -335,8 +335,22 @@ function render(d) {
   }
 
   // ── Stat cards ──────────────────────────────────────
-  document.getElementById('stat-lives').textContent =
-    d.lives_impacted != null ? d.lives_impacted.toLocaleString('en-US') : '—';
+  if (d.lives_impacted != null) {
+    const target = d.lives_impacted;
+    const el = document.getElementById('stat-lives');
+    const duration = 1800;
+    const steps = 60;
+    const interval = duration / steps;
+    let current = 0;
+    const increment = target / steps;
+    const timer = setInterval(() => {
+      current = Math.min(current + increment, target);
+      el.textContent = Math.round(current).toLocaleString('en-US');
+      if (current >= target) clearInterval(timer);
+    }, interval);
+  } else {
+    document.getElementById('stat-lives').textContent = '—';
+  }
   document.getElementById('stat-volunteers').textContent =
     d.volunteers_active != null ? d.volunteers_active.toLocaleString('en-US') : '—';
 
