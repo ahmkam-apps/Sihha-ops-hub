@@ -1502,13 +1502,13 @@ def public_donate_stats():
     """).fetchall()
     monthly = [dict(r) for r in monthly_rows]
 
-    # Projection: 3-month run rate + trend
+    # Projection: 6-month run rate + trend
     proj_rows = db.execute("""
         SELECT substr(date,1,7) AS month,
                COUNT(DISTINCT donor_name) AS donors,
                COALESCE(SUM(amount),0) AS total
         FROM donations
-        WHERE date >= date('now','-3 months') AND amount > 0
+        WHERE date >= date('now','-6 months') AND amount > 0
         GROUP BY month ORDER BY month ASC
     """).fetchall()
     proj_rows = [dict(r) for r in proj_rows]
@@ -1636,13 +1636,13 @@ def dashboard_stats():
     """).fetchall()
     stats['donations_by_month'] = [dict(r) for r in monthly_rows]
 
-    # Projection stats: last 3 months run rate + trend slope
+    # Projection stats: last 6 months run rate + trend slope
     proj_rows = db.execute("""
         SELECT substr(date,1,7)           AS month,
                COUNT(DISTINCT donor_name) AS donors,
                COALESCE(SUM(amount),0)    AS total
         FROM donations
-        WHERE date >= date('now','-3 months')
+        WHERE date >= date('now','-6 months')
           AND amount > 0
         GROUP BY month
         ORDER BY month ASC
@@ -1715,21 +1715,25 @@ def dashboard_stats():
     stats['upcoming_cycles'] = [dict(r) for r in upcoming_rows]
 
     # Smart donation goal: active_families × $200/month = monthly need
-    # Next month's fundraising target = monthly_need - last_month_donations
+    # Surplus carry-forward: if last month exceeded the need, reduce this month's target
     last_month = (datetime.utcnow().replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
     last_month_donations = db.execute(
         "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ?",
         (f'{last_month}%',)
     ).fetchone()[0]
-    cost_per_family       = 200  # $200 per active family per month
-    monthly_need          = stats['families_active'] * cost_per_family
-    next_month_target     = max(0, monthly_need - last_month_donations)
+    cost_per_family                = 200  # $200 per active family per month
+    monthly_need                   = stats['families_active'] * cost_per_family
+    last_month_surplus             = max(0, last_month_donations - monthly_need)
+    this_month_adjusted_target     = max(0, monthly_need - last_month_surplus)
+    next_month_target              = max(0, monthly_need - last_month_donations)
 
-    stats['cost_per_family']       = cost_per_family
-    stats['monthly_need']          = monthly_need
-    stats['last_month_donations']  = last_month_donations
-    stats['next_month_target']     = next_month_target
-    stats['last_month']            = last_month
+    stats['cost_per_family']               = cost_per_family
+    stats['monthly_need']                  = monthly_need
+    stats['last_month_donations']          = last_month_donations
+    stats['last_month_surplus']            = last_month_surplus
+    stats['this_month_adjusted_target']    = this_month_adjusted_target
+    stats['next_month_target']             = next_month_target
+    stats['last_month']                    = last_month
 
     return jsonify(stats)
 
