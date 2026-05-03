@@ -5,39 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sihha — Community Stats</title>
 <style>
-  @font-face { font-family:'AreaExtrabold'; src:url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2'); }
-  @font-face { font-family:'AreaNormal'; src:url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2'); }
+  /* TODO: Replace AREA_THIN_URL with the actual URL from your Wix site.
+     How to find it: open your Wix site in Chrome → F12 → Network → filter
+     by "woff" → refresh → copy the full URL for the AreaThin request. */
+  @font-face {
+    font-family: 'AreaThin';
+    src: url('AREA_THIN_URL') format('woff2');
+  }
   *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
   html, body {
-    font-family:'AreaNormal',Helvetica,Arial,sans-serif;
-    background:#111111;
-    color:#ffffff;
+    font-family:'AreaThin',Helvetica,Arial,sans-serif;
+    background: transparent;
+    color:#000000;
     font-size:14px;
     line-height:1.4;
   }
   #widget { padding:16px 16px 14px; width:100%; }
   .stat-box {
     flex-shrink:0;
-    background:#ffffff;
+    background:#000000;
     display:flex;
     align-items:center;
     justify-content:center;
   }
   .stat-num {
-    font-family:'AreaExtrabold',Helvetica,Arial,sans-serif;
-    font-weight:800;
-    color:#111111;
+    font-family:'AreaThin',Helvetica,Arial,sans-serif;
+    color:#ffffff;
     line-height:1;
   }
   .stat-label {
-    font-family:'AreaExtrabold',Helvetica,Arial,sans-serif;
-    font-weight:800;
-    color:#ffffff;
+    font-family:'AreaThin',Helvetica,Arial,sans-serif;
+    color:#000000;
     line-height:1.2;
   }
-  .divider { border:none; border-top:1px solid rgba(255,255,255,0.08); margin:14px 0; }
-  .bar-track { width:100%; background:rgba(255,255,255,0.1); overflow:hidden; }
-  .w-footer  { font-size:9px; color:rgba(255,255,255,0.2); text-align:right; margin-top:10px; letter-spacing:0.4px; }
+  .divider { border:none; border-top:1px solid rgba(0,0,0,0.1); margin:14px 0; }
+  .bar-track { width:100%; background:rgba(0,0,0,0.1); overflow:hidden; }
+  .w-footer  { font-size:9px; color:rgba(0,0,0,0.3); text-align:right; margin-top:10px; letter-spacing:0.4px; }
 </style>
 </head>
 <body>
@@ -74,7 +77,7 @@ function calcDelivery(d) {
 function renderDesktop(d) {
   const del = calcDelivery(d);
   document.getElementById('widget').innerHTML = `
-    <div style="font-family:'AreaExtrabold',sans-serif;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:14px;">Community Impact</div>
+    <div style="font-family:'AreaThin',sans-serif;font-size:13px;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:14px;color:#000000;">Community Impact</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div style="display:flex;align-items:center;gap:20px;">
         <div class="stat-box" style="width:64px;height:64px;">
@@ -93,17 +96,17 @@ function renderDesktop(d) {
       <div>
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div>
-            <div style="font-family:'AreaExtrabold',sans-serif;font-size:22px;font-weight:800;color:#fff;">${del.fmtDate}</div>
-            <div style="font-size:12px;color:rgba(255,255,255,0.45);margin-top:4px;">${del.title}</div>
+            <div style="font-family:'AreaThin',sans-serif;font-size:22px;color:#000000;">${del.fmtDate}</div>
+            <div style="font-size:12px;color:rgba(0,0,0,0.45);margin-top:4px;">${del.title}</div>
           </div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.45);padding-top:4px;">${del.daysLbl}</div>
+          <div style="font-size:12px;color:rgba(0,0,0,0.45);padding-top:4px;">${del.daysLbl}</div>
         </div>
         <div class="bar-track" style="height:4px;margin-top:8px;">
           <div style="height:4px;background:#27ae60;width:${del.pct}%;transition:width 1.2s ease;"></div>
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:4px;">
-          <div style="font-size:10px;color:rgba(255,255,255,0.3);">Cycle started ${del.startLbl}</div>
-          <div style="font-size:10px;color:rgba(255,255,255,0.3);">${del.pct}% through</div>
+          <div style="font-size:10px;color:rgba(0,0,0,0.3);">Cycle started ${del.startLbl}</div>
+          <div style="font-size:10px;color:rgba(0,0,0,0.3);">${del.pct}% through</div>
         </div>
       </div>` : ''}
     </div>
@@ -115,7 +118,7 @@ function renderDesktop(d) {
 function renderMobile(d) {
   const del = calcDelivery(d);
   document.getElementById('widget').innerHTML = `
-    <div style="font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:rgba(255,255,255,0.35);margin-bottom:10px;">Community Impact</div>
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:rgba(0,0,0,0.4);margin-bottom:10px;">Community Impact</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <div style="display:flex;align-items:center;gap:14px;">
         <div class="stat-box" style="width:52px;height:52px;">
@@ -134,12 +137,12 @@ function renderMobile(d) {
       <div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <div style="font-family:'AreaExtrabold',sans-serif;font-size:18px;font-weight:800;color:#fff;">${del.fmtDate}</div>
-            <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:2px;">Next Delivery</div>
+            <div style="font-family:'AreaThin',sans-serif;font-size:18px;color:#000000;">${del.fmtDate}</div>
+            <div style="font-size:10px;color:rgba(0,0,0,0.35);margin-top:2px;">Next Delivery</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-size:12px;color:rgba(255,255,255,0.5);">${del.daysLbl}</div>
-            <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;">${d.next_cycle_title || ''}</div>
+            <div style="font-size:12px;color:rgba(0,0,0,0.5);">${del.daysLbl}</div>
+            <div style="font-size:10px;color:rgba(0,0,0,0.3);margin-top:2px;">${d.next_cycle_title || ''}</div>
           </div>
         </div>
         <div class="bar-track" style="height:3px;margin-top:8px;">
