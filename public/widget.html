@@ -264,12 +264,36 @@
     letter-spacing: 0.5px;
   }
 
-  @media (max-width: 480px) {
+  @media (max-width: 600px) {
+    .widget { padding: 0 2px 8px; }
+
+    /* Header — stack title above legend */
+    .chart-header { flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 14px; }
+    .chart-title  { font-size: 13px; }
+    .chart-legend { gap: 10px; flex-wrap: wrap; }
+    .legend-item  { font-size: 10px; }
+
+    /* Progress bar */
     .progress-collected { font-size: 20px; }
-    .chart-title { font-size: 12px; }
-    .stat-card-box { width: 52px; height: 52px; }
-    .stat-card-value { font-size: 20px; }
-    .stat-card-label { font-size: 17px; }
+    .progress-right     { font-size: 11px; }
+    .progress-track, .progress-red, .progress-green { height: 18px; }
+
+    /* Stat cards */
+    .stat-card-box   { width: 52px; height: 52px; }
+    .stat-card-value { font-size: 18px; }
+    .stat-card-label { font-size: 16px; }
+
+    /* Delivery card */
+    .delivery-date { font-size: 18px; }
+    .delivery-sub, .delivery-days, .delivery-tag { font-size: 11px; }
+  }
+
+  @media (max-width: 380px) {
+    .chart-title  { font-size: 11px; }
+    .stat-card-box   { width: 44px; height: 44px; }
+    .stat-card-value { font-size: 15px; }
+    .stat-card-label { font-size: 14px; }
+    .progress-collected { font-size: 17px; }
   }
 </style>
 </head>
@@ -316,7 +340,7 @@
 
   <!-- Chart -->
   <div class="chart-wrap">
-    <canvas id="trend-chart" height="110"></canvas>
+    <canvas id="trend-chart" height="90"></canvas>
   </div>
 
   <!-- Stat cards -->
@@ -396,6 +420,7 @@ async function load() {
   } catch(e) {
     console.warn('Widget fetch error', e);
   }
+  return true;
 }
 
 function render(d) {
@@ -627,8 +652,29 @@ function render(d) {
   });
 }
 
-load();
-setInterval(load, 5 * 60 * 1000);
+// ── Auto-resize: tell parent iframe how tall we are ──
+function reportHeight() {
+  const h = document.documentElement.scrollHeight;
+  window.parent.postMessage({ type: 'sihha-widget-height', height: h }, '*');
+}
+window.addEventListener('resize', reportHeight);
+
+async function loadAndReport() {
+  await load();
+  setTimeout(reportHeight, 900); // after chart animation
+}
+
+loadAndReport();
+setInterval(loadAndReport, 5 * 60 * 1000);
 </script>
+
+<!-- Wix iframe auto-resize listener — paste this into your Wix page code (Developer Tools > Page Code):
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'sihha-widget-height') {
+    var iframe = document.querySelector('iframe[src*="railway.app/widget"]');
+    if (iframe) iframe.style.height = e.data.height + 'px';
+  }
+});
+-->
 </body>
 </html>
