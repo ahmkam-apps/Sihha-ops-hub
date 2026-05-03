@@ -21,8 +21,8 @@
 
   html, body {
     font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
-    background: #111;
-    color: #fff;
+    background: #fff;
+    color: #111;
     font-size: 14px;
     line-height: 1.4;
     min-height: 100vh;
@@ -43,7 +43,7 @@
   }
 
   .stat-block {
-    background: #1a1a1a;
+    background: #f7f7f7;
     padding: 20px 22px;
   }
 
@@ -51,8 +51,9 @@
     font-size: 10px;
     letter-spacing: 1.6px;
     text-transform: uppercase;
-    color: #666;
+    color: #aaa;
     margin-bottom: 8px;
+    font-weight: 700;
   }
 
   .stat-value {
@@ -61,37 +62,26 @@
     font-weight: 800;
     letter-spacing: -0.03em;
     line-height: 1;
-    color: #fff;
+    color: #111;
   }
 
   .stat-sub {
     font-size: 12px;
-    color: #666;
+    color: #aaa;
     margin-top: 6px;
   }
 
-  .stat-sub.green  { color: #4ade80; }
-  .stat-sub.yellow { color: #fbbf24; }
-  .stat-sub.red    { color: #f87171; }
-
-  /* countdown accent */
-  .countdown-days {
-    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
-    font-size: 38px;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    line-height: 1;
-    color: #fff;
-  }
   .countdown-unit {
     font-size: 13px;
-    color: #888;
+    color: #aaa;
     margin-left: 4px;
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
+    font-weight: 400;
   }
 
   /* ── Progress bar block ──────────────────────────── */
   .progress-block {
-    background: #1a1a1a;
+    background: #f7f7f7;
     padding: 20px 22px;
     display: flex;
     flex-direction: column;
@@ -110,29 +100,40 @@
     font-size: 28px;
     font-weight: 800;
     letter-spacing: -0.03em;
-    color: #fff;
+    color: #111;
   }
 
   .progress-goal-label {
     font-size: 12px;
-    color: #555;
+    color: #aaa;
   }
 
   .progress-track {
     width: 100%;
     height: 6px;
-    background: #2a2a2a;
+    background: #e0e0e0;
     overflow: hidden;
+    border-radius: 2px;
+    display: flex;
   }
 
-  .progress-fill {
-    height: 100%;
-    background: #fff;
+  /* Red = collected toward goal */
+  .progress-red {
+    height: 6px;
+    background: #c0392b;
+    border-radius: 2px 0 0 2px;
     transition: width 1.2s cubic-bezier(0.4,0,0.2,1);
-    max-width: 100%;
+    flex-shrink: 0;
   }
 
-  .progress-fill.full { background: #4ade80; }
+  /* Green = surplus beyond goal */
+  .progress-green {
+    height: 6px;
+    background: #27ae60;
+    border-radius: 0 2px 2px 0;
+    transition: width 1.2s cubic-bezier(0.4,0,0.2,1);
+    flex-shrink: 0;
+  }
 
   .progress-bottom {
     display: flex;
@@ -142,18 +143,32 @@
   }
 
   .progress-pct {
-    font-size: 12px;
-    color: #888;
+    font-size: 11px;
+    color: #aaa;
   }
 
   .surplus-note {
     font-size: 11px;
-    color: #4ade80;
+    color: #27ae60;
+    font-weight: 700;
+  }
+
+  /* Goal-met banner */
+  .goal-met-banner {
+    background: #f0faf4;
+    border: 1px solid #27ae60;
+    border-radius: 2px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #27ae60;
+    font-weight: 700;
+    text-align: center;
+    margin-top: 10px;
   }
 
   /* ── Chart row ───────────────────────────────────── */
   .chart-block {
-    background: #1a1a1a;
+    background: #f7f7f7;
     padding: 18px 22px 14px;
     margin-top: 2px;
   }
@@ -169,7 +184,8 @@
     font-size: 10px;
     letter-spacing: 1.4px;
     text-transform: uppercase;
-    color: #555;
+    color: #bbb;
+    font-weight: 700;
   }
 
   .chart-legend {
@@ -182,18 +198,8 @@
     align-items: center;
     gap: 5px;
     font-size: 11px;
-    color: #666;
+    color: #bbb;
   }
-
-  .legend-dot {
-    width: 10px;
-    height: 2px;
-    border-radius: 1px;
-  }
-
-  .legend-dot.actual    { background: #fff; }
-  .legend-dot.projected { background: #555; border-top: 2px dashed #555; height: 0; }
-  .legend-dot.goal      { background: #4ade80; }
 
   canvas { display: block; }
 
@@ -201,7 +207,7 @@
   .widget-footer {
     margin-top: 10px;
     font-size: 10px;
-    color: #333;
+    color: #ddd;
     text-align: right;
     letter-spacing: 0.5px;
   }
@@ -211,7 +217,7 @@
     .widget { padding: 18px 16px 16px; }
     .stats-row { grid-template-columns: 1fr 1fr; }
     .progress-block { grid-column: 1 / -1; }
-    .stat-value, .countdown-days { font-size: 30px; }
+    .stat-value { font-size: 30px; }
     .progress-collected { font-size: 22px; }
   }
 
@@ -221,24 +227,24 @@
 </style>
 </head>
 <body>
-<div class="widget" id="widget">
+<div class="widget">
 
-  <div class="stats-row" id="stats-row">
+  <div class="stats-row">
     <!-- Families -->
     <div class="stat-block">
       <div class="stat-label">Families Served</div>
       <div class="stat-value" id="families-count">—</div>
-      <div class="stat-sub" id="lives-sub">loading…</div>
+      <div class="stat-sub" id="lives-sub"></div>
     </div>
 
     <!-- Countdown -->
     <div class="stat-block">
       <div class="stat-label">Next Delivery</div>
-      <div id="countdown-display">
-        <span class="countdown-days" id="days-value">—</span>
+      <div>
+        <span class="stat-value" id="days-value">—</span>
         <span class="countdown-unit" id="days-unit"></span>
       </div>
-      <div class="stat-sub" id="delivery-date-sub">loading…</div>
+      <div class="stat-sub" id="delivery-date-sub"></div>
     </div>
 
     <!-- Monthly fundraising progress -->
@@ -249,11 +255,15 @@
         <div class="progress-goal-label" id="goal-label">of — goal</div>
       </div>
       <div class="progress-track">
-        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+        <div class="progress-red"   id="bar-red"   style="width:0%;"></div>
+        <div class="progress-green" id="bar-green" style="width:0%;"></div>
       </div>
       <div class="progress-bottom">
-        <div class="progress-pct" id="progress-pct"></div>
-        <div class="surplus-note" id="surplus-note"></div>
+        <div class="progress-pct"  id="progress-pct"></div>
+        <div class="surplus-note"  id="surplus-note"></div>
+      </div>
+      <div class="goal-met-banner" id="goal-met-banner" style="display:none;">
+        ✓ This month's goal is fully covered by last month's surplus
       </div>
     </div>
   </div>
@@ -263,9 +273,15 @@
     <div class="chart-header">
       <div class="chart-title">Donation Trend &amp; Projection</div>
       <div class="chart-legend">
-        <div class="legend-item"><div class="legend-dot actual"></div>Actual</div>
-        <div class="legend-item"><div class="legend-dot projected"></div>Projected</div>
-        <div class="legend-item"><div class="legend-dot goal"></div>Monthly goal</div>
+        <div class="legend-item">
+          <div style="width:14px;height:2px;background:#111;"></div>Actual
+        </div>
+        <div class="legend-item">
+          <div style="width:14px;border-top:2px dashed #bbb;"></div>Projected
+        </div>
+        <div class="legend-item">
+          <div style="width:14px;height:2px;background:#c0392b;opacity:0.5;"></div>Goal
+        </div>
       </div>
     </div>
     <canvas id="trend-chart" height="90"></canvas>
@@ -302,13 +318,12 @@ function render(d) {
   // ── Families ────────────────────────────────────────────────────
   document.getElementById('families-count').textContent = d.families_active ?? '—';
   const lives = d.lives_impacted || d.families_active || 0;
-  document.getElementById('lives-sub').textContent =
-    lives ? `${lives} lives impacted` : '';
+  document.getElementById('lives-sub').textContent = lives ? `${lives} lives impacted` : '';
 
   // ── Countdown ───────────────────────────────────────────────────
-  const daysEl  = document.getElementById('days-value');
-  const unitEl  = document.getElementById('days-unit');
-  const dateEl  = document.getElementById('delivery-date-sub');
+  const daysEl = document.getElementById('days-value');
+  const unitEl = document.getElementById('days-unit');
+  const dateEl = document.getElementById('delivery-date-sub');
 
   if (d.days_to_delivery != null) {
     const n = d.days_to_delivery;
@@ -330,47 +345,62 @@ function render(d) {
   }
 
   // ── Progress bar ────────────────────────────────────────────────
-  const monthlyNeed    = d.monthly_need    || 0;
-  const adjTarget      = d.this_month_adjusted_target != null ? d.this_month_adjusted_target : monthlyNeed;
-  const surplus        = d.last_month_surplus || 0;
-  const collected      = d.month_raised    || 0;
-  const families       = d.families_active || 0;
-  const cost           = d.cost_per_family || 200;
+  const monthlyNeed = d.monthly_need    || 0;
+  const adjTarget   = d.this_month_adjusted_target != null ? d.this_month_adjusted_target : monthlyNeed;
+  const surplus     = d.last_month_surplus || 0;
+  const collected   = d.month_raised    || 0;
+  const families    = d.families_active || 0;
+  const cost        = d.cost_per_family || 200;
 
   const nowLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   document.getElementById('month-label').textContent = nowLabel + ' Fundraising';
-
   document.getElementById('month-collected').textContent = fmt(collected);
 
   const goalMet = adjTarget === 0 && monthlyNeed > 0;
   const barGoal = goalMet ? monthlyNeed : adjTarget;
-  const pct     = barGoal > 0 ? Math.min(100, Math.round(collected / barGoal * 100)) : 100;
 
   document.getElementById('goal-label').textContent =
     goalMet ? `of ${fmt(monthlyNeed)} goal — covered ✓` : `of ${fmt(barGoal)} goal`;
 
-  const fill = document.getElementById('progress-fill');
-  fill.style.width = pct + '%';
-  fill.className   = 'progress-fill' + (pct >= 100 ? ' full' : '');
-
-  document.getElementById('progress-pct').textContent =
-    goalMet ? `${families} families × ${fmt(cost)}/mo = ${fmt(monthlyNeed)} needed` :
-              `${pct}% · ${families} families × ${fmt(cost)}/mo = ${fmt(monthlyNeed)} needed`;
-
-  document.getElementById('surplus-note').textContent =
-    surplus > 0 ? `+${fmt(surplus)} surplus from last month` : '';
+  if (goalMet) {
+    // Surplus covers everything — full red bar + show banner
+    document.getElementById('bar-red').style.width   = '100%';
+    document.getElementById('bar-green').style.width = '0%';
+    document.getElementById('goal-met-banner').style.display = 'block';
+    document.getElementById('progress-pct').textContent  = `${families} families × ${fmt(cost)}/mo = ${fmt(monthlyNeed)} needed`;
+    document.getElementById('surplus-note').textContent  = '';
+  } else if (collected >= barGoal) {
+    // Goal met this month — red fills to goal, green shows surplus portion
+    const totalBar    = collected;
+    const redPct      = Math.round(barGoal / totalBar * 100);
+    const greenPct    = 100 - redPct;
+    document.getElementById('bar-red').style.width   = redPct + '%';
+    document.getElementById('bar-green').style.width = greenPct + '%';
+    document.getElementById('goal-met-banner').style.display = 'none';
+    document.getElementById('progress-pct').textContent  = `Goal met · ${families} families × ${fmt(cost)}/mo`;
+    document.getElementById('surplus-note').textContent  = `+${fmt(collected - barGoal)} surplus this month`;
+  } else {
+    // Still working toward goal — red only, no green
+    const pct = barGoal > 0 ? Math.min(99, Math.round(collected / barGoal * 100)) : 0;
+    document.getElementById('bar-red').style.width   = pct + '%';
+    document.getElementById('bar-green').style.width = '0%';
+    document.getElementById('goal-met-banner').style.display = 'none';
+    document.getElementById('progress-pct').textContent  = `${pct}% · ${families} families × ${fmt(cost)}/mo = ${fmt(barGoal)} needed`;
+    document.getElementById('surplus-note').textContent  =
+      surplus > 0 ? `+${fmt(surplus)} surplus from last month` : '';
+  }
 
   // ── Trend chart ─────────────────────────────────────────────────
   const dm = (d.donations_by_month || []).filter(m => (m.total || 0) > 0);
   const histLabels = dm.map(m => mLabel(m.month));
   const histTotals = dm.map(m => m.total || 0);
 
-  const avgMonthly    = d.proj_avg_monthly   || 0;
-  const monthlyTrend  = d.proj_monthly_trend || 0;
+  const avgMonthly   = d.proj_avg_monthly   || 0;
+  const monthlyTrend = d.proj_monthly_trend || 0;
   const lineLastTotal = histTotals.length ? histTotals[histTotals.length - 1] : 0;
-  const projBase      = avgMonthly || lineLastTotal;
-  const maxDrop       = projBase * 0.05;
-  const trendDamp     = monthlyTrend >= 0 ? monthlyTrend : Math.max(monthlyTrend, -maxDrop);
+  const projBase     = avgMonthly || lineLastTotal;
+  const maxDrop      = projBase * 0.05;
+  const trendDamp    = monthlyTrend >= 0 ? monthlyTrend : Math.max(monthlyTrend, -maxDrop);
 
   const projLabels = [];
   const projVals   = [];
@@ -391,10 +421,6 @@ function render(d) {
     ...projVals
   ];
 
-  const goalLine = Array(allLabels.length).fill(monthlyNeed);
-
-  const ctx = document.getElementById('trend-chart').getContext('2d');
-
   const goalPlugin = {
     id: 'goalPlugin',
     afterDraw(chart) {
@@ -404,96 +430,100 @@ function render(d) {
       ctx.save();
       ctx.beginPath();
       ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = '#4ade80';
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = 'rgba(192,57,43,0.35)';
+      ctx.lineWidth = 1.5;
       ctx.moveTo(left, yPos);
       ctx.lineTo(right, yPos);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+      ctx.font = 'bold 9px Arial';
+      ctx.fillStyle = 'rgba(192,57,43,0.45)';
+      ctx.textAlign = 'left';
+      ctx.fillText('$' + Math.round(monthlyNeed).toLocaleString() + ' goal', left + 4, yPos - 4);
       ctx.restore();
     }
   };
 
   if (chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type: 'line',
-    plugins: [goalPlugin],
-    data: {
-      labels: allLabels,
-      datasets: [
-        {
-          label: 'Actual',
-          data: actualData,
-          borderColor: '#ffffff',
-          borderWidth: 2,
-          backgroundColor: 'rgba(255,255,255,0.06)',
-          fill: true,
-          tension: 0.35,
-          pointBackgroundColor: '#fff',
-          pointRadius: 3,
-          pointHoverRadius: 5,
-          spanGaps: false,
-        },
-        {
-          label: 'Projected',
-          data: projData,
-          borderColor: '#555',
-          borderWidth: 1.5,
-          borderDash: [5, 4],
-          backgroundColor: 'transparent',
-          fill: false,
-          tension: 0.25,
-          pointRadius: 2,
-          pointBackgroundColor: '#555',
-          spanGaps: false,
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      animation: { duration: 800 },
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#222',
-          borderColor: '#333',
-          borderWidth: 1,
-          titleColor: '#aaa',
-          bodyColor: '#fff',
-          callbacks: {
-            label: ctx => {
-              if (ctx.parsed.y == null) return null;
-              return ` ${ctx.dataset.label}: $${Math.round(ctx.parsed.y).toLocaleString()}`;
+  const canvas = document.getElementById('trend-chart');
+  if (canvas) {
+    chart = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      plugins: [goalPlugin],
+      data: {
+        labels: allLabels,
+        datasets: [
+          {
+            label: 'Actual',
+            data: actualData,
+            borderColor: '#111',
+            borderWidth: 2,
+            backgroundColor: 'rgba(0,0,0,0.03)',
+            fill: true,
+            tension: 0.35,
+            pointBackgroundColor: '#111',
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            spanGaps: false,
+          },
+          {
+            label: 'Projected',
+            data: projData,
+            borderColor: '#bbb',
+            borderWidth: 1.5,
+            borderDash: [5, 4],
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.25,
+            pointRadius: 2,
+            pointBackgroundColor: '#bbb',
+            spanGaps: false,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        animation: { duration: 800 },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#111',
+            borderColor: '#333',
+            borderWidth: 1,
+            titleColor: '#aaa',
+            bodyColor: '#fff',
+            callbacks: {
+              label: ctx => {
+                if (ctx.parsed.y == null) return null;
+                return ` ${ctx.dataset.label}: $${Math.round(ctx.parsed.y).toLocaleString()}`;
+              }
             }
           }
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(255,255,255,0.04)' },
-          ticks: { color: '#555', font: { size: 10 } },
-          border: { color: '#222' }
         },
-        y: {
-          grid: { color: 'rgba(255,255,255,0.04)' },
-          ticks: {
-            color: '#555',
-            font: { size: 10 },
-            callback: v => '$' + Math.round(v).toLocaleString()
+        scales: {
+          x: {
+            grid: { color: 'rgba(0,0,0,0.04)' },
+            ticks: { color: '#bbb', font: { size: 10 } },
+            border: { color: '#e8e8e8' }
           },
-          border: { color: '#222' },
-          beginAtZero: true
+          y: {
+            grid: { color: 'rgba(0,0,0,0.04)' },
+            ticks: {
+              color: '#bbb',
+              font: { size: 10 },
+              callback: v => '$' + Math.round(v).toLocaleString()
+            },
+            border: { color: '#e8e8e8' },
+            beginAtZero: true
+          }
         }
       }
-    }
-  });
+    });
+  }
 }
 
-// Initial load + refresh every 5 min
 load();
 setInterval(load, 5 * 60 * 1000);
 </script>
