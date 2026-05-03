@@ -1,6 +1,6 @@
 # SIHAA Food Charity — Operations Hub Memory
 
-_Last updated: 2026-04-29 (latest commit: pending push — volunteer slot model + 12-month portal)_
+_Last updated: 2026-05-02 (latest commit: 991bf3c — fix OTP dev mode: always return code when OTP_DEV_MODE=true)_
 
 ---
 
@@ -41,13 +41,13 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 | Railway Volume | ✅ LIVE | Mounted at `/app/data` |
 | DB_PATH env var | ✅ Set | `/app/data/sihaa.db` |
 | ADMIN_PASSWORD env var | ✅ Set | Synced to DB on every deploy |
-| APP_URL env var | ⚠️ Should be set | Used for WA confirmation links: `https://sihha-ops-hub-production.up.railway.app` |
+| APP_URL env var | ⚠️ Should be set | Used for SMS confirmation links: `https://sihha-ops-hub-production.up.railway.app` |
 | GitHub token | stored in Railway env — do not commit | Active |
 | Old token | stored separately — revoke when convenient | 🔲 Revoke |
 | Custom subdomain | 🔲 Pending | ops.sihaa.org → Railway |
 | Wix buttons | 🔲 Pending | "Get Help" → /intake, "Volunteer" → /volunteer |
 | Stripe MCP plugin | 🔲 Pending | Phase 4D reconciliation |
-| Rashid treasurer account | 🔲 Pending | Add wa_phone + wa_apikey after CallMeBot opt-in |
+| Rashid treasurer account | 🔲 Pending | Add email address for treasurer notifications |
 
 ---
 
@@ -60,7 +60,7 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 | WSGI | Gunicorn 2 workers |
 | Frontend | Vanilla JS, single-file HTML SPAs |
 | Auth | Bearer token, DB-persisted sessions |
-| WhatsApp | CallMeBot (free) — per-volunteer AND per-family API key |
+| SMS | Twilio — all family + volunteer notifications |
 | Scheduling | APScheduler (3 daily jobs) |
 | Charts | Chart.js 4.4.1 (CDN) |
 | Email | SendGrid (SENDGRID_API_KEY env var) — treasurer notifications |
@@ -97,13 +97,13 @@ sessions (admin bearer tokens)
 portal_sessions (volunteer portal tokens — phone-based login, 48hr expiry)
 
 families
-  ├── wa_phone, wa_apikey   ← CallMeBot (in DB + in admin family profile UI ✅)
+  ├── wa_phone, wa_apikey   ← CallMeBot (still in DB schema, but removed from all admin UI — WA stripped)
   ├── family_code           ← unique: last 6 phone digits + bundle letter (e.g. "398540-M")
   ├── city, family_size, children_count, income_range, frequency  ← all editable in admin
   └── status: pending | active | inactive | paused
 
 volunteers
-  ├── wa_phone, wa_apikey   ← CallMeBot (in DB + in volunteer profile admin UI ✅)
+  ├── wa_phone, wa_apikey   ← CallMeBot (still in DB schema, removed from all admin UI — WA stripped)
   └── status: pending | active | inactive
 
 delivery_cycles
@@ -232,11 +232,13 @@ reminder_log    ← idempotency guard for WA volunteer reminders
 ## Admin SPA Modules (index.html) — Current State
 
 ### Navigation
-Dashboard → Deliveries → Families → Volunteers → Finance → 📵 WhatsApp Setup → 📋 Change Requests
+Dashboard → Deliveries → Families → Volunteers → Finance → 📋 Change Requests
 
 ### Dashboard
 - Active delivery banner: status, family count, slot progress
-- **Needs Attention alerts**: pending families, pending volunteers, pending payments, families/volunteers without WA, **pending change requests** (links to Requests inbox)
+- **Active cycle priority: `open` → `shopping` → `upcoming`** — banner and Orders/Slots/Remind buttons show for `open` cycles (was missing `open` before)
+- Status colours: open = amber (#e07b00), shopping = blue, upcoming = green
+- **Needs Attention alerts**: pending families, pending volunteers, pending payments, **pending change requests** (links to Requests inbox)
 - Chart.js donation chart (bar + projection line)
 - Projection calculator with sliders
 - "Seed 2026 Deliveries" button
@@ -247,8 +249,7 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📵 WhatsA
 - Detail view: confirmation response board — Confirmed / No WA / No Response stats + per-family override buttons
 
 ### Families
-- Table with WA column (✓ or ⚠ No WA badge), needs-wa filter tab
-- Clicking any row → full-page family profile
+- Table: all families, clickable rows → full-page family profile
 - **Current cycle strip**: status badge + override buttons (Confirm / Skip / Mark Confirmed)
   - **✕ Cancel button** (NEW): admin-initiated cancel — prompts for reason, hard-deletes order row, releases volunteer slots, family can re-order. Tooltip: "Cancels the order and frees the delivery slot — family can place a fresh order."
   - **↺ Reset button**: silently wipes confirmed order back to pending (items cleared); for already-cancelled orders, deletes the record. Tooltip explains the difference.
@@ -257,21 +258,14 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📵 WhatsA
 - Inline event log (collapsible)
 
 ### Volunteers
-- Task Types manager: added `is_family_slot` checkbox ("Per family" — creates a slot per family per cycle for this task type). Shopping + Delivery default to 1.
-
-### Volunteers
-- Table with WA column, needs-wa filter tab
-- Profile: role switcher, WA credentials, task history
-- Task Types manager
+- Table: all volunteers, clickable rows → profile
+- Profile: role switcher, task history
+- Task Types manager: `is_family_slot` checkbox ("Per family" — creates a slot per family per cycle for this task type). Shopping + Delivery default to 1.
 
 ### Finance
 - Donations, Receipts, Reimbursements, Users
 
-### 📵 WhatsApp Setup
-- Lists all active families + volunteers without WA credentials
-- Inline save per row
-
-### 📋 Change Requests (NEW)
+### 📋 Change Requests
 - Centralized inbox: all pending requests across all families/cycles
 - Each card shows: family name, cycle, family's notes, requested item list
 - Approve (auto-applies item changes + WA to family) or Reject (WA to family with admin note)
@@ -282,19 +276,38 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📵 WhatsA
 ## Volunteer Portal (`/portal` → `portal.html`) — Current State ✅
 
 - Login: phone number → 48hr session token
-- **Sign Up tab**: cycle selector (12 months out) → ALL active families → per-task sign-up
-  - Each family card shows order status badge: "✓ Order placed" (green) or "⏳ No order yet" (amber)
-  - Four slot states: Mine-confirmed (green), Mine-pending (amber, waiting for family order), Taken (grey, shows name), Open (signup button)
-  - Conflict-safe claiming
-  - Volunteers can sign up BEFORE family places order — slot confirmed once family orders, auto-released 3 days before delivery if still unconfirmed
-  - Heading shows: `N families · M with orders · K with open slots`
-- **My Tasks tab**: active + completed assignments, split into sections:
-  - **✓ Confirmed**: family has placed order — green badge, shows item list for shoppers, address for delivery
-  - **⏳ Waiting for Family Order**: signed up but family hasn't ordered yet — amber border + explanation note
-  - **Done**: completed tasks
-  - **Removed Assignments section**: slots released/reassigned in last 60 days shown with red "Removed" badge
-  - WA sent to volunteer when slot confirmed (with item list/address) or auto-released
-- **History tab**: lifetime stats
+- **Two tabs: "Deliveries" (default) | "History"**
+
+### Deliveries tab — two sections on one page
+**My Sign-Ups** (top):
+- Lists every family the volunteer has committed to: task type badge, family code, delivery date, status
+- Status: green border = confirmed (family ordered), amber border = pending (waiting for family order)
+- Shows shopping item list for confirmed shopping tasks, delivery address for confirmed delivery tasks
+- Receipt submit/update button for shopping tasks
+- Mark Done button for delivery tasks
+- If no sign-ups: "You haven't signed up yet"
+
+**Available Families** (below):
+- All `open`/`shopping` cycles loaded in parallel — no cycle selector needed
+- Each family shows order badge: "✓ Order placed" (confirmed/submitted/delivered only) or "⏳ No order yet"
+- Four slot states: Mine-confirmed (green), Mine-pending (amber), Taken (grey + name), Open (signup button)
+- Multiple volunteers allowed on same order in different task types (by design)
+- Cycle header shown when multiple active cycles exist
+
+**Real-time updates:**
+- `silentRefreshTasks()` runs every 60 seconds while Deliveries tab is open
+- Re-fetches My Sign-Ups silently — shopping list updates automatically if family changes items
+- Pauses when browser tab hidden, catches up on return
+- Polling stops on logout or switching to History tab
+
+### History tab
+- Lifetime stats: tasks done, shopping, deliveries, cycles, families served
+- Completed task list
+
+### Key business rules
+- One slot per task type per family per cycle (one shopper + one deliverer)
+- Same volunteer can claim both tasks on same family (by design)
+- `portal_get_families` LEFT JOIN only matches `confirmed`/`submitted`/`delivered` orders — cancelled/pending never show as "Order placed"
 - Receipt modal: submit photo + amount + store
 
 ---
@@ -360,11 +373,41 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 | Volunteer activity report | Per-volunteer lifetime stats, exportable |
 | Phase 4D: Financial reconciliation | Stripe + bank CSV import, donation matching — needs Stripe MCP plugin |
 
+### 🔐 Auth — SMS OTP (LIVE ✅)
+
+SMS OTP login is live on both portals. Phone number → 6-digit PIN via Twilio → 48hr session.
+
+**Current status:**
+- `OTP_DEV_MODE=true` set in Railway — server always returns PIN in JSON response so it auto-fills on screen (bypasses Twilio delivery)
+- Twilio accepts SMS but US carriers silently block it — **10DLC registration required** for real SMS delivery
+- Once 10DLC is approved: remove `OTP_DEV_MODE=true` from Railway variables
+
+**Railway env vars (all set):**
+- TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, OTP_DEV_MODE
+
+| Item | Notes |
+|------|-------|
+| SMS OTP login — families + volunteers | ✅ LIVE — dev mode auto-fill active |
+| 10DLC A2P registration | 🔲 Pending — complete in Twilio console, then remove OTP_DEV_MODE |
+| Rename /my-order → /family | 🔲 Backlog — "Family Portal" more accurate |
+
+### 📲 SMS Notifications (backlog — grouped)
+
+WA is fully stripped from the system. All notifications will go via Twilio SMS once 10DLC is approved.
+
+| Trigger | Who gets it | Message |
+|---------|------------|---------|
+| Family submits intake form | Family | "We received your application, we'll be in touch within 48 hrs" |
+| Admin activates family | Family | "You're registered with SIHAA. Visit [link] to manage your deliveries" |
+| Admin activates volunteer | Volunteer | "You're approved! Visit /portal to log in and sign up for deliveries" |
+| Volunteer signs up (registration form) | Volunteer | "Thanks for signing up, we'll review and be in touch soon" |
+| T-5 cutoff — family skipped | Family | "Sorry, the ordering window for [cycle] has closed. We'll reach out next cycle" |
+| Volunteer marks delivery complete | Family | "Your delivery from SIHAA is on its way — JazakAllah Khair" |
+
 ### Back Burner
 
 | Item | Notes |
 |------|-------|
-| Rashid (treasurer) WA credentials | Add wa_phone + wa_apikey after CallMeBot opt-in |
 | ops.sihaa.org DNS → Railway | Custom subdomain |
 | Wix buttons | "Get Help" → /intake, "Volunteer" → /volunteer |
 | Donate-stats widget on Wix | iframe embed |
@@ -397,6 +440,23 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 | Family change request workflow: submit/retract, admin inbox, approve/reject, auto-apply, reset order ✅ |
 | WA notification to volunteer when admin reassigns their slot ✅ |
 | Volunteer portal: "Removed Assignments" section for released slots ✅ |
+| Volunteer portal: two-tab layout (Deliveries + History), Deliveries = My Sign-Ups + Available Families ✅ |
+| Volunteer portal: Available Families loads ALL open/shopping cycles in parallel — no cycle selector needed ✅ |
+| OTP SMS login: Twilio integration, otp_tokens table, two-step login on both portals ✅ |
+| OTP dev mode fix: always return code in JSON when OTP_DEV_MODE=true (Twilio accepts but carrier silently drops) ✅ |
+| WhatsApp fully stripped from admin UI (index.html): WA columns, filter tabs, setup page, banners, profile fields, form fields all removed ✅ |
+| Service worker cache bumped to v3: forces fresh page loads for all users ✅ |
+| nixpacks.toml deleted: was causing `No module named pip` build errors; nixpacks now auto-detects correctly ✅ |
+| railway.json: forced NIXPACKS builder to prevent railpack build-secret false positive on TWILIO_ACCOUNT_SID ✅ |
+| twilio + sendgrid added to requirements.txt: were missing, caused build failures ✅ |
+| Family portal: phone stored in localStorage — session survives page refresh ✅ |
+| Volunteer portal: accordion upcoming deliveries for all 2026 cycles, lazy-load + cache ✅ |
+| Volunteer portal: real-time shopping list — silentRefreshTasks() polls every 60s, updates items if family changes them ✅ |
+| Volunteer portal: order placed badge only shows for confirmed/submitted/delivered — cancelled/pending excluded ✅ |
+| Admin dashboard: active cycle banner now recognises `open` status (was only shopping/upcoming) ✅ |
+| Admin Food Orders: default cycle selection prefers open → shopping → upcoming ✅ |
+| Admin family profile: "Food Orders" section shows all non-terminal orders across all cycles ✅ |
+| manual-confirm: now flips existing claimed slots to confirmed + sends WA to volunteers ✅ |
 | WA credentials workflow: WA column in tables, profile banners, confirmation board split, dashboard alert, WA Setup page ✅ |
 | Admin family history: inline callout showing most recent edit/cancel without expanding ✅ |
 | cancel_food_order: wrapped in try/except, always returns JSON, logs actual error ✅ |
@@ -420,18 +480,18 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 ## GitHub Push Process
 
-Due to persistent lock files in the sandbox, use this workaround:
+Use the clean-clone workaround (avoids lock file issues in sandbox):
 
 ```bash
-cd ~/Documents/Claude/Projects/Ops\ Hub\ -App/sihaa-ops-hub
-git fetch origin master
-PARENT=$(git rev-parse origin/master)
-GIT_INDEX_FILE=/tmp/git-idx-X git read-tree $PARENT
-GIT_INDEX_FILE=/tmp/git-idx-X git update-index --add file1.py file2.html
-TREE=$(GIT_INDEX_FILE=/tmp/git-idx-X git write-tree)
-COMMIT=$(echo "commit message" | GIT_INDEX_FILE=/tmp/git-idx-X git commit-tree $TREE -p $PARENT)
-git push origin ${COMMIT}:refs/heads/master
+cd /tmp && rm -rf sihaa-push && \
+git clone https://ghp_<TOKEN>@github.com/ahmkam-apps/Sihha-ops-hub.git sihaa-push && \
+cp "/sessions/.../mnt/Ops Hub -App/sihaa-ops-hub/public/portal.html" /tmp/sihaa-push/public/portal.html && \
+cd /tmp/sihaa-push && \
+git config user.email "ahmerkam@icloud.com" && git config user.name "AK" && \
+git add <files> && git commit -m "message" && git push origin master
 ```
+
+Token is embedded in the remote URL. Railway auto-deploys from master (~2 min).
 
 ---
 
@@ -457,8 +517,8 @@ git push origin ${COMMIT}:refs/heads/master
 - Privacy: family addresses shared ONLY with delivery volunteers who claimed that family's slot
 - Volunteer portal login: phone number only → 48hr session
 - Family opt-in: WA link → /confirm/<token> → select/deselect items → confirm or decline
-- **Families must have wa_phone + wa_apikey (CallMeBot)** — family texts "I allow callmebot to send me messages" to +34 644 49 25 64, receives apikey, admin enters it in admin panel
-- Families without WA credentials: admin manually contacts, overrides status in admin panel
+- Family opt-in notifications: currently manual (WA stripped, SMS notifications not yet wired — pending 10DLC approval)
+- Families without SMS: admin manually contacts and overrides status in admin panel
 
 ### Key Contacts
 | Role | Name | Phone |
@@ -480,7 +540,7 @@ git push origin ${COMMIT}:refs/heads/master
 - Families opt-in per cycle — no auto-inclusion
 - Shopping list = confirmed families only (status='confirmed')
 - ADMIN_PASSWORD env var always synced to DB on deploy
-- Families without WA credentials: admin manually contacts → overrides status in admin panel
+- Families without phone on file: admin manually contacts → overrides status in admin panel
 - Cycles are manually advanced by admin (upcoming → open → shopping → delivered)
 - `order.html` / `status='open'` cycle path is DEAD — do not use
 - Direct order edit removed — families submit change requests, admin approves/rejects
