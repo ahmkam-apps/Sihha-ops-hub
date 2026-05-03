@@ -2364,6 +2364,38 @@ def create_donation():
     db.commit()
     return jsonify({'id': did}), 201
 
+@app.route('/api/donations/<did>', methods=['PUT'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def update_donation(did):
+    data = request.json or {}
+    db = get_db()
+    if not db.execute("SELECT id FROM donations WHERE id=?", (did,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    db.execute("""
+        UPDATE donations
+           SET donor_name=?, donor_email=?, amount=?, type=?, frequency=?,
+               date=?, source=?, notes=?
+         WHERE id=?
+    """, (
+        data.get('donor_name'), data.get('donor_email'),
+        data.get('amount'),     data.get('type'),
+        data.get('frequency'),  data.get('date'),
+        data.get('source'),     data.get('notes'),
+        did
+    ))
+    db.commit()
+    return jsonify({'ok': True})
+
+@app.route('/api/donations/<did>', methods=['DELETE'])
+@require_auth(roles=['admin', 'treasurer'])
+def delete_donation(did):
+    db = get_db()
+    if not db.execute("SELECT id FROM donations WHERE id=?", (did,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    db.execute("DELETE FROM donations WHERE id=?", (did,))
+    db.commit()
+    return jsonify({'ok': True})
+
 @app.route('/api/donations/sync-wix', methods=['POST'])
 @require_auth(roles=['admin', 'treasurer'])
 def sync_wix_donations():

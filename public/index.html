@@ -3047,7 +3047,7 @@ async function renderDonations(filter) {
         </div>
         <table>
           <thead><tr>
-            <th>Donor</th><th>Amount</th><th>Type</th><th>Date</th><th>Campaign</th>
+            <th>Donor</th><th>Amount</th><th>Type</th><th>Date</th><th>Campaign</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
@@ -3064,8 +3064,12 @@ async function renderDonations(filter) {
                 </td>
                 <td style="white-space:nowrap">${fmtDate(r.date)}</td>
                 <td style="font-size:12px;color:var(--gray-4)">${r.notes||r.source||'—'}</td>
+                <td style="white-space:nowrap">
+                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;" onclick='openDonationForm(${JSON.stringify(r)})'>Edit</button>
+                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;color:#c00;border-color:#c00;margin-left:4px" onclick="deleteDonation('${r.id}','${(r.donor_name||'Anonymous').replace(/'/g,"\\'")}')">Delete</button>
+                </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="5">No donations yet — click Sync Wix to import</td></tr>'}
+              '<tr class="empty-row"><td colspan="6">No donations yet — click Sync Wix to import</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -3121,45 +3125,68 @@ function exportDonations() {
     .catch(e => alert('Export failed: ' + e.message));
 }
 
-function openDonationForm() {
-  openDrawer('Log Donation',
-    `<div class="form-group"><label>Donor Name</label><input type="text" id="don-name" placeholder="Anonymous"></div>
-     <div class="form-group"><label>Donor Email</label><input type="email" id="don-email" placeholder="optional"></div>
-     <div class="form-group"><label>Amount *</label><input type="number" id="don-amount" step="0.01" min="0" placeholder="0.00"></div>
+function openDonationForm(existing) {
+  const isEdit = existing && existing.id;
+  const sel = (id, val) => `<select id="${id}" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">`;
+  openDrawer(isEdit ? 'Edit Donation' : 'Log Donation',
+    `<div class="form-group"><label>Donor Name</label><input type="text" id="don-name" placeholder="Anonymous" value="${isEdit ? (existing.donor_name||'') : ''}"></div>
+     <div class="form-group"><label>Donor Email</label><input type="email" id="don-email" placeholder="optional" value="${isEdit ? (existing.donor_email||'') : ''}"></div>
+     <div class="form-group"><label>Amount *</label><input type="number" id="don-amount" step="0.01" min="0" placeholder="0.00" value="${isEdit ? (existing.amount||'') : ''}"></div>
+     <div class="form-group"><label>Frequency</label>
+       <select id="don-freq" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">
+         <option value="one-time" ${(!isEdit||existing.frequency==='one-time')?'selected':''}>One-time</option>
+         <option value="monthly"  ${(isEdit&&existing.frequency==='monthly')?'selected':''}>Monthly</option>
+       </select></div>
      <div class="form-group"><label>Type</label>
        <select id="don-type" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">
-         <option value="cash">Cash</option><option value="check">Check</option>
-         <option value="online">Online</option><option value="zelle">Zelle</option>
-         <option value="other">Other</option>
+         <option value="cash"   ${(isEdit&&existing.type==='cash')?'selected':''}>Cash</option>
+         <option value="check"  ${(isEdit&&existing.type==='check')?'selected':''}>Check</option>
+         <option value="online" ${(!isEdit||existing.type==='online')?'selected':''}>Online</option>
+         <option value="zelle"  ${(isEdit&&existing.type==='zelle')?'selected':''}>Zelle</option>
+         <option value="other"  ${(isEdit&&existing.type==='other')?'selected':''}>Other</option>
        </select></div>
-     <div class="form-group"><label>Date *</label><input type="date" id="don-date" value="${new Date().toISOString().slice(0,10)}"></div>
-     <div class="form-group"><label>Source</label><input type="text" id="don-source" placeholder="Website, event, direct, etc."></div>
-     <div class="form-group"><label>Notes</label><input type="text" id="don-notes" placeholder="Optional"></div>
+     <div class="form-group"><label>Date *</label><input type="date" id="don-date" value="${isEdit ? (existing.date||'').slice(0,10) : new Date().toISOString().slice(0,10)}"></div>
+     <div class="form-group"><label>Source</label><input type="text" id="don-source" placeholder="Website, event, direct, etc." value="${isEdit ? (existing.source||'') : ''}"></div>
+     <div class="form-group"><label>Notes</label><input type="text" id="don-notes" placeholder="Optional" value="${isEdit ? (existing.notes||'') : ''}"></div>
      <div class="alert alert-error" id="don-err" style="display:none"></div>`,
-    `<button class="btn" onclick="saveDonation()">Save Donation</button>
+    `<button class="btn" onclick="saveDonation('${isEdit ? existing.id : ''}')">${isEdit ? 'Update Donation' : 'Save Donation'}</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
   );
 }
 
-async function saveDonation() {
+async function saveDonation(editId) {
   const amount = parseFloat(document.getElementById('don-amount').value);
   const date   = document.getElementById('don-date').value;
   const err    = document.getElementById('don-err');
   err.style.display = 'none';
   if (isNaN(amount) || amount <= 0) { err.textContent = 'Enter a valid amount.'; err.style.display = 'block'; return; }
   if (!date) { err.textContent = 'Date is required.'; err.style.display = 'block'; return; }
+  const payload = {
+    donor_name:  document.getElementById('don-name').value.trim() || 'Anonymous',
+    donor_email: document.getElementById('don-email').value.trim(),
+    amount, date,
+    frequency: document.getElementById('don-freq').value,
+    type:      document.getElementById('don-type').value,
+    source:    document.getElementById('don-source').value.trim(),
+    notes:     document.getElementById('don-notes').value.trim()
+  };
   try {
-    await POST('/donations', {
-      donor_name:  document.getElementById('don-name').value.trim() || 'Anonymous',
-      donor_email: document.getElementById('don-email').value.trim(),
-      amount, date,
-      type:   document.getElementById('don-type').value,
-      source: document.getElementById('don-source').value.trim(),
-      notes:  document.getElementById('don-notes').value.trim()
-    });
+    if (editId) {
+      await PUT('/donations/' + editId, payload);
+    } else {
+      await POST('/donations', payload);
+    }
     closeDrawer();
     renderDonations();
   } catch(e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+
+async function deleteDonation(id, name) {
+  if (!confirm(`Delete donation from "${name}"? This cannot be undone.`)) return;
+  try {
+    await DEL('/donations/' + id);
+    renderDonations();
+  } catch(e) { alert('Delete failed: ' + e.message); }
 }
 
 async function quickPayReimb(id, method, amount) {
