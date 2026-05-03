@@ -148,6 +148,45 @@
 
   canvas { display: block; width: 100% !important; }
 
+  /* ── Stat cards ──────────────────────────────────── */
+  .stat-cards {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .stat-card {
+    flex: 1;
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .stat-card-value {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: #ffffff;
+  }
+
+  .stat-card-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    opacity: 0.45;
+    margin-top: 4px;
+  }
+
+  .stat-card-sub {
+    font-size: 11px;
+    opacity: 0.5;
+    margin-top: 2px;
+  }
+
   /* ── Footer ──────────────────────────────────────── */
   .widget-footer {
     margin-top: 10px;
@@ -160,6 +199,8 @@
   @media (max-width: 480px) {
     .progress-collected { font-size: 20px; }
     .chart-title { font-size: 12px; }
+    .stat-cards { flex-direction: column; gap: 8px; }
+    .stat-card-value { font-size: 22px; }
   }
 </style>
 </head>
@@ -207,6 +248,23 @@
   <!-- Chart -->
   <div class="chart-wrap">
     <canvas id="trend-chart" height="110"></canvas>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="stat-cards">
+    <div class="stat-card">
+      <div class="stat-card-value" id="stat-lives">—</div>
+      <div class="stat-card-label">Lives Impacted</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value" id="stat-volunteers">—</div>
+      <div class="stat-card-label">Volunteers</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value" id="stat-delivery">—</div>
+      <div class="stat-card-label">Next Delivery</div>
+      <div class="stat-card-sub" id="stat-delivery-sub"></div>
+    </div>
   </div>
 
   <div class="widget-footer">Updated every 5 min · SIHAA</div>
@@ -274,6 +332,23 @@ function render(d) {
     document.getElementById('progress-pct').textContent  = pct + '% of Monthly Goal';
     document.getElementById('surplus-note').textContent  =
       surplus > 0 ? '+' + fmt(surplus) + ' surplus from last month' : '';
+  }
+
+  // ── Stat cards ──────────────────────────────────────
+  document.getElementById('stat-lives').textContent =
+    d.lives_impacted != null ? d.lives_impacted.toLocaleString('en-US') : '—';
+  document.getElementById('stat-volunteers').textContent =
+    d.volunteers_active != null ? d.volunteers_active.toLocaleString('en-US') : '—';
+
+  if (d.days_to_delivery != null) {
+    const days = d.days_to_delivery;
+    document.getElementById('stat-delivery').textContent =
+      days === 0 ? 'Today' : days === 1 ? '1 day' : days + ' days';
+    document.getElementById('stat-delivery-sub').textContent =
+      d.next_cycle_title || '';
+  } else {
+    document.getElementById('stat-delivery').textContent = '—';
+    document.getElementById('stat-delivery-sub').textContent = '';
   }
 
   // ── Trend chart ─────────────────────────────────────
