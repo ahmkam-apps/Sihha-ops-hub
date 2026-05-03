@@ -1025,19 +1025,25 @@ async function renderDashboard() {
     // ── Monthly progress bar ─────────────────────────────────────────────────
     const collectedPct = DONATION_GOAL > 0 ? Math.min(100, Math.round((s.donations_month || 0) / DONATION_GOAL * 100)) : 0;
     const barColor = collectedPct >= 100 ? '#1a8754' : collectedPct >= 60 ? '#e07b00' : '#c0392b';
+    const nowLabel = new Date().toLocaleDateString('en-US', {month:'long', year:'numeric'});
     const monthProgressBar = DONATION_GOAL > 0 ? `
-      <div style="margin-bottom:20px;padding:14px 18px;border:1.5px solid #e8e8e8;background:#fff;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-          <div style="font-size:12px;font-weight:700;color:#111;">This Month's Fundraising</div>
-          <div style="font-size:12px;color:#888;">${fmtMoney(s.donations_month||0)} of ${fmtMoney(DONATION_GOAL)} goal</div>
+      <div style="margin-bottom:20px;padding:16px 20px;border:1.5px solid #e8e8e8;background:#fff;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#111;">${nowLabel} Fundraising</div>
+            <div style="font-size:11px;color:#888;margin-top:2px;">${s.families_active} families × ${fmtMoney(s.cost_per_family||200)}/mo = ${fmtMoney(DONATION_GOAL)} needed</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:20px;font-weight:700;color:${barColor};">${fmtMoney(s.donations_month||0)}</div>
+            <div style="font-size:11px;color:#888;">of ${fmtMoney(DONATION_GOAL)} goal</div>
+          </div>
         </div>
-        <div style="background:#e8e8e8;height:10px;border-radius:5px;overflow:hidden;">
-          <div style="background:${barColor};height:10px;border-radius:5px;width:${collectedPct}%;transition:width 0.5s;"></div>
+        <div style="background:#e8e8e8;height:18px;border-radius:4px;overflow:hidden;">
+          <div style="background:${barColor};height:18px;border-radius:4px;width:${collectedPct}%;transition:width 0.5s;display:flex;align-items:center;padding-left:8px;">
+            ${collectedPct >= 15 ? `<span style="font-size:11px;font-weight:700;color:#fff;">${collectedPct}%</span>` : ''}
+          </div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:6px;">
-          <div style="font-size:11px;color:${barColor};font-weight:700;">${collectedPct}% collected</div>
-          <div style="font-size:11px;color:#888;">${s.families_active} families × ${fmtMoney(s.cost_per_family||200)}/mo = ${fmtMoney(DONATION_GOAL)} needed</div>
-        </div>
+        ${collectedPct < 15 ? `<div style="font-size:11px;color:${barColor};font-weight:700;margin-top:4px;">${collectedPct}% collected</div>` : ''}
       </div>` : '';
 
     const donationsHTML = `
