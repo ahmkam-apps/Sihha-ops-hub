@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sihha — Donation Trend</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  @font-face { font-family:'AreaExtrabold'; src:url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2'); }
+  @font-face { font-family:'AreaNormal'; src:url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2'); }
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+  html, body {
+    font-family:'AreaNormal',Helvetica,Arial,sans-serif;
+    background:#111111;
+    color:#ffffff;
+    font-size:14px;
+    line-height:1.4;
+  }
+  #widget  { padding:16px 16px 14px; width:100%; }
+  #trend-chart { display:block; width:100%!important; height:180px; }
+  .w-footer { font-size:9px; color:rgba(255,255,255,0.2); text-align:right; margin-top:10px; letter-spacing:0.4px; }
+</style>
+</head>
+<body>
+<div id="widget"></div>
+<script>
+const API = '/api/donate-stats';
+let chart = null;
+
+function fmt(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'); }
+function mLabel(ym) {
+  const [y, m] = ym.split('-');
+  return new Date(+y, +m - 1, 1).toLocaleDateString('en-US', { month:'short', year:'2-digit' });
+}
+function isMobile() { return window.innerWidth < 600; }
+
+function buildChart(d, monthlyNeed) {
+  const dm         = (d.donations_by_month || []).filter(m => (m.total || 0) > 0);
+  const histLabels = dm.map(m => mLabel(m.month));
+  const histTotals = dm.map(m => m.total || 0);
+  const avgMonthly   = d.proj_avg_monthly   || 0;
+  const monthlyTrend = d.proj_monthly_trend || 0;
+  const lineLastTotal = histTotals.length ? histTotals[histTotals.length - 1] : 0;
+  const projBase  = avgMonthly || lineLastTotal;
+  const maxDrop   = projBase * 0.05;
+  const trendDamp = monthlyTrend >= 0 ? monthlyTrend : Math.max(monthlyTrend, -maxDrop);
+
+  const projLabels = [], projVals = [];
+  if (dm.length) {
+    const lastDate = new Date(dm[dm.length - 1].month + '-01');
+    for (let i = 1; i <= 6; i++) {
+      const date = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
+      projLabels.push(date.toLocaleDateString('en-US', { month:'short', year:'2-digit' }));
+      projVals.push(Math.max(0, Math.round(projBase + trendDamp * i)));
+    }
+  }
+
+  const allLabels  = [...histLabels, ...projLabels];
+  const actualData = [...histTotals, ...Array(projLabels.length).fill(null)];
+  const projData   = [...Array(histLabels.length - 1).fill(null), lineLastTotal, ...projVals];
+
+  const goalPlugin = {
+    id: 'goalPlugin',
+    afterDraw(ch) {
+      if (!monthlyNeed) return;
+      const { ctx, chartArea: { left, right }, scales: { y } } = ch;
+      const yPos = y.getPixelForValue(monthlyNeed);
+      ctx.save();
+      ctx.beginPath(); ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = '#00bcd4'; ctx.lineWidth = 2; ctx.globalAlpha = 0.8;
+      ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      ctx.font = 'bold 10px Arial'; ctx.fillStyle = '#00bcd4'; ctx.textAlign = 'left';
+      ctx.fillText('Monthly Goal  ' + fmt(monthlyNeed), left + 6, yPos - 5);
+      ctx.restore();
+    }
+  };
+
+  if (chart) { chart.destroy(); chart = null; }
+  const canvas = document.getElementById('trend-chart');
+  if (!canvas) return;
+
+  chart = new Chart(canvas.getContext('2d'), {
+    type: 'line', plugins: [goalPlugin],
+    data: {
+      labels: allLabels,
+      datasets: [
+        { label: 'Actual', data: actualData,
+          borderColor: '#ffffff', borderWidth: 3.5,
+          backgroundColor: 'transparent', fill: false, tension: 0.35,
+          pointBackgroundColor: '#ffffff', pointRadius: 4, pointHoverRadius: 6, spanGaps: false },
+        { label: 'Projected', data: projData,
+          borderColor: '#ffffff', borderWidth: 2.5, borderDash: [6, 4],
+          backgroundColor: 'transparent', fill: false, tension: 0.25,
+          pointRadius: 3, pointBackgroundColor: '#ffffff', spanGaps: false }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 800 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(0,0,0,0.8)', borderColor: 'rgba(255,255,255,0.1)',
+          borderWidth: 1, titleColor: '#aaa', bodyColor: '#fff',
+          callbacks: {
+            label: ctx => ctx.parsed.y == null ? null :
+              ` ${ctx.dataset.label === 'Projected' ? 'Projected' : 'Actual'}: ${fmt(ctx.parsed.y)}`,
+            afterBody: () => [` Monthly Goal: ${fmt(monthlyNeed)}`]
+          }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, border: { display: false },
+             ticks: { color: 'rgba(255,255,255,0.4)', font: { size: 10 } } },
+        y: { grid: { display: false }, border: { display: false }, beginAtZero: true,
+             ticks: { color: 'rgba(255,255,255,0.4)', font: { size: 10 }, callback: v => fmt(v) } }
+      }
+    }
+  });
+}
+
+function render(d) {
+  const monthlyNeed = d.monthly_need || 0;
+  const mobile      = isMobile();
+  document.getElementById('widget').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+      <div style="font-family:'AreaExtrabold',sans-serif;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:1.4px;">Donation Trend</div>
+      ${!mobile ? `
+      <div style="display:flex;gap:14px;align-items:center;">
+        <div style="display:flex;align-items:center;gap:5px;font-size:11px;opacity:0.5;">
+          <svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="currentColor" stroke-width="3.5"/></svg>
+          Actual
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:11px;opacity:0.5;">
+          <svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="currentColor" stroke-width="2.5" stroke-dasharray="5,3"/></svg>
+          Projected
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:11px;opacity:0.5;">
+          <svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#00bcd4" stroke-width="2" stroke-dasharray="4,3"/></svg>
+          Goal
+        </div>
+      </div>` : ''}
+    </div>
+    <canvas id="trend-chart"></canvas>
+    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+  buildChart(d, monthlyNeed);
+  setTimeout(reportHeight, 900);
+}
+
+async function load() {
+  try { const res = await fetch(API); render(await res.json()); }
+  catch(e) { console.warn('Widget error', e); }
+}
+
+function reportHeight() {
+  window.parent.postMessage({ type:'sihha-widget-height', height:document.documentElement.scrollHeight }, '*');
+}
+
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>

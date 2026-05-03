@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sihha — Donation Progress</title>
+<style>
+  @font-face { font-family:'AreaExtrabold'; src:url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2'); }
+  @font-face { font-family:'AreaNormal'; src:url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2'); }
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+  html, body {
+    font-family:'AreaNormal',Helvetica,Arial,sans-serif;
+    background:#111111;
+    color:#ffffff;
+    font-size:14px;
+    line-height:1.4;
+  }
+  #widget { padding:16px 16px 14px; width:100%; }
+  .bar-track { width:100%; background:rgba(255,255,255,0.1); overflow:hidden; }
+  .bar-fill   { height:100%; flex-shrink:0; transition:width 1.2s cubic-bezier(0.4,0,0.2,1); }
+  .w-footer   { font-size:9px; color:rgba(255,255,255,0.2); text-align:right; margin-top:10px; letter-spacing:0.4px; }
+</style>
+</head>
+<body>
+<div id="widget"></div>
+<script>
+const API = '/api/donate-stats';
+let lastData = null, lastMode = null;
+
+function fmt(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'); }
+function isMobile() { return window.innerWidth < 600; }
+
+function barColor(pct) {
+  const p = Math.min(1, pct / 100);
+  let r, g, b;
+  if (p < 0.5) {
+    const t = p / 0.5;
+    r = Math.round(192 + (230 - 192) * t);
+    g = Math.round(57  + (126 - 57)  * t);
+    b = Math.round(43  + (34  - 43)  * t);
+  } else {
+    const t = (p - 0.5) / 0.5;
+    r = Math.round(230 + (39  - 230) * t);
+    g = Math.round(126 + (174 - 126) * t);
+    b = Math.round(34  + (96  - 34)  * t);
+  }
+  return `rgb(${r},${g},${b})`;
+}
+
+function calcBar(d) {
+  const monthlyNeed = d.monthly_need || 0;
+  const adjTarget   = d.this_month_adjusted_target != null ? d.this_month_adjusted_target : monthlyNeed;
+  const surplus     = d.last_month_surplus || 0;
+  const collected   = d.month_raised || 0;
+  const goalMet     = adjTarget === 0 && monthlyNeed > 0;
+  const barGoal     = goalMet ? monthlyNeed : adjTarget;
+  let redPct = 0, greenPct = 0, color = '#c0392b', pctLabel = '', surplusNote = '';
+  if (goalMet) {
+    redPct = 100; color = barColor(100);
+    pctLabel = "100% · fully covered by last month's surplus";
+  } else if (collected >= barGoal && barGoal > 0) {
+    redPct   = Math.round(barGoal / collected * 100);
+    greenPct = 100 - redPct;
+    color    = barColor(100);
+    pctLabel    = '100% · goal reached';
+    surplusNote = '+' + fmt(collected - barGoal) + ' surplus this month';
+  } else {
+    const pct = barGoal > 0 ? Math.min(99, Math.round(collected / barGoal * 100)) : 0;
+    redPct = pct; color = barColor(pct);
+    pctLabel    = pct + '% of Monthly Goal';
+    surplusNote = surplus > 0 ? '+' + fmt(surplus) + ' surplus from last month' : '';
+  }
+  return { redPct, greenPct, color, pctLabel, surplusNote, goalMet, monthlyNeed, collected };
+}
+
+function renderDesktop(d) {
+  const b = calcBar(d);
+  document.getElementById('widget').innerHTML = `
+    <div style="font-family:'AreaExtrabold',sans-serif;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:14px;">Donation Progress</div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+      <div style="font-family:'AreaExtrabold',sans-serif;font-size:32px;font-weight:800;letter-spacing:-0.03em;line-height:1;">${fmt(b.collected)}</div>
+      <div style="font-size:12px;opacity:0.55;">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
+    </div>
+    <div class="bar-track" style="height:24px;">
+      <div style="display:flex;height:24px;">
+        <div class="bar-fill" style="width:${b.redPct}%;background:${b.color};"></div>
+        <div class="bar-fill" style="width:${b.greenPct}%;background:#27ae60;"></div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:6px;">
+      <div style="font-size:11px;opacity:0.45;">${b.pctLabel}</div>
+      <div style="font-size:11px;color:#27ae60;font-weight:700;">${b.surplusNote}</div>
+    </div>
+    ${b.goalMet ? `<div style="margin-top:8px;font-size:12px;color:#27ae60;font-weight:700;">✓ This month's goal is fully covered by last month's surplus</div>` : ''}
+    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+}
+
+function renderMobile(d) {
+  const b = calcBar(d);
+  document.getElementById('widget').innerHTML = `
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:rgba(255,255,255,0.35);margin-bottom:6px;">Donation Progress</div>
+    <div style="font-family:'AreaExtrabold',sans-serif;font-size:38px;font-weight:800;letter-spacing:-0.03em;line-height:1;">${fmt(b.collected)}</div>
+    <div style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:4px;">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
+    <div class="bar-track" style="height:20px;margin-top:12px;">
+      <div style="display:flex;height:20px;">
+        <div class="bar-fill" style="width:${b.redPct}%;background:${b.color};"></div>
+        <div class="bar-fill" style="width:${b.greenPct}%;background:#27ae60;"></div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:5px;">${b.pctLabel}</div>
+    ${b.surplusNote ? `<div style="font-size:11px;color:#27ae60;font-weight:700;margin-top:3px;">${b.surplusNote}</div>` : ''}
+    ${b.goalMet ? `<div style="font-size:11px;color:#27ae60;font-weight:700;margin-top:3px;">✓ Fully covered by last month's surplus</div>` : ''}
+    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+}
+
+function render(d) {
+  lastData = d;
+  lastMode = isMobile() ? 'mobile' : 'desktop';
+  isMobile() ? renderMobile(d) : renderDesktop(d);
+  setTimeout(reportHeight, 900);
+}
+
+async function load() {
+  try { const res = await fetch(API); render(await res.json()); }
+  catch(e) { console.warn('Widget error', e); }
+}
+
+function reportHeight() {
+  window.parent.postMessage({ type:'sihha-widget-height', height:document.documentElement.scrollHeight }, '*');
+}
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const m = isMobile() ? 'mobile' : 'desktop';
+    if (m !== lastMode && lastData) render(lastData);
+  }, 200);
+});
+
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>

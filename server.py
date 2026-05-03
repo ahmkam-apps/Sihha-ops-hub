@@ -3687,6 +3687,18 @@ def donate_stats_page():
 def widget_page():
     return send_from_directory('public', 'widget.html')
 
+@app.route('/widget/progress')
+def widget_progress_page():
+    return send_from_directory('public', 'widget-progress.html')
+
+@app.route('/widget/stats')
+def widget_stats_page():
+    return send_from_directory('public', 'widget-stats.html')
+
+@app.route('/widget/trend')
+def widget_trend_page():
+    return send_from_directory('public', 'widget-trend.html')
+
 @app.route('/intake')
 def intake_page():
     return send_from_directory('public', 'intake.html')
