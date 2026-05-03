@@ -1542,17 +1542,57 @@ def public_donate_stats():
         "SELECT COUNT(*) FROM volunteers WHERE status='active'"
     ).fetchone()[0]
 
+    # Smart goal + surplus carry-forward
+    cost_per_family   = 200
+    monthly_need      = families_active * cost_per_family
+    last_month        = (datetime.utcnow().replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+    last_month_don    = db.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM donations WHERE date LIKE ?",
+        (f'{last_month}%',)
+    ).fetchone()[0]
+    last_month_surplus            = max(0, last_month_don - monthly_need)
+    this_month_adjusted_target    = max(0, monthly_need - last_month_surplus)
+
+    # Next delivery — earliest open/shopping/upcoming cycle
+    next_cycle = db.execute("""
+        SELECT title, delivery_date_start
+        FROM delivery_cycles
+        WHERE status IN ('open','shopping','upcoming')
+          AND delivery_date_start IS NOT NULL
+        ORDER BY delivery_date_start ASC
+        LIMIT 1
+    """).fetchone()
+    if next_cycle:
+        next_delivery_date = next_cycle['delivery_date_start']
+        try:
+            nd = datetime.strptime(next_delivery_date[:10], '%Y-%m-%d').date()
+            days_to_delivery = (nd - datetime.utcnow().date()).days
+        except Exception:
+            days_to_delivery = None
+        next_cycle_title = next_cycle['title']
+    else:
+        next_delivery_date = None
+        days_to_delivery   = None
+        next_cycle_title   = None
+
     return jsonify({
-        'donations_by_month':        monthly,
-        'proj_avg_donors_per_month': avg_donors,
-        'proj_avg_gift':             avg_gift,
-        'proj_avg_monthly':          round(avg_monthly, 2),
-        'proj_monthly_trend':        monthly_trend,
-        'total_raised':              total_raised,
-        'month_raised':              month_raised,
-        'families_active':           families_active,
-        'lives_impacted':            lives_impacted,
-        'volunteers_active':         volunteers_active,
+        'donations_by_month':           monthly,
+        'proj_avg_donors_per_month':    avg_donors,
+        'proj_avg_gift':                avg_gift,
+        'proj_avg_monthly':             round(avg_monthly, 2),
+        'proj_monthly_trend':           monthly_trend,
+        'total_raised':                 total_raised,
+        'month_raised':                 month_raised,
+        'families_active':              families_active,
+        'lives_impacted':               lives_impacted,
+        'volunteers_active':            volunteers_active,
+        'monthly_need':                 monthly_need,
+        'last_month_surplus':           last_month_surplus,
+        'this_month_adjusted_target':   this_month_adjusted_target,
+        'cost_per_family':              cost_per_family,
+        'next_delivery_date':           next_delivery_date,
+        'days_to_delivery':             days_to_delivery,
+        'next_cycle_title':             next_cycle_title,
     })
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -3600,6 +3640,10 @@ def admin_index():
 @app.route('/donate-stats')
 def donate_stats_page():
     return send_from_directory('public', 'donate-stats.html')
+
+@app.route('/widget')
+def widget_page():
+    return send_from_directory('public', 'widget.html')
 
 @app.route('/intake')
 def intake_page():
