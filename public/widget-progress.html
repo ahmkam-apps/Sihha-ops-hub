@@ -33,6 +33,7 @@ const API = '/api/donate-stats';
 let lastData = null, lastMode = null;
 
 function fmt(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'); }
+function fmtRaised(n) { return n == null ? '—' : parseFloat(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' raised'; }
 function isMobile() { return window.innerWidth < 600; }
 
 function calcBar(d) {
@@ -62,7 +63,7 @@ function renderDesktop(d) {
   const b = calcBar(d);
   document.getElementById('widget').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-      <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">${fmt(b.collected)}</div>
+      <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">${fmtRaised(b.collected)}</div>
       <div style="font-size:12px;color:rgba(0,0,0,0.5);">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
     </div>
     <div class="bar-track" style="height:30px;">
