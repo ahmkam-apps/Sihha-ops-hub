@@ -61,9 +61,8 @@ function calcBar(d) {
 function renderDesktop(d) {
   const b = calcBar(d);
   document.getElementById('widget').innerHTML = `
-    <div style="font-family:'AreaThin',sans-serif;font-size:13px;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:14px;color:#000000;">Donation Progress</div>
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-      <div style="font-family:'AreaThin',sans-serif;font-size:32px;letter-spacing:-0.03em;line-height:1;color:#000000;">${fmt(b.collected)}</div>
+      <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">${fmt(b.collected)}</div>
       <div style="font-size:12px;color:rgba(0,0,0,0.5);">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
     </div>
     <div class="bar-track" style="height:30px;">
@@ -80,8 +79,7 @@ function renderDesktop(d) {
 function renderMobile(d) {
   const b = calcBar(d);
   document.getElementById('widget').innerHTML = `
-    <div style="font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:rgba(0,0,0,0.4);margin-bottom:6px;">Donation Progress</div>
-    <div style="font-family:'AreaThin',sans-serif;font-size:38px;letter-spacing:-0.03em;line-height:1;color:#000000;">${fmt(b.collected)}</div>
+    <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">${fmt(b.collected)}</div>
     <div style="font-size:12px;color:rgba(0,0,0,0.5);margin-top:4px;">Monthly Goal: ${fmt(b.monthlyNeed)}</div>
     <div class="bar-track" style="height:30px;margin-top:12px;">
       <div class="bar-fill" style="width:${b.fillPct}%;height:30px;"></div>
