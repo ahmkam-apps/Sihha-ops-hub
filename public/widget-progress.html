@@ -73,7 +73,7 @@ function renderDesktop(d) {
       <div style="font-size:11px;color:rgba(0,0,0,0.45);">${b.surplusNote}</div>
     </div>
     ${b.goalMet ? `<div style="margin-top:8px;font-size:12px;color:rgba(0,0,0,0.6);">&#10003; This month&#39;s goal is fully covered by last month&#39;s surplus</div>` : ''}
-    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+    `;
 }
 
 function renderMobile(d) {
@@ -87,7 +87,7 @@ function renderMobile(d) {
     <div style="font-size:11px;color:rgba(0,0,0,0.45);margin-top:5px;">${b.pctLabel}</div>
     ${b.surplusNote ? `<div style="font-size:11px;color:rgba(0,0,0,0.45);margin-top:3px;">${b.surplusNote}</div>` : ''}
     ${b.goalMet ? `<div style="font-size:11px;color:rgba(0,0,0,0.55);margin-top:3px;">&#10003; Fully covered by last month&#39;s surplus</div>` : ''}
-    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+    `;
 }
 
 function render(d) {
