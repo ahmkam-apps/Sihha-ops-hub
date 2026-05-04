@@ -62,15 +62,15 @@ function calcBar(d) {
 function renderDesktop(d) {
   const b = calcBar(d);
   document.getElementById('widget').innerHTML = `
-    <div style="margin-bottom:8px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
       <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">${fmtRaised(b.collected)}</div>
+      <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">Goal: ${fmt(b.monthlyNeed)}</div>
     </div>
     <div class="bar-track" style="height:30px;">
       <div class="bar-fill" style="width:${b.fillPct}%;height:30px;"></div>
     </div>
-    <div style="display:flex;justify-content:space-between;margin-top:5px;">
+    <div style="margin-top:5px;">
       <div style="font-size:11px;color:rgba(0,0,0,0.45);">${b.pctLabel}${b.surplusNote ? ' · ' + b.surplusNote : ''}</div>
-      <div style="font-size:11px;color:rgba(0,0,0,0.45);">Goal: ${fmt(b.monthlyNeed)}</div>
     </div>
     ${b.goalMet ? `<div style="margin-top:6px;font-size:11px;color:rgba(0,0,0,0.55);">&#10003; This month&#39;s goal is fully covered by last month&#39;s surplus</div>` : ''}
     `;
@@ -79,13 +79,15 @@ function renderDesktop(d) {
 function renderMobile(d) {
   const b = calcBar(d);
   document.getElementById('widget').innerHTML = `
-    <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;margin-bottom:10px;">${fmtRaised(b.collected)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+      <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">${fmtRaised(b.collected)}</div>
+      <div style="font-family:'AreaThin',sans-serif;font-size:20px;line-height:1;color:#000000;">Goal: ${fmt(b.monthlyNeed)}</div>
+    </div>
     <div class="bar-track" style="height:30px;">
       <div class="bar-fill" style="width:${b.fillPct}%;height:30px;"></div>
     </div>
-    <div style="display:flex;justify-content:space-between;margin-top:5px;">
+    <div style="margin-top:5px;">
       <div style="font-size:11px;color:rgba(0,0,0,0.45);">${b.pctLabel}${b.surplusNote ? ' · ' + b.surplusNote : ''}</div>
-      <div style="font-size:11px;color:rgba(0,0,0,0.45);">Goal: ${fmt(b.monthlyNeed)}</div>
     </div>
     ${b.goalMet ? `<div style="font-size:11px;color:rgba(0,0,0,0.55);margin-top:3px;">&#10003; Fully covered by last month&#39;s surplus</div>` : ''}
     `;
