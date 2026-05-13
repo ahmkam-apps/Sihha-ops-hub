@@ -9,3 +9,6 @@ __pycache__/
 *.db-shm
 venv/
 .venv/
+
+nixpacks.toml
+.python-version
