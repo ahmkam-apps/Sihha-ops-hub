@@ -222,40 +222,8 @@
   </div>
 </div>
 
-<!-- LOGIN SCREEN -->
-<div id="login-screen">
-  <div class="login-wrap">
-    <div class="login-title">Volunteer Login</div>
-
-    <!-- Step 1: Phone -->
-    <div id="login-step-phone">
-      <div class="login-sub">Enter your phone number. We'll text you a code.</div>
-      <div class="form-group">
-        <label>Phone Number</label>
-        <input type="tel" id="login-phone" placeholder="5855551234" autocomplete="tel"
-          onkeydown="if(event.key==='Enter') doRequestOtp()">
-      </div>
-      <button class="btn" onclick="doRequestOtp()" id="login-btn">Send Code</button>
-    </div>
-
-    <!-- Step 2: PIN -->
-    <div id="login-step-pin" style="display:none">
-      <div class="login-sub">A 6-digit code was sent to your phone. Enter it below.</div>
-      <div class="form-group">
-        <label>Verification Code</label>
-        <input type="text" id="login-pin" placeholder="123456" inputmode="numeric" maxlength="6"
-          autocomplete="one-time-code" onkeydown="if(event.key==='Enter') doVerifyPin()"
-          style="letter-spacing:6px;font-size:22px;text-align:center">
-      </div>
-      <button class="btn" onclick="doVerifyPin()" id="verify-btn">Verify</button>
-      <div style="text-align:center;margin-top:10px">
-        <button onclick="resetLoginToPhone()" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;text-decoration:underline">← Use a different number</button>
-      </div>
-    </div>
-
-    <div class="error" id="login-err"></div>
-  </div>
-</div>
+<!-- LOGIN SCREEN — redirects to /login -->
+<div id="login-screen" style="display:none"></div>
 
 <!-- MAIN APP (hidden until logged in) -->
 <div id="app-screen" style="display:none">
@@ -336,8 +304,9 @@
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 const BASE = '';
-let TOKEN = localStorage.getItem('portal_token');
-let VOL   = JSON.parse(localStorage.getItem('portal_vol') || 'null');
+// Support both old key (portal_token) and new key (portalToken) for smooth transition
+let TOKEN = localStorage.getItem('portalToken') || localStorage.getItem('portal_token');
+let VOL   = JSON.parse(localStorage.getItem('portalVolunteer') || localStorage.getItem('portal_vol') || 'null');
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -352,81 +321,15 @@ async function api(method, path, body) {
 const GET  = p => api('GET', p);
 const POST = (p, b) => api('POST', p, b);
 
-// ── Login (OTP two-step) ───────────────────────────────────────────────────────
-let _otpPhone = '';
-
-async function doRequestOtp() {
-  const phone = document.getElementById('login-phone').value.trim().replace(/\D/g, '');
-  const err   = document.getElementById('login-err');
-  err.style.display = 'none';
-  if (!phone) { err.textContent = 'Phone number required'; err.style.display = 'block'; return; }
-  const btn = document.getElementById('login-btn');
-  btn.disabled = true;
-  try {
-    const res  = await fetch('/api/otp/request', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({phone, type: 'volunteer'})
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Request failed');
-    _otpPhone = phone;
-    document.getElementById('login-step-phone').style.display = 'none';
-    document.getElementById('login-step-pin').style.display   = 'block';
-    document.getElementById('login-pin').value = data.code || '';
-    document.getElementById('login-pin').focus();
-  } catch(e) {
-    err.textContent = e.message;
-    err.style.display = 'block';
-    btn.disabled = false;
-  }
-}
-
-async function doVerifyPin() {
-  const code = document.getElementById('login-pin').value.trim().replace(/\D/g, '');
-  const err  = document.getElementById('login-err');
-  err.style.display = 'none';
-  if (code.length < 6) { err.textContent = 'Enter the 6-digit code'; err.style.display = 'block'; return; }
-  const btn = document.getElementById('verify-btn');
-  btn.disabled = true;
-  try {
-    const res  = await fetch('/api/otp/verify', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({phone: _otpPhone, code, type: 'volunteer'})
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Invalid code');
-    TOKEN = data.token;
-    VOL   = data.volunteer;
-    localStorage.setItem('portal_token', TOKEN);
-    localStorage.setItem('portal_vol', JSON.stringify(VOL));
-    resetLoginToPhone();
-    showApp();
-  } catch(e) {
-    err.textContent = e.message;
-    err.style.display = 'block';
-    btn.disabled = false;
-  }
-}
-
-function resetLoginToPhone() {
-  document.getElementById('login-step-phone').style.display = 'block';
-  document.getElementById('login-step-pin').style.display   = 'none';
-  document.getElementById('login-btn').disabled = false;
-  document.getElementById('login-pin').value = '';
-  document.getElementById('login-err').style.display = 'none';
-}
-
 function logout() {
   stopPolling();
+  localStorage.removeItem('portalToken');
+  localStorage.removeItem('portalVolunteer');
   localStorage.removeItem('portal_token');
   localStorage.removeItem('portal_vol');
   TOKEN = null; VOL = null;
-  document.getElementById('app-screen').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'block';
-  document.getElementById('vol-name-display').textContent = '';
-  document.getElementById('logout-btn').style.display = 'none';
+  // Redirect to unified login
+  window.location.href = '/login';
 }
 
 async function showApp() {
@@ -948,6 +851,9 @@ function fmtDate(d) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 if (TOKEN && VOL) {
   showApp();
+} else {
+  // No session — redirect to unified login page
+  window.location.href = '/login';
 }
 </script>
 </body>

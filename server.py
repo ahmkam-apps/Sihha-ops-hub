@@ -125,17 +125,22 @@ def bootstrap_db():
 
     c.executescript('''
         CREATE TABLE IF NOT EXISTS users (
-            id            TEXT PRIMARY KEY,
-            username      TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            name          TEXT,
-            role          TEXT NOT NULL DEFAULT 'viewer'
-                          CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
-            email         TEXT,
-            wa_phone      TEXT,
-            wa_apikey     TEXT,
-            active        INTEGER NOT NULL DEFAULT 1,
-            created_at    TEXT NOT NULL
+            id                   TEXT PRIMARY KEY,
+            username             TEXT UNIQUE NOT NULL,
+            password_hash        TEXT NOT NULL,
+            name                 TEXT,
+            role                 TEXT NOT NULL DEFAULT 'viewer'
+                                 CHECK(role IN ('admin','volunteer','finance','treasurer','viewer','family')),
+            email                TEXT,
+            wa_phone             TEXT,
+            wa_apikey            TEXT,
+            active               INTEGER NOT NULL DEFAULT 1,
+            linked_id            TEXT,
+            linked_type          TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            password_changed_at  TEXT,
+            last_login_at        TEXT,
+            created_at           TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -586,28 +591,52 @@ def bootstrap_db():
         except sqlite3.OperationalError:
             pass
 
-    # Migrate users table: add treasurer role + new notification columns
+    # Add new auth columns to users (unified password login system)
+    for _col, _def in [
+        ('linked_id',            'TEXT'),
+        ('linked_type',          'TEXT'),
+        ('must_change_password', 'INTEGER NOT NULL DEFAULT 1'),
+        ('password_changed_at',  'TEXT'),
+        ('last_login_at',        'TEXT'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE users ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added users.{_col}')
+        except sqlite3.OperationalError:
+            pass  # Already exists
+
+    # Existing admin user should NOT be forced to change password on first deploy
+    conn.execute(
+        "UPDATE users SET must_change_password=0 WHERE username='admin' AND must_change_password=1 AND password_changed_at IS NULL"
+    )
+
+    # Migrate users table: add treasurer + family roles + new auth columns
     # (SQLite CHECK constraints require table recreation to modify)
     users_sql = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
     ).fetchone()
-    if users_sql and 'treasurer' not in users_sql[0]:
-        log.info('Migration: upgrading users table for treasurer role')
+    if users_sql and ('family' not in users_sql[0] or 'treasurer' not in users_sql[0]):
+        log.info('Migration: upgrading users table for family/treasurer roles + new auth columns')
         try:
             conn.execute('PRAGMA foreign_keys=OFF')
             conn.executescript('''
                 CREATE TABLE IF NOT EXISTS users_new (
-                    id            TEXT PRIMARY KEY,
-                    username      TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    name          TEXT,
-                    role          TEXT NOT NULL DEFAULT 'viewer'
-                                  CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
-                    email         TEXT,
-                    wa_phone      TEXT,
-                    wa_apikey     TEXT,
-                    active        INTEGER NOT NULL DEFAULT 1,
-                    created_at    TEXT NOT NULL
+                    id                   TEXT PRIMARY KEY,
+                    username             TEXT UNIQUE NOT NULL,
+                    password_hash        TEXT NOT NULL,
+                    name                 TEXT,
+                    role                 TEXT NOT NULL DEFAULT 'viewer'
+                                         CHECK(role IN ('admin','volunteer','finance','treasurer','viewer','family')),
+                    email                TEXT,
+                    wa_phone             TEXT,
+                    wa_apikey            TEXT,
+                    active               INTEGER NOT NULL DEFAULT 1,
+                    linked_id            TEXT,
+                    linked_type          TEXT,
+                    must_change_password INTEGER NOT NULL DEFAULT 1,
+                    password_changed_at  TEXT,
+                    last_login_at        TEXT,
+                    created_at           TEXT NOT NULL
                 );
                 INSERT OR IGNORE INTO users_new
                     (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
@@ -617,9 +646,8 @@ def bootstrap_db():
                 ALTER TABLE users_new RENAME TO users;
             ''')
             conn.execute('PRAGMA foreign_keys=ON')
-            log.info('Migration: users table upgraded — treasurer role now supported')
+            log.info('Migration: users table upgraded — family/treasurer roles + auth columns added')
         except Exception as _e:
-            # Another worker already ran this migration — safe to skip
             log.info(f'Migration: users table already upgraded or in progress — skipping ({_e})')
             conn.execute('PRAGMA foreign_keys=ON')
 
@@ -1050,7 +1078,7 @@ def bootstrap_db():
 def get_session(token):
     return get_db().execute(
         '''SELECT s.token, s.expires_at, u.id as user_id, u.username,
-                  u.name, u.role, u.active
+                  u.name, u.role, u.active, u.linked_id, u.linked_type
            FROM sessions s JOIN users u ON s.user_id = u.id
            WHERE s.token=? AND s.expires_at > ?''',
         (token, now())
@@ -1089,6 +1117,19 @@ def allowed_file(filename):
 # ── Portal Auth (volunteer self-service, phone-based) ─────────────────────────
 
 def get_portal_session(token):
+    # Check main sessions table first (new username/password login)
+    row = get_db().execute(
+        '''SELECT s.token, u.linked_id as volunteer_id, v.name, v.phone, v.role,
+                  v.wa_phone, v.wa_apikey
+           FROM sessions s
+           JOIN users u ON s.user_id = u.id
+           JOIN volunteers v ON u.linked_id = v.id
+           WHERE s.token=? AND s.expires_at > ? AND u.role='volunteer' AND u.active=1''',
+        (token, now())
+    ).fetchone()
+    if row:
+        return row
+    # Fallback: old portal_sessions table (backward compat for existing sessions)
     return get_db().execute(
         '''SELECT ps.token, ps.volunteer_id, v.name, v.phone, v.role,
                   v.wa_phone, v.wa_apikey
@@ -1112,9 +1153,52 @@ def require_portal_auth():
         return wrapper
     return decorator
 
+def get_family_session(token):
+    """Returns family record for a family-role session token."""
+    row = get_db().execute(
+        '''SELECT s.token, u.linked_id as family_id, f.name, f.phone, f.status
+           FROM sessions s
+           JOIN users u ON s.user_id = u.id
+           JOIN families f ON u.linked_id = f.id
+           WHERE s.token=? AND s.expires_at > ? AND u.role='family' AND u.active=1''',
+        (token, now())
+    ).fetchone()
+    return row
+
+def require_family_auth():
+    """Decorator for family portal API routes. Sets g.fam with family details."""
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            auth = request.headers.get('Authorization', '')
+            if not auth.startswith('Bearer '):
+                return jsonify({'error': 'Unauthorized'}), 401
+            session = get_family_session(auth[7:])
+            if not session:
+                return jsonify({'error': 'Session expired — please log in again'}), 401
+            g.fam = dict(session)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
 # ── Schema migration helper ───────────────────────────────────────────────────
 
-VALID_ROLES = {'admin', 'volunteer', 'finance', 'treasurer', 'viewer'}
+VALID_ROLES = {'admin', 'volunteer', 'finance', 'treasurer', 'viewer', 'family'}
+PASSWORD_MIN_LEN = 8
+PASSWORD_EXPIRY_DAYS = 60
+
+def _validate_password(password):
+    """Returns (ok: bool, error: str). Enforces min length, uppercase, digit, special char."""
+    import re
+    if not password or len(password) < PASSWORD_MIN_LEN:
+        return False, f'Password must be at least {PASSWORD_MIN_LEN} characters.'
+    if not re.search(r'[A-Z]', password):
+        return False, 'Password must contain at least one uppercase letter.'
+    if not re.search(r'\d', password):
+        return False, 'Password must contain at least one number.'
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', password):
+        return False, 'Password must contain at least one special character (!@#$%^&* etc).'
+    return True, ''
 
 def _ensure_treasurer_role(conn):
     """Patch the users table CHECK constraint to include 'treasurer'.
@@ -1168,17 +1252,22 @@ def _recreate_users_table(conn):
         conn.execute('PRAGMA foreign_keys=OFF')
         conn.executescript('''
             CREATE TABLE IF NOT EXISTS users_new (
-                id            TEXT PRIMARY KEY,
-                username      TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                name          TEXT,
-                role          TEXT NOT NULL DEFAULT 'viewer'
-                              CHECK(role IN ('admin','volunteer','finance','treasurer','viewer')),
-                email         TEXT,
-                wa_phone      TEXT,
-                wa_apikey     TEXT,
-                active        INTEGER NOT NULL DEFAULT 1,
-                created_at    TEXT NOT NULL
+                id                   TEXT PRIMARY KEY,
+                username             TEXT UNIQUE NOT NULL,
+                password_hash        TEXT NOT NULL,
+                name                 TEXT,
+                role                 TEXT NOT NULL DEFAULT 'viewer'
+                                     CHECK(role IN ('admin','volunteer','finance','treasurer','viewer','family')),
+                email                TEXT,
+                wa_phone             TEXT,
+                wa_apikey            TEXT,
+                active               INTEGER NOT NULL DEFAULT 1,
+                linked_id            TEXT,
+                linked_type          TEXT,
+                must_change_password INTEGER NOT NULL DEFAULT 1,
+                password_changed_at  TEXT,
+                last_login_at        TEXT,
+                created_at           TEXT NOT NULL
             );
             INSERT OR IGNORE INTO users_new
                 (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
@@ -1339,6 +1428,40 @@ def login():
     if not user or not check_password_hash(user['password_hash'], password):
         return jsonify({'error': 'Invalid credentials'}), 401
 
+    # Update last login timestamp
+    db.execute("UPDATE users SET last_login_at=? WHERE id=?", (now(), user['id']))
+
+    # Check if password change is required (first login or admin-forced reset)
+    must_change = user['must_change_password'] if 'must_change_password' in user.keys() else 0
+
+    # Check 60-day password expiry (skip for admin to avoid lockout on deploy)
+    if not must_change and user['role'] != 'admin':
+        changed_at = user['password_changed_at'] if 'password_changed_at' in user.keys() else None
+        if changed_at:
+            try:
+                changed_dt = datetime.fromisoformat(changed_at)
+                if (datetime.utcnow() - changed_dt).days >= PASSWORD_EXPIRY_DAYS:
+                    must_change = 1
+            except Exception:
+                pass
+
+    # Issue a short-lived temp token for must_change_password flow
+    if must_change:
+        temp_token = str(uuid.uuid4())
+        expires_at = (datetime.utcnow() + timedelta(minutes=30)).isoformat()
+        db.execute(
+            "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
+            (temp_token, user['id'], expires_at, now())
+        )
+        db.commit()
+        log.info(f'Login (must_change_password): {username} ({user["role"]})')
+        return jsonify({
+            'must_change_password': True,
+            'temp_token': temp_token,
+            'user': {'id': user['id'], 'username': user['username'],
+                     'name': user['name'], 'role': user['role']}
+        })
+
     token = str(uuid.uuid4())
     expires_at = (datetime.utcnow() + timedelta(hours=SESSION_HOURS)).isoformat()
     db.execute(
@@ -1347,11 +1470,21 @@ def login():
     )
     db.commit()
     log.info(f'Login: {username} ({user["role"]})')
+
+    # Determine redirect based on role
+    redirect_map = {
+        'admin': '/', 'treasurer': '/', 'finance': '/', 'viewer': '/',
+        'volunteer': '/portal', 'family': '/family'
+    }
+    redirect = redirect_map.get(user['role'], '/')
+
     return jsonify({
         'token': token,
+        'redirect': redirect,
         'user': {
             'id': user['id'], 'username': user['username'],
-            'name': user['name'], 'role': user['role']
+            'name': user['name'], 'role': user['role'],
+            'linked_id': user['linked_id'] if 'linked_id' in user.keys() else None
         }
     })
 
@@ -1374,8 +1507,85 @@ def me():
         return jsonify({'error': 'Unauthorized'}), 401
     return jsonify({
         'id': session['user_id'], 'username': session['username'],
-        'name': session['name'], 'role': session['role']
+        'name': session['name'], 'role': session['role'],
+        'linked_id': session['linked_id'], 'linked_type': session['linked_type']
     })
+
+@app.route('/api/auth/set-password', methods=['POST'])
+def set_password():
+    """Set password on first login or after forced reset. Requires temp_token from login response."""
+    data = request.json or {}
+    temp_token = (data.get('temp_token') or '').strip()
+    new_password = data.get('password') or ''
+    if not temp_token or not new_password:
+        return jsonify({'error': 'temp_token and password required'}), 400
+
+    ok, err = _validate_password(new_password)
+    if not ok:
+        return jsonify({'error': err}), 422
+
+    db = get_db()
+    session = get_session(temp_token)
+    if not session:
+        return jsonify({'error': 'Token expired or invalid — please log in again'}), 401
+
+    db.execute(
+        '''UPDATE users SET password_hash=?, must_change_password=0,
+           password_changed_at=? WHERE id=?''',
+        (generate_password_hash(new_password), now(), session['user_id'])
+    )
+    # Expire the temp token
+    db.execute("DELETE FROM sessions WHERE token=?", (temp_token,))
+
+    # Issue a full session
+    token = str(uuid.uuid4())
+    expires_at = (datetime.utcnow() + timedelta(hours=SESSION_HOURS)).isoformat()
+    db.execute(
+        "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
+        (token, session['user_id'], expires_at, now())
+    )
+    db.commit()
+
+    redirect_map = {
+        'admin': '/', 'treasurer': '/', 'finance': '/', 'viewer': '/',
+        'volunteer': '/portal', 'family': '/family'
+    }
+    redirect = redirect_map.get(session['role'], '/')
+    log.info(f'Password set for user_id={session["user_id"]}')
+    return jsonify({
+        'token': token,
+        'redirect': redirect,
+        'user': {'id': session['user_id'], 'username': session['username'],
+                 'name': session['name'], 'role': session['role'],
+                 'linked_id': session['linked_id']}
+    })
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@require_auth()
+def change_password():
+    """Logged-in user changes their own password. Requires current + new password."""
+    data = request.json or {}
+    current_password = data.get('current_password') or ''
+    new_password = data.get('new_password') or ''
+    if not current_password or not new_password:
+        return jsonify({'error': 'current_password and new_password required'}), 400
+
+    ok, err = _validate_password(new_password)
+    if not ok:
+        return jsonify({'error': err}), 422
+
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id=?", (g.user['user_id'],)).fetchone()
+    if not user or not check_password_hash(user['password_hash'], current_password):
+        return jsonify({'error': 'Current password is incorrect'}), 401
+
+    db.execute(
+        '''UPDATE users SET password_hash=?, must_change_password=0,
+           password_changed_at=? WHERE id=?''',
+        (generate_password_hash(new_password), now(), g.user['user_id'])
+    )
+    db.commit()
+    return jsonify({'ok': True, 'message': 'Password updated successfully'})
 
 # ── Users (Admin only) ────────────────────────────────────────────────────────
 
@@ -1383,44 +1593,64 @@ def me():
 @require_auth(roles=['admin'])
 def list_users():
     rows = get_db().execute(
-        "SELECT id, username, name, role, email, wa_phone, wa_apikey, active, created_at FROM users ORDER BY created_at"
+        '''SELECT id, username, name, role, email, active, linked_id, linked_type,
+                  must_change_password, password_changed_at, last_login_at, created_at
+           FROM users ORDER BY created_at'''
     ).fetchall()
     return jsonify([dict(r) for r in rows])
+
+def _generate_temp_password():
+    """Generate a readable temp password that meets the rules."""
+    import random, string
+    chars = string.ascii_letters + string.digits + '!@#$%'
+    while True:
+        pw = ''.join(random.choices(chars, k=12))
+        ok, _ = _validate_password(pw)
+        if ok:
+            return pw
 
 @app.route('/api/users', methods=['POST'])
 @require_auth(roles=['admin'])
 def create_user():
     data = request.json or {}
-    if not data.get('username') or not data.get('password'):
-        return jsonify({'error': 'Username and password required'}), 422
+    if not data.get('username'):
+        return jsonify({'error': 'Username required'}), 422
     new_role = data.get('role', 'viewer')
     if new_role not in VALID_ROLES:
         return jsonify({'error': f'Invalid role "{new_role}"'}), 400
+
+    # Use provided password or auto-generate a temp one
+    raw_password = data.get('password') or _generate_temp_password()
+    ok, err = _validate_password(raw_password)
+    if not ok:
+        return jsonify({'error': err}), 422
+
     uid = str(uuid.uuid4())
+    linked_id = data.get('linked_id')
+    linked_type = data.get('linked_type')
+    must_change = 1 if not data.get('password') else int(data.get('must_change_password', 1))
+
     db = get_db()
     try:
         db.execute(
-            '''INSERT INTO users (id, username, password_hash, name, role, email, wa_phone, wa_apikey, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)''',
-            (uid, data['username'], generate_password_hash(data['password']),
-             data.get('name'), new_role,
-             data.get('email'), data.get('wa_phone'), data.get('wa_apikey'), now())
+            '''INSERT INTO users (id, username, password_hash, name, role, email,
+               linked_id, linked_type, must_change_password, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (uid, data['username'], generate_password_hash(raw_password),
+             data.get('name'), new_role, data.get('email'),
+             linked_id, linked_type, must_change, now())
         )
         db.commit()
     except sqlite3.IntegrityError as e:
-        if 'CHECK constraint' in str(e):
-            _ensure_treasurer_role(db)
-            db.execute(
-                '''INSERT INTO users (id, username, password_hash, name, role, email, wa_phone, wa_apikey, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)''',
-                (uid, data['username'], generate_password_hash(data['password']),
-                 data.get('name'), new_role,
-                 data.get('email'), data.get('wa_phone'), data.get('wa_apikey'), now())
-            )
-            db.commit()
-        else:
+        if 'UNIQUE' in str(e):
             return jsonify({'error': 'Username already exists'}), 409
-    return jsonify({'id': uid, 'username': data['username']}), 201
+        return jsonify({'error': str(e)}), 400
+
+    return jsonify({
+        'id': uid, 'username': data['username'],
+        'temp_password': raw_password,  # Return once — admin shares with user
+        'must_change_password': bool(must_change)
+    }), 201
 
 @app.route('/api/users/<uid>', methods=['PUT'])
 @require_auth(roles=['admin'])
@@ -1433,36 +1663,106 @@ def update_user(uid):
     new_role = data.get('role', row['role'])
     if new_role not in VALID_ROLES:
         return jsonify({'error': f'Invalid role "{new_role}". Must be one of: {", ".join(sorted(VALID_ROLES))}'}), 400
-    new_hash = generate_password_hash(data['password']) if data.get('password') else row['password_hash']
-    params = (
-        data.get('name', row['name']), new_role,
-        data.get('active', row['active']), new_hash,
-        data.get('email', row['email']), data.get('wa_phone', row['wa_phone']),
-        data.get('wa_apikey', row['wa_apikey']), uid
-    )
+    new_hash = row['password_hash']
+    if data.get('password'):
+        ok, err = _validate_password(data['password'])
+        if not ok:
+            return jsonify({'error': err}), 422
+        new_hash = generate_password_hash(data['password'])
+
+    linked_id = data.get('linked_id', row['linked_id'] if 'linked_id' in row.keys() else None)
+    linked_type = data.get('linked_type', row['linked_type'] if 'linked_type' in row.keys() else None)
+    must_change = int(data.get('must_change_password', row['must_change_password'] if 'must_change_password' in row.keys() else 0))
+
     try:
         db.execute(
-            "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
-            params
+            '''UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?,
+               linked_id=?, linked_type=?, must_change_password=? WHERE id=?''',
+            (data.get('name', row['name']), new_role, data.get('active', row['active']),
+             new_hash, data.get('email', row['email']),
+             linked_id, linked_type, must_change, uid)
         )
         db.commit()
     except sqlite3.IntegrityError as e:
-        if 'CHECK constraint' in str(e):
-            # Schema migration didn't complete — patch it now and retry
-            _ensure_treasurer_role(db)
-            try:
-                db.execute(
-                    "UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?, wa_phone=?, wa_apikey=? WHERE id=?",
-                    params
-                )
-                db.commit()
-            except Exception as retry_e:
-                return jsonify({'error': f'Role update failed after schema fix attempt: {retry_e}'}), 500
-        else:
-            return jsonify({'error': str(e)}), 400
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify({'ok': True})
+
+@app.route('/api/users/<uid>/force-reset', methods=['POST'])
+@require_auth(roles=['admin'])
+def force_password_reset(uid):
+    """Force a user to change their password on next login."""
+    db = get_db()
+    row = db.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    db.execute("UPDATE users SET must_change_password=1 WHERE id=?", (uid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+@app.route('/api/users/bulk-create', methods=['POST'])
+@require_auth(roles=['admin'])
+def bulk_create_users():
+    """Bulk-create user accounts from existing volunteer or family records.
+    Body: {type: 'volunteer'|'family'}
+    Returns list of created accounts with temp passwords."""
+    data = request.json or {}
+    kind = data.get('type')
+    if kind not in ('volunteer', 'family'):
+        return jsonify({'error': 'type must be "volunteer" or "family"'}), 400
+
+    db = get_db()
+    if kind == 'volunteer':
+        records = db.execute(
+            "SELECT id, name, email FROM volunteers WHERE status='active'"
+        ).fetchall()
+        role = 'volunteer'
+        linked_type = 'volunteer'
+    else:
+        records = db.execute(
+            "SELECT id, name FROM families WHERE status='active'"
+        ).fetchall()
+        role = 'family'
+        linked_type = 'family'
+
+    created = []
+    skipped = []
+    for rec in records:
+        # Generate username from name (firstname.lastname, lowercase, no spaces)
+        name_parts = (rec['name'] or 'user').lower().split()
+        base_username = '.'.join(name_parts[:2]) if len(name_parts) >= 2 else name_parts[0]
+        username = base_username
+        # Make unique if taken
+        suffix = 1
+        while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+            username = f'{base_username}{suffix}'
+            suffix += 1
+
+        # Skip if linked_id already has an account
+        existing = db.execute(
+            "SELECT id FROM users WHERE linked_id=? AND linked_type=?",
+            (rec['id'], linked_type)
+        ).fetchone()
+        if existing:
+            skipped.append({'id': rec['id'], 'name': rec['name'], 'reason': 'account exists'})
+            continue
+
+        temp_pw = _generate_temp_password()
+        uid = str(uuid.uuid4())
+        db.execute(
+            '''INSERT INTO users (id, username, password_hash, name, role, email,
+               linked_id, linked_type, must_change_password, created_at)
+               VALUES (?,?,?,?,?,?,?,?,1,?)''',
+            (uid, username, generate_password_hash(temp_pw),
+             rec['name'], role, rec.get('email'),
+             rec['id'], linked_type, now())
+        )
+        created.append({'id': uid, 'username': username,
+                        'name': rec['name'], 'temp_password': temp_pw})
+
+    db.commit()
+    return jsonify({'created': created, 'skipped': skipped})
 
 
 @app.route('/api/admin/fix-schema', methods=['POST'])
@@ -3563,6 +3863,10 @@ def update_cycle_assignment(aid):
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()))
 
+@app.route('/login')
+def login_page():
+    return send_from_directory('public', 'login.html')
+
 @app.route('/family')
 def family_page():
     return send_from_directory('public', 'family.html')
@@ -3934,12 +4238,13 @@ def handle_unhandled_exception(e):
 
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
-    """Return family info + all delivery cycles within next 30 days with per-cycle order state."""
+    """Return family info + all delivery cycles within next 12 months with per-cycle order state.
+    Accepts either:
+      - Authorization: Bearer <token>  (new session-based auth for family users)
+      - ?phone=<phone>                 (legacy phone lookup — kept for backward compat)
+    """
     import json as _json
     from datetime import timedelta, date as _date
-    phone = _normalize_phone(request.args.get('phone') or '')
-    if not phone:
-        return jsonify({'error': 'Phone number required'}), 400
 
     db = get_db()
 
@@ -3956,35 +4261,52 @@ def check_food_order_eligibility():
     except Exception:
         pass
 
-    # Family lookup — active only.
-    # Normalise stored phones on comparison so dashes/spaces/country-codes never block login.
-    # Also auto-fix any un-normalised phone found, so the DB stays clean going forward.
     family = None
-    try:
-        last10 = phone[-10:] if len(phone) >= 10 else phone
-        for r in db.execute(
+
+    # --- Session-based auth (new) ---
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        fam_session = get_family_session(auth[7:])
+        if not fam_session:
+            return jsonify({'error': 'Session expired — please log in again'}), 401
+        fam_row = db.execute(
             "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
-            "FROM families WHERE status='active' COLLATE NOCASE"
-        ).fetchall():
-            stored_norm = _normalize_phone(r['phone'] or '')
-            if stored_norm == phone or stored_norm[-10:] == last10:
-                family = dict(r)
-                # Auto-fix: if stored phone had dashes/spaces, clean it now
-                if r['phone'] != stored_norm:
-                    try:
-                        db.execute("UPDATE families SET phone=? WHERE id=?", (stored_norm, r['id']))
-                        db.commit()
-                        log.info(f'Auto-normalised phone for family {r["id"]}: {r["phone"]!r} → {stored_norm!r}')
-                    except Exception:
-                        pass
-                break
-    except Exception as exc:
-        log.exception(f'check_food_order_eligibility lookup error: {exc}')
-        return jsonify({'error': f'DB error: {exc}'}), 500
+            "FROM families WHERE id=? AND status='active'", (fam_session['family_id'],)
+        ).fetchone()
+        if fam_row:
+            family = dict(fam_row)
+
+    # --- Phone-based lookup (legacy / fallback) ---
+    if family is None:
+        phone = _normalize_phone(request.args.get('phone') or '')
+        if not phone:
+            return jsonify({'error': 'Authentication required'}), 401
+
+        try:
+            last10 = phone[-10:] if len(phone) >= 10 else phone
+            for r in db.execute(
+                "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
+                "FROM families WHERE status='active' COLLATE NOCASE"
+            ).fetchall():
+                stored_norm = _normalize_phone(r['phone'] or '')
+                if stored_norm == phone or stored_norm[-10:] == last10:
+                    family = dict(r)
+                    # Auto-fix: if stored phone had dashes/spaces, clean it now
+                    if r['phone'] != stored_norm:
+                        try:
+                            db.execute("UPDATE families SET phone=? WHERE id=?", (stored_norm, r['id']))
+                            db.commit()
+                            log.info(f'Auto-normalised phone for family {r["id"]}: {r["phone"]!r} → {stored_norm!r}')
+                        except Exception:
+                            pass
+                    break
+        except Exception as exc:
+            log.exception(f'check_food_order_eligibility lookup error: {exc}')
+            return jsonify({'error': f'DB error: {exc}'}), 500
 
     if not family:
-        all_phones = db.execute("SELECT phone, status FROM families").fetchall()
-        log.warning(f'PHONE MISS — searched={phone!r} stored={[(r["phone"],r["status"]) for r in all_phones]}')
+        phone_searched = request.args.get('phone', '')
+        log.warning(f'FAMILY MISS — searched={phone_searched!r}')
         return jsonify({
             'registered': False,
             'message': (

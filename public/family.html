@@ -466,51 +466,8 @@
   <button class="lang-toggle" onclick="toggleLang()" id="lang-btn">عربي</button>
 </header>
 
-<!-- ── Login ── -->
-<div id="login-screen">
-  <div class="container">
-    <div class="login-card">
-      <h1 data-en="My Deliveries" data-ar="طلباتي">My Deliveries</h1>
-
-      <!-- Step 1: Phone -->
-      <div id="login-step-phone">
-        <p data-en="Enter the phone number you registered with." data-ar="أدخل رقم الهاتف الذي سجّلت به.">Enter the phone number you registered with.</p>
-        <label class="field-label" for="phone-input" data-en="Phone Number" data-ar="رقم الهاتف">Phone Number</label>
-        <input type="tel" id="phone-input" placeholder="e.g. 5551234567" autocomplete="tel" inputmode="numeric"
-               onkeydown="if(event.key==='Enter') doRequestOtp()">
-        <button class="btn-primary" onclick="doRequestOtp()" id="login-btn">
-          <span data-en="SEND CODE" data-ar="إرسال الرمز">SEND CODE</span>
-        </button>
-      </div>
-
-      <!-- Step 2: PIN -->
-      <div id="login-step-pin" style="display:none">
-        <p id="pin-sent-msg">A 6-digit code was sent to your phone. Enter it below.</p>
-        <label class="field-label" for="pin-input" data-en="Verification Code" data-ar="رمز التحقق">Verification Code</label>
-        <input type="text" id="pin-input" placeholder="123456" inputmode="numeric" maxlength="6"
-               autocomplete="one-time-code" onkeydown="if(event.key==='Enter') doVerifyPin()"
-               style="letter-spacing:6px;font-size:22px;text-align:center">
-        <button class="btn-primary" onclick="doVerifyPin()" id="verify-btn">
-          <span data-en="VERIFY" data-ar="تحقق">VERIFY</span>
-        </button>
-        <div style="text-align:center;margin-top:12px">
-          <button onclick="resetLoginToPhone()" style="background:none;border:none;color:var(--gray-4);font-size:13px;cursor:pointer;text-decoration:underline"
-                  data-en="← Use a different number" data-ar="← استخدم رقماً آخر">← Use a different number</button>
-        </div>
-      </div>
-
-      <div class="error-msg" id="login-error">
-        <span id="login-error-text"></span><br>
-        <a id="wa-coordinator-link" class="wa-link" href="#" style="display:none" target="_blank" rel="noopener"
-           data-en="Message your coordinator on WhatsApp →" data-ar="تواصل مع المنسق عبر واتساب →">Message your coordinator on WhatsApp →</a>
-      </div>
-    </div>
-    <p style="text-align:center;margin-top:20px;font-size:13px;color:var(--gray-4)">
-      <span data-en="Not registered yet?" data-ar="لم تسجّل بعد؟">Not registered yet?</span>
-      <a href="/intake" style="color:var(--black);text-decoration:underline" data-en="Sign up here →" data-ar="سجّل هنا →">Sign up here →</a>
-    </p>
-  </div>
-</div>
+<!-- ── Login redirect (no UI — handled by /login) ── -->
+<div id="login-screen" style="display:none"></div>
 
 <!-- ── Dashboard ── -->
 <div id="dashboard">
@@ -599,24 +556,41 @@ const EVENT_LABELS = {
   order_reset:      { en: '⟳ Order reset by coordinator',   ar: '⟳ تمت إعادة تعيين الطلب' },
 };
 
-// ── Login (OTP two-step) ───────────────────────────────────────────────────────
-let _otpPhone = ''; // holds phone between step 1 and step 2
+// ── Auth (session-based) ──────────────────────────────────────────────────────
+let _familyToken = localStorage.getItem('familyToken');
+let _familyUser  = JSON.parse(localStorage.getItem('familyUser') || 'null');
+
+function _authHeader() {
+  return _familyToken ? {'Authorization': 'Bearer ' + _familyToken} : {};
+}
 
 // Restore session from localStorage on page load
 (function restoreSession() {
-  const savedPhone = localStorage.getItem('family_phone');
-  if (savedPhone) {
-    _otpPhone = savedPhone;
-    _loadAndShow(savedPhone);
+  if (_familyToken && _familyUser) {
+    _loadAndShow();
+  } else {
+    // No session — redirect to login
+    window.location.href = '/login';
   }
 })();
 
-async function _loadAndShow(phone) {
+async function _loadAndShow() {
   try {
-    const res  = await fetch('/api/food-order/check?phone=' + encodeURIComponent(phone));
+    const res  = await fetch('/api/food-order/check', {
+      headers: {'Content-Type': 'application/json', ..._authHeader()}
+    });
     const data = await res.json();
-    if (!data.registered) { localStorage.removeItem('family_phone'); return; }
-    STATE.phone      = phone;
+    if (res.status === 401) {
+      localStorage.removeItem('familyToken');
+      localStorage.removeItem('familyUser');
+      window.location.href = '/login';
+      return;
+    }
+    if (!data.registered) {
+      window.location.href = '/login';
+      return;
+    }
+    STATE.phone      = data.phone || '';
     STATE.family     = data.family_name;
     STATE.familyId   = data.family_id;
     STATE.bundleSize = data.bundle_size;
@@ -625,16 +599,14 @@ async function _loadAndShow(phone) {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('dashboard').style.display    = 'block';
     renderAll();
-  } catch(e) { localStorage.removeItem('family_phone'); }
+  } catch(e) {
+    window.location.href = '/login';
+  }
 }
 
 async function doRequestOtp() {
-  const raw   = document.getElementById('phone-input').value.trim();
-  const phone = raw.replace(/\D/g, '');
-  if (!phone) {
-    showLoginError(currentLang === 'ar' ? 'الرجاء إدخال رقم الهاتف.' : 'Please enter your phone number.');
-    return;
-  }
+  // Legacy stub — no longer used
+  window.location.href = '/login';
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
   hideLoginError();
@@ -718,12 +690,11 @@ function hideLoginError() {
 
 function doLogout() {
   STATE.familyId = null; STATE.family = null; STATE.cycles = []; STATE.history = [];
-  localStorage.removeItem('family_phone');
-  _otpPhone = '';
-  document.getElementById('dashboard').style.display    = 'none';
-  document.getElementById('login-screen').style.display = 'block';
-  document.getElementById('phone-input').value = '';
-  resetLoginToPhone();
+  localStorage.removeItem('familyToken');
+  localStorage.removeItem('familyUser');
+  localStorage.removeItem('family_phone'); // legacy cleanup
+  _familyToken = null; _familyUser = null;
+  window.location.href = '/login';
 }
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
@@ -1246,7 +1217,7 @@ async function placeOrder(cid) {
   try {
     const res  = await fetch('/api/food-order', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ..._authHeader() },
       body: JSON.stringify({
         family_id: STATE.familyId,
         cycle_id:  cid,
@@ -1283,7 +1254,7 @@ async function cancelOrder(cid, requestId) {
   try {
     const res  = await fetch('/api/food-order/cancel', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ..._authHeader() },
       body: JSON.stringify({ family_id: STATE.familyId, request_id: requestId })
     });
     const data = await res.json();
@@ -1310,7 +1281,7 @@ async function submitCR(cid, requestId) {
   try {
     const res  = await fetch('/api/family-request', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ..._authHeader() },
       body: JSON.stringify({
         family_id: STATE.familyId,
         request_id: requestId,
@@ -1343,7 +1314,7 @@ async function retractRequest(cid, crId, requestId) {
   try {
     const res  = await fetch(`/api/family-request/${crId}/retract`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ..._authHeader() },
       body: JSON.stringify({ family_id: STATE.familyId })
     });
     const data = await res.json();
@@ -1357,7 +1328,10 @@ async function retractRequest(cid, crId, requestId) {
 // ── Refresh ────────────────────────────────────────────────────────────────────
 async function refreshState() {
   try {
-    const res  = await fetch('/api/food-order/check?phone=' + encodeURIComponent(STATE.phone));
+    const res  = await fetch('/api/food-order/check', {
+      headers: {'Content-Type': 'application/json', ..._authHeader()}
+    });
+    if (res.status === 401) { doLogout(); return; }
     const data = await res.json();
     if (data.registered) {
       STATE.cycles  = data.cycles  || [];

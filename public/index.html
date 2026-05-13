@@ -3265,28 +3265,52 @@ async function rejectReimb(id) {
 // ── Users (admin only) ────────────────────────────────────────────────────────
 async function renderUsers() {
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn" onclick="openUserForm()">+ Add User</button>`;
+    `<button class="btn" onclick="openUserForm()">+ Add User</button>
+     <button class="btn btn-outline" onclick="bulkCreateUsers('volunteer')" style="margin-left:8px">Bulk: Volunteers</button>
+     <button class="btn btn-outline" onclick="bulkCreateUsers('family')" style="margin-left:8px">Bulk: Families</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const rows = await GET('/users');
     window._users = {};
     rows.forEach(r => { window._users[r.id] = r; });
+
+    function pwAgeLabel(r) {
+      if (r.must_change_password) return '<span style="color:#e07b00;font-size:11px;font-weight:700">⚠ Must Change</span>';
+      if (!r.password_changed_at) return '<span style="color:#888;font-size:11px">Never set</span>';
+      const days = Math.floor((Date.now() - new Date(r.password_changed_at)) / 86400000);
+      const color = days >= 55 ? '#c00' : days >= 45 ? '#e07b00' : '#4caf50';
+      return `<span style="color:${color};font-size:11px">${days}d ago</span>`;
+    }
+    function lastLoginLabel(r) {
+      if (!r.last_login_at) return '<span style="color:#555;font-size:11px">Never</span>';
+      return `<span style="font-size:11px">${new Date(r.last_login_at).toLocaleDateString()}</span>`;
+    }
+    function linkedLabel(r) {
+      if (!r.linked_type) return '—';
+      return `<span style="font-size:11px;color:#888">${r.linked_type}: ${(r.linked_id||'').slice(0,8)}…</span>`;
+    }
+
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header"><span class="table-title">System Users</span></div>
         <table>
           <thead><tr>
-            <th>Name</th><th>Username</th><th>Role</th><th>Email</th><th>Active</th><th></th>
+            <th>Name</th><th>Username</th><th>Role</th><th>Linked To</th><th>Last Login</th><th>Password</th><th>Active</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.map(r => `
               <tr>
                 <td><strong>${r.name||'—'}</strong></td>
-                <td>${r.username}</td>
-                <td><span style="text-transform:capitalize">${r.role}</span></td>
-                <td style="font-size:12px">${r.email||'—'}</td>
+                <td style="font-size:13px">${r.username}</td>
+                <td><span class="badge badge-${r.role==='admin'?'active':r.role==='family'?'pending':r.role==='volunteer'?'shopper':'inactive'}" style="text-transform:capitalize">${r.role}</span></td>
+                <td>${linkedLabel(r)}</td>
+                <td>${lastLoginLabel(r)}</td>
+                <td>${pwAgeLabel(r)}</td>
                 <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
-                <td><button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button></td>
+                <td style="white-space:nowrap">
+                  <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
+                  <button class="btn btn-sm btn-outline" style="margin-left:4px" onclick="forceReset('${r.id}','${r.username}')" title="Force password reset on next login">↺ Reset PW</button>
+                </td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -3296,8 +3320,33 @@ async function renderUsers() {
   }
 }
 
+async function forceReset(uid, username) {
+  if (!confirm(`Force ${username} to change their password on next login?`)) return;
+  try {
+    await POST('/users/' + uid + '/force-reset', {});
+    showToast(`${username} will be prompted to reset their password on next login.`);
+    renderUsers();
+  } catch(e) { alert(e.message); }
+}
+
+async function bulkCreateUsers(type) {
+  const label = type === 'volunteer' ? 'volunteers' : 'families';
+  if (!confirm(`Create login accounts for all active ${label} who don't have one yet?\n\nTemp passwords will be shown once — copy them to share.`)) return;
+  try {
+    const res = await POST('/users/bulk-create', {type});
+    if (!res.created.length && !res.skipped.length) {
+      alert(`No active ${label} found to create accounts for.`); return;
+    }
+    let msg = `Created ${res.created.length} account(s)`;
+    if (res.skipped.length) msg += `, skipped ${res.skipped.length} (already have accounts)`;
+    msg += '.\n\nCredentials (save these now — passwords won\'t be shown again):\n\n';
+    msg += res.created.map(u => `${u.name}\n  Username: ${u.username}\n  Temp PW:  ${u.temp_password}`).join('\n\n');
+    alert(msg);
+    renderUsers();
+  } catch(e) { alert(e.message); }
+}
+
 function openUserForm(idOrObj) {
-  // Accept a user ID string (from onclick), user object, or nothing (create new)
   let r = {};
   if (typeof idOrObj === 'string' || typeof idOrObj === 'number') {
     r = (window._users && window._users[idOrObj]) ? window._users[idOrObj] : {};
@@ -3305,45 +3354,92 @@ function openUserForm(idOrObj) {
     r = idOrObj;
   }
   STATE.editId = r.id || null;
-  openDrawer(r.id ? 'Edit User' : 'Add User',
-    `<div class="form-section">Account</div>
-     <div class="form-group">
-       <label>Name</label>
-       <input type="text" id="u-name" value="${r.name||''}">
-     </div>
-     <div class="form-group">
-       <label>Username *</label>
-       <input type="text" id="u-username" value="${r.username||''}" ${r.id?'readonly':''}>
-     </div>
-     <div class="form-group">
-       <label>${r.id?'New Password (leave blank to keep)':'Password *'}</label>
-       <input type="password" id="u-password">
-     </div>
-     <div class="form-row">
+
+  // Load volunteers and families for linked record dropdown
+  Promise.all([GET('/volunteers'), GET('/families')]).then(([vols, fams]) => {
+    const volOpts = vols.filter(v=>v.status==='active').map(v =>
+      `<option value="${v.id}" data-type="volunteer" ${r.linked_id===v.id&&r.linked_type==='volunteer'?'selected':''}>${v.name}</option>`).join('');
+    const famOpts = fams.filter(f=>f.status==='active').map(f =>
+      `<option value="${f.id}" data-type="family" ${r.linked_id===f.id&&r.linked_type==='family'?'selected':''}>${f.name} (${f.family_code||''})</option>`).join('');
+
+    openDrawer(r.id ? 'Edit User' : 'Add User',
+      `<div class="form-section">Account</div>
        <div class="form-group">
-         <label>Role</label>
-         <select id="u-role">
-           ${['admin','treasurer','finance','volunteer','viewer'].map(v =>
-             `<option value="${v}" ${r.role===v?'selected':''}>${v.charAt(0).toUpperCase()+v.slice(1)}</option>`).join('')}
-         </select>
+         <label>Name</label>
+         <input type="text" id="u-name" value="${r.name||''}">
        </div>
-       ${r.id ? `<div class="form-group">
-         <label>Active</label>
-         <select id="u-active">
-           <option value="1" ${r.active?'selected':''}>Yes</option>
-           <option value="0" ${!r.active?'selected':''}>No</option>
+       <div class="form-group">
+         <label>Username *</label>
+         <input type="text" id="u-username" value="${r.username||''}" ${r.id?'readonly':''}>
+       </div>
+       <div class="form-group">
+         <label>${r.id?'New Password (leave blank = auto-generate temp)':'Password (leave blank = auto-generate temp)'}</label>
+         <input type="password" id="u-password" placeholder="Min 8 chars, 1 upper, 1 number, 1 special">
+       </div>
+       <div class="form-row">
+         <div class="form-group">
+           <label>Role *</label>
+           <select id="u-role" onchange="toggleLinkedField()">
+             ${['admin','treasurer','finance','volunteer','family','viewer'].map(v =>
+               `<option value="${v}" ${r.role===v?'selected':''}>${v.charAt(0).toUpperCase()+v.slice(1)}</option>`).join('')}
+           </select>
+         </div>
+         ${r.id ? `<div class="form-group">
+           <label>Active</label>
+           <select id="u-active">
+             <option value="1" ${r.active?'selected':''}>Yes</option>
+             <option value="0" ${!r.active?'selected':''}>No</option>
+           </select>
+         </div>` : ''}
+       </div>
+       <div class="form-group" id="linked-field">
+         <label>Linked Volunteer / Family</label>
+         <select id="u-linked-id" onchange="updateLinkedType()">
+           <option value="">— None —</option>
+           <optgroup label="Volunteers">${volOpts}</optgroup>
+           <optgroup label="Families">${famOpts}</optgroup>
          </select>
-       </div>` : ''}
-     </div>
-     <div class="form-section" style="margin-top:16px">Notifications (Treasurer only)</div>
-     <div class="form-group">
-       <label>Email</label>
-       <input type="email" id="u-email" value="${r.email||''}" placeholder="treasurer@example.com">
-     </div>
-     <div class="alert alert-error" id="user-err" style="display:none"></div>`,
-    `<button class="btn" onclick="saveUser()">Save</button>
-     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
-  );
+         <input type="hidden" id="u-linked-type" value="${r.linked_type||''}">
+       </div>
+       <div class="form-section" style="margin-top:16px">Contact</div>
+       <div class="form-group">
+         <label>Email</label>
+         <input type="email" id="u-email" value="${r.email||''}" placeholder="user@example.com">
+       </div>
+       <div class="alert alert-error" id="user-err" style="display:none"></div>`,
+      `<button class="btn" onclick="saveUser()">Save</button>
+       <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+    );
+    toggleLinkedField();
+  }).catch(() => {
+    // Fallback without linked dropdown
+    openDrawer(r.id ? 'Edit User' : 'Add User',
+      `<div class="form-group"><label>Name</label><input type="text" id="u-name" value="${r.name||''}"></div>
+       <div class="form-group"><label>Username *</label><input type="text" id="u-username" value="${r.username||''}" ${r.id?'readonly':''}></div>
+       <div class="form-group"><label>Password</label><input type="password" id="u-password"></div>
+       <div class="form-group"><label>Role</label><select id="u-role">
+         ${['admin','treasurer','finance','volunteer','family','viewer'].map(v=>`<option value="${v}" ${r.role===v?'selected':''}>${v}</option>`).join('')}
+       </select></div>
+       <input type="hidden" id="u-linked-id" value="${r.linked_id||''}">
+       <input type="hidden" id="u-linked-type" value="${r.linked_type||''}">
+       <div class="form-group"><label>Email</label><input type="email" id="u-email" value="${r.email||''}"></div>
+       <div class="alert alert-error" id="user-err" style="display:none"></div>`,
+      `<button class="btn" onclick="saveUser()">Save</button><button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+    );
+  });
+}
+
+function toggleLinkedField() {
+  const role = document.getElementById('u-role')?.value;
+  const el = document.getElementById('linked-field');
+  if (el) el.style.display = (role === 'volunteer' || role === 'family') ? 'block' : 'none';
+}
+
+function updateLinkedType() {
+  const sel = document.getElementById('u-linked-id');
+  const opt = sel?.selectedOptions?.[0];
+  const typeInput = document.getElementById('u-linked-type');
+  if (opt && typeInput) typeInput.value = opt.dataset.type || '';
 }
 
 async function saveUser() {
@@ -3354,18 +3450,28 @@ async function saveUser() {
   const username = document.getElementById('u-username').value.trim();
   const password = document.getElementById('u-password').value;
   if (!username) return showErr('Username is required');
-  if (!STATE.editId && !password) return showErr('Password is required');
+  const linkedId   = document.getElementById('u-linked-id')?.value || null;
+  const linkedType = document.getElementById('u-linked-type')?.value || null;
   const payload = {
-    name:     document.getElementById('u-name').value.trim(),
+    name:        document.getElementById('u-name').value.trim(),
     username,
-    role:     document.getElementById('u-role').value,
-    email:    document.getElementById('u-email').value.trim() || null,
+    role:        document.getElementById('u-role').value,
+    email:       document.getElementById('u-email')?.value.trim() || null,
+    linked_id:   linkedId || null,
+    linked_type: linkedType || null,
   };
   if (password) payload.password = password;
-  if (STATE.editId) payload.active = parseInt(document.getElementById('u-active').value);
+  if (STATE.editId) payload.active = parseInt(document.getElementById('u-active')?.value || 1);
   try {
-    if (STATE.editId) await PUT('/users/' + STATE.editId, payload);
-    else await POST('/users', payload);
+    let result;
+    if (STATE.editId) {
+      await PUT('/users/' + STATE.editId, payload);
+    } else {
+      result = await POST('/users', payload);
+      if (result && result.temp_password) {
+        alert(`Account created!\n\nUsername: ${result.username}\nTemp Password: ${result.temp_password}\n\nShare these credentials with the user. They will be prompted to set a new password on first login.`);
+      }
+    }
     closeDrawer();
     renderUsers();
   } catch(e) { showErr(e.message); }
