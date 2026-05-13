@@ -32,16 +32,20 @@ if [[ $SYNTAX_ERRORS -gt 0 ]]; then
 fi
 echo "  ✓  No syntax errors"
 
+# ── Resolve python binary ─────────────────────────────────────
+PYTHON=$(command -v python3 || command -v python)
+PIP=$(command -v pip3 || command -v pip)
+
 # ── 2. Install test dependencies (if needed) ──────────────────
 echo ""
 echo "[2/3] Installing test dependencies..."
-pip install --quiet pytest werkzeug flask --break-system-packages 2>/dev/null || true
+$PIP install --quiet pytest werkzeug flask flask-cors flask-bcrypt 2>/dev/null || true
 
 # ── 3. Run pytest ─────────────────────────────────────────────
 echo ""
 echo "[3/3] Running pytest..."
 echo "──────────────────────────────────────────────────"
-python -m pytest tests/ -v --tb=short 2>&1
+$PYTHON -m pytest tests/ -v --tb=short 2>&1
 echo "──────────────────────────────────────────────────"
 
 echo ""
