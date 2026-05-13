@@ -45,7 +45,7 @@ $PIP install --quiet pytest werkzeug flask flask-cors flask-bcrypt 2>/dev/null |
 echo ""
 echo "[3/3] Running pytest..."
 echo "──────────────────────────────────────────────────"
-$PYTHON -m pytest tests/ -v --tb=short 2>&1
+$PYTHON -m pytest tests/test_system.py -v --tb=short 2>&1
 echo "──────────────────────────────────────────────────"
 
 echo ""

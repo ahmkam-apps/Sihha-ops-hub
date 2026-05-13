@@ -56,6 +56,11 @@ def post(path, body, token=None):
     except Exception as e:
         return 0, {'error': str(e)}
 
+if __name__ != '__main__':
+    # Prevent pytest from importing and running this module during collection.
+    # Run directly: python3 tests/smoke_test.py
+    import sys as _sys; _sys.exit(0)
+
 print(f'\n  Sihha Ops Hub — Smoke Test')
 print(f'  Target: {BASE_URL}')
 print(f'  {"-" * 52}')
