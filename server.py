@@ -808,6 +808,8 @@ def bootstrap_db():
                     confirmation_token   TEXT,
                     confirmed_at         TEXT,
                     confirmation_sent_at TEXT,
+                    updated_at           TEXT,
+                    family_notes         TEXT,
                     UNIQUE(cycle_id, family_id),
                     FOREIGN KEY (cycle_id)  REFERENCES delivery_cycles(id),
                     FOREIGN KEY (family_id) REFERENCES families(id)
@@ -815,10 +817,12 @@ def bootstrap_db():
                 INSERT OR IGNORE INTO food_requests_new
                     (id, cycle_id, family_id, bundle_size, submitted_at, status,
                      assigned_volunteer_id, delivered_at, notes,
-                     confirmation_token, confirmed_at, confirmation_sent_at)
+                     confirmation_token, confirmed_at, confirmation_sent_at,
+                     updated_at, family_notes)
                 SELECT id, cycle_id, family_id, bundle_size, submitted_at, status,
                        assigned_volunteer_id, delivered_at, notes,
-                       confirmation_token, confirmed_at, confirmation_sent_at
+                       confirmation_token, confirmed_at, confirmation_sent_at,
+                       NULL, NULL
                 FROM food_requests;
                 DROP TABLE IF EXISTS food_requests;
                 ALTER TABLE food_requests_new RENAME TO food_requests;
@@ -1755,7 +1759,7 @@ def bulk_create_users():
                linked_id, linked_type, must_change_password, created_at)
                VALUES (?,?,?,?,?,?,?,?,1,?)''',
             (uid, username, generate_password_hash(temp_pw),
-             rec['name'], role, rec.get('email'),
+             rec['name'], role, rec['email'] if 'email' in rec.keys() else None,
              rec['id'], linked_type, now())
         )
         created.append({'id': uid, 'username': username,

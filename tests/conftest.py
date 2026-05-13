@@ -49,6 +49,6 @@ def auth(admin_token):
 
 @pytest.fixture
 def wa_mock():
-    """Patches _wa_send so tests can assert on WhatsApp calls without HTTP."""
-    with patch.object(_server, '_wa_send', return_value=True) as m:
+    """Patches _send_sms so tests can assert on SMS calls without real Twilio."""
+    with patch.object(_server, '_send_sms', return_value=True) as m:
         yield m
