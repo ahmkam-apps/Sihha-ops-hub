@@ -1096,6 +1096,64 @@ def bootstrap_db():
     except Exception:
         pass
 
+    # ── One-time catalog pricing migration (Sam's Club prices) ──────────────────
+    # Updates existing seeded items: name, unit, price, allow_qty (only if price=0)
+    _catalog_updates = [
+        # (old_name,        new_name,            unit,          price,  allow_qty)
+        ('Rice',          'Rice',             '4 lb bag',    10.00, 0),
+        ('Pasta',         'Pasta',            'box',          8.52, 0),
+        ('Eggs',          'Eggs',             '18 ct',        5.87, 0),
+        ('Canned Beans',  'Red Kidney Beans', 'lb bag',       5.00, 0),
+        ('Whole Chicken', 'Whole Chicken',    'lb',           5.00, 1),
+        ('Potatoes',      'Red Potato',       'bag',          4.92, 0),
+        ('Bananas',       'Bananas',          'bunch',        2.16, 0),
+    ]
+    for _old, _new, _unit, _price, _allow_qty in _catalog_updates:
+        _row = conn.execute("SELECT id, price FROM food_items WHERE name=?", (_old,)).fetchone()
+        if _row and (not _row['price'] or _row['price'] == 0):
+            conn.execute(
+                "UPDATE food_items SET name=?, unit=?, price=?, allow_qty=? WHERE id=?",
+                (_new, _unit, _price, _allow_qty, _row['id'])
+            )
+            log.info(f'Catalog migration: updated {_old!r} → {_new!r} @ ${_price}')
+
+    # Add missing items (Apples, Red Onion, Italian Dressing, Grapes) to Produce
+    _produce_cat = conn.execute("SELECT id FROM food_categories WHERE name='Produce'").fetchone()
+    if _produce_cat:
+        _produce_id = _produce_cat['id']
+        _missing = [
+            ('Apples',           'bag',       6.22, 0, 4),
+            ('Red Onion',        'each',      5.82, 0, 5),
+            ('Italian Dressing', 'bottle',    5.14, 0, 6),
+            ('Grapes',           '4 lb box',  7.00, 0, 7),
+        ]
+        for _name, _unit, _price, _aq, _order in _missing:
+            if not conn.execute("SELECT id FROM food_items WHERE name=?", (_name,)).fetchone():
+                _nid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO food_items (id, category_id, name, unit, is_active, display_order, created_at, price, allow_qty) "
+                    "VALUES (?,?,?,?,1,?,?,?,?)",
+                    (_nid, _produce_id, _name, _unit, _order, now(), _price, _aq)
+                )
+                for _sz in ('S', 'M', 'L'):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO bundle_quantities (id, food_item_id, bundle_size, quantity) VALUES (?,?,?,0)",
+                        (str(uuid.uuid4()), _nid, _sz)
+                    )
+                log.info(f'Catalog migration: added {_name!r} @ ${_price}')
+
+    # Deactivate placeholder items not in approved catalog (only if still unpriced)
+    for _inactive in ('Bread', 'Brown Lentils', 'Oranges'):
+        conn.execute("UPDATE food_items SET is_active=0 WHERE name=? AND (price=0 OR price IS NULL)", (_inactive,))
+
+    # Set S/M/L bundle budgets if still at default 0
+    _budgets = {'S': 30.0, 'M': 50.0, 'L': 80.0}
+    for _sz, _bud in _budgets.items():
+        _br = conn.execute("SELECT budget FROM bundle_size_rules WHERE bundle_size=?", (_sz,)).fetchone()
+        if _br and (not _br['budget'] or _br['budget'] == 0):
+            conn.execute("UPDATE bundle_size_rules SET budget=? WHERE bundle_size=?", (_bud, _sz))
+            log.info(f'Bundle budget set: {_sz}=${_bud}')
+
     conn.commit()
     conn.close()
     final_size_kb = os.path.getsize(abs_db) / 1024

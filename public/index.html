@@ -4167,6 +4167,7 @@ let _catalogCats = [];
 async function renderCatalog() {
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-outline" onclick="openCategoryForm()">+ Category</button>
+    <button class="btn btn-outline" onclick="renderPricingTable()">💲 Pricing</button>
     <button class="btn" onclick="openItemForm()">+ Item</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
@@ -4517,6 +4518,121 @@ async function saveBundleRules(sizes) {
     });
     closeDrawer(); renderCatalog();
   } catch(e) { showErr(e.message); }
+}
+
+// ── Pricing Table ──────────────────────────────────────────────────────────────
+
+async function renderPricingTable() {
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-outline" onclick="renderCatalog()">← Back to Catalog</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const [cats, items, rules] = await Promise.all([
+      GET('/food-categories'), GET('/food-items'), GET('/bundle-size-rules')
+    ]);
+    const catMap = {};
+    cats.forEach(c => { catMap[c.id] = c.name; });
+
+    // Build bundle budget summary
+    const budgetSummary = rules.map(r =>
+      `<span style="margin-right:16px"><strong>${r.label}:</strong> $${parseFloat(r.budget||0).toFixed(2)}</span>`
+    ).join('');
+
+    document.getElementById('content').innerHTML = `
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:var(--gray-4);margin-bottom:6px">Bundle Budgets (families never see these)</div>
+        <div style="font-size:13px;font-weight:600">${budgetSummary}
+          <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="openBundleRulesForm()">Edit</button>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Item Price List</span>
+          <span style="font-size:12px;color:var(--gray-4)">${items.length} items — click any cell to edit, press Enter or Tab to save</span>
+        </div>
+        <table id="pricing-table">
+          <thead><tr>
+            <th>Item</th>
+            <th>Category</th>
+            <th>Unit</th>
+            <th>Price ($)</th>
+            <th>Allow Qty</th>
+            <th>Active</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${items.map(item => `
+              <tr id="pt-row-${item.id}" data-item-id="${item.id}">
+                <td><strong>${item.name}</strong></td>
+                <td style="font-size:12px;color:var(--gray-4)">${catMap[item.category_id]||'—'}</td>
+                <td>
+                  <input type="text" id="pt-unit-${item.id}"
+                    value="${item.unit||''}"
+                    style="width:90px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
+                </td>
+                <td>
+                  <input type="number" id="pt-price-${item.id}"
+                    value="${parseFloat(item.price||0).toFixed(2)}"
+                    min="0" step="0.01"
+                    style="width:80px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
+                </td>
+                <td style="text-align:center">
+                  <input type="checkbox" id="pt-aq-${item.id}"
+                    ${item.allow_qty ? 'checked' : ''}
+                    title="Family can adjust quantity">
+                </td>
+                <td style="text-align:center">
+                  <input type="checkbox" id="pt-active-${item.id}"
+                    ${item.is_active ? 'checked' : ''}>
+                </td>
+                <td>
+                  <button class="btn btn-sm" id="pt-save-${item.id}"
+                    onclick="savePricingRow('${item.id}')">Save</button>
+                  <span id="pt-status-${item.id}" style="font-size:11px;color:var(--green);margin-left:6px;display:none">✓</span>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function savePricingRow(itemId) {
+  const btn = document.getElementById('pt-save-' + itemId);
+  const status = document.getElementById('pt-status-' + itemId);
+  const unit     = document.getElementById('pt-unit-'   + itemId)?.value?.trim() || '';
+  const price    = parseFloat(document.getElementById('pt-price-'  + itemId)?.value) || 0;
+  const allowQty = document.getElementById('pt-aq-'     + itemId)?.checked ? 1 : 0;
+  const isActive = document.getElementById('pt-active-' + itemId)?.checked ? 1 : 0;
+
+  // Find full item data to pass required fields
+  const item = _catalogItems.find(i => i.id === itemId);
+  if (!item) return;
+
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    await PUT('/food-items/' + itemId, {
+      name:         item.name,
+      category_id:  item.category_id,
+      display_order: item.display_order,
+      unit, price, allow_qty: allowQty, is_active: isActive
+    });
+    // Update local cache
+    item.unit = unit; item.price = price; item.allow_qty = allowQty; item.is_active = isActive;
+    btn.textContent = 'Save';
+    btn.disabled = false;
+    status.style.display = 'inline';
+    setTimeout(() => { status.style.display = 'none'; }, 2000);
+  } catch(e) {
+    btn.textContent = 'Save';
+    btn.disabled = false;
+    alert('Save failed: ' + e.message);
+  }
 }
 </script>
 </body>
