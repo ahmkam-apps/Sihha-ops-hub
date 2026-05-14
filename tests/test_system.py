@@ -1088,17 +1088,25 @@ class TestUserManagement:
         assert data['created'] == []
 
     def test_bulk_create_families_generates_accounts(self, client, auth):
+        """create_family now auto-creates the user account, so bulk-create skips it.
+        Verify the family was created with credentials returned directly."""
         phone = f'588{uuid.uuid4().hex[:7]}'
-        client.post('/api/families', headers=auth,
-                    json={'name': 'BulkFam Test', 'phone': phone,
-                          'family_size': 2, 'status': 'active'})
-        res = client.post('/api/users/bulk-create', headers=auth,
-                          json={'type': 'family'})
-        assert res.status_code == 200
+        res = client.post('/api/families', headers=auth,
+                          json={'name': 'BulkFam Test', 'phone': phone,
+                                'family_size': 2, 'status': 'active'})
+        assert res.status_code == 201
         data = res.get_json()
-        assert 'created' in data
-        created_names = [c['name'] for c in data['created']]
-        assert 'BulkFam Test' in created_names
+        # Credentials are returned inline — no separate bulk-create step needed
+        assert 'login_username' in data, 'create_family should return login_username'
+        assert 'login_temp_password' in data, 'create_family should return login_temp_password'
+        assert data['login_username'], 'username must not be empty'
+        assert data['login_temp_password'], 'temp password must not be empty'
+        # Bulk-create should now skip this family (account already exists)
+        bc = client.post('/api/users/bulk-create', headers=auth, json={'type': 'family'})
+        assert bc.status_code == 200
+        bc_data = bc.get_json()
+        skipped_names = [s['name'] for s in bc_data.get('skipped', [])]
+        assert 'BulkFam Test' in skipped_names, 'already-created family should be in skipped list'
 
     def test_bulk_create_requires_auth(self, client):
         res = client.post('/api/users/bulk-create', json={'type': 'volunteer'})

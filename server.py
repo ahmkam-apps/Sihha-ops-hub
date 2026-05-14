@@ -2257,8 +2257,32 @@ def create_family():
          data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'),
          family_code, now())
     )
+
+    # Auto-create login account for the family
+    name_parts = (data['name'] or 'family').lower().split()
+    base_username = '.'.join(name_parts[:2]) if len(name_parts) >= 2 else name_parts[0]
+    # Make username unique
+    username = base_username
+    suffix = 1
+    while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+        username = f'{base_username}{suffix}'
+        suffix += 1
+    temp_pw = _generate_temp_password()
+    uid = str(uuid.uuid4())
+    db.execute(
+        '''INSERT INTO users (id, username, password_hash, name, role,
+           linked_id, linked_type, must_change_password, created_at)
+           VALUES (?,?,?,?,?,?,?,1,?)''',
+        (uid, username, generate_password_hash(temp_pw),
+         data['name'], 'family', fid, 'family', now())
+    )
     db.commit()
-    return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone())), 201
+
+    fam = dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone())
+    fam['login_username'] = username
+    fam['login_temp_password'] = temp_pw
+    log.info(f'Family created: {data["name"]} — account: {username}')
+    return jsonify(fam), 201
 
 @app.route('/api/families/<fid>', methods=['GET'])
 @require_auth()

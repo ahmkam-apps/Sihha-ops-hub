@@ -1821,10 +1821,31 @@ async function saveFamily() {
     notes: document.getElementById('f-notes').value.trim()
   };
   try {
-    if (STATE.editId) await PUT('/families/' + STATE.editId, payload);
-    else await POST('/families', payload);
-    closeDrawer();
-    renderFamilies(STATE.filter);
+    if (STATE.editId) {
+      await PUT('/families/' + STATE.editId, payload);
+      closeDrawer();
+      renderFamilies(STATE.filter);
+    } else {
+      const res = await POST('/families', payload);
+      closeDrawer();
+      renderFamilies(STATE.filter);
+      // Show login credentials — auto-created alongside family record
+      if (res.login_username) {
+        setTimeout(() => {
+          openDrawer('Family Created — Login Credentials',
+            `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
+               Share these credentials with <strong>${res.name}</strong>. They will be asked to set a new password on first login.
+             </p>
+             <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-family:monospace;font-size:15px;line-height:2">
+               <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${res.login_username}</strong></div>
+               <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">TEMP PASSWORD</span><br><strong>${res.login_temp_password}</strong></div>
+             </div>
+             <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>`,
+            `<button class="btn" onclick="closeDrawer()">Done</button>`
+          );
+        }, 200);
+      }
+    }
   } catch(e) { showErr(e.message); }
 }
 
