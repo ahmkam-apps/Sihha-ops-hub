@@ -2989,20 +2989,31 @@ def create_food_item():
 @require_auth(roles=['admin'])
 def update_food_item(iid):
     db = get_db()
+    # Ensure price/allow_qty columns exist (safety net in case migration was missed)
+    for _col, _def in [('price', 'REAL NOT NULL DEFAULT 0'), ('allow_qty', 'INTEGER NOT NULL DEFAULT 0')]:
+        try:
+            db.execute(f'ALTER TABLE food_items ADD COLUMN {_col} {_def}')
+            db.commit()
+        except Exception:
+            pass
     row = db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
-    db.execute(
-        "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=?, price=?, allow_qty=? WHERE id=?",
-        (d.get('name', row['name']), d.get('unit', row['unit']),
-         d.get('is_active', row['is_active']), d.get('display_order', row['display_order']),
-         d.get('category_id', row['category_id']),
-         float(d['price'] or 0) if 'price' in d else float(row['price'] if 'price' in row.keys() else 0),
-         (1 if d['allow_qty'] else 0) if 'allow_qty' in d else int(row['allow_qty'] if 'allow_qty' in row.keys() else 0),
-         iid)
-    )
-    db.commit()
+    try:
+        price_val    = float(d['price'] or 0) if 'price' in d else float(row['price'] if 'price' in row.keys() else 0)
+        allow_qty_val= (1 if d['allow_qty'] else 0) if 'allow_qty' in d else int(row['allow_qty'] if 'allow_qty' in row.keys() else 0)
+        db.execute(
+            "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=?, price=?, allow_qty=? WHERE id=?",
+            (d.get('name', row['name']), d.get('unit', row['unit']),
+             d.get('is_active', row['is_active']), d.get('display_order', row['display_order']),
+             d.get('category_id', row['category_id']),
+             price_val, allow_qty_val, iid)
+        )
+        db.commit()
+    except Exception as e:
+        log.exception(f'update_food_item error: {e}')
+        return jsonify({'error': f'Save failed: {e}'}), 500
     return jsonify(dict(db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()))
 
 # ── Bundle Quantities ─────────────────────────────────────────────────────────
