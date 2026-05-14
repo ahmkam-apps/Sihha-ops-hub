@@ -1660,7 +1660,11 @@ async function renderFamilies(filter, search) {
                   ${r.status==='pending' ? `
                     <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
                     <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusFamily('${r.id}','inactive')">✗</button>
-                  ` : ''}
+                  ` : r.status==='active' ? `
+                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00" onclick="if(confirm('Deactivate this family?'))quickStatusFamily('${r.id}','inactive')">Deactivate</button>
+                  ` : `
+                    <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">Activate</button>
+                  `}
                   <button class="btn btn-sm btn-outline" style="margin-left:4px" title="Open family portal as this family" onclick="previewFamilyPortal('${r.id}')">👁 Preview</button>
                 </td>
               </tr>`).join('') :
@@ -2361,6 +2365,11 @@ async function renderVolunteers(filter, search) {
                   ` : `
                     <button class="btn btn-outline btn-sm" onclick="viewVolunteer('${r.id}')">View</button>
                     <button class="btn btn-sm" onclick="openVolunteerForm('${r.id}')" style="margin-left:4px">Edit</button>
+                    ${r.status==='active' ? `
+                      <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="if(confirm('Deactivate this volunteer?'))quickStatusVolunteer('${r.id}','inactive')">Deactivate</button>
+                    ` : `
+                      <button class="btn btn-sm" style="background:#1a8754;color:#fff;margin-left:4px" onclick="quickStatusVolunteer('${r.id}','active')">Activate</button>
+                    `}
                   `}
                 </td>
               </tr>`).join('') :
