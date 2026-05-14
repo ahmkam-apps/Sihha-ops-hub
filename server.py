@@ -1072,6 +1072,30 @@ def bootstrap_db():
         )
     ''')
 
+    # ── Migration: priced bundle selection ───────────────────────────────────────
+    # food_items: price per unit + allow_qty flag
+    for _col, _def in [('price', 'REAL NOT NULL DEFAULT 0'),
+                       ('allow_qty', 'INTEGER NOT NULL DEFAULT 0')]:
+        try:
+            conn.execute(f'ALTER TABLE food_items ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added food_items.{_col}')
+        except Exception:
+            pass
+
+    # bundle_size_rules: budget per bundle size
+    try:
+        conn.execute('ALTER TABLE bundle_size_rules ADD COLUMN budget REAL NOT NULL DEFAULT 0')
+        log.info('Migration: added bundle_size_rules.budget')
+    except Exception:
+        pass
+
+    # food_request_items: quantity per selected item
+    try:
+        conn.execute('ALTER TABLE food_request_items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1')
+        log.info('Migration: added food_request_items.quantity')
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
     final_size_kb = os.path.getsize(abs_db) / 1024
@@ -2938,10 +2962,12 @@ def create_food_item():
         (data['category_id'],)
     ).fetchone()[0]
     db.execute(
-        "INSERT INTO food_items (id, category_id, name, unit, is_active, display_order, created_at) VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO food_items (id, category_id, name, unit, is_active, display_order, created_at, price, allow_qty) VALUES (?,?,?,?,?,?,?,?,?)",
         (iid, data['category_id'], data['name'].strip(),
          data.get('unit', 'each'), data.get('is_active', 1),
-         data.get('display_order', max_order + 1), now())
+         data.get('display_order', max_order + 1), now(),
+         float(data.get('price', 0) or 0),
+         1 if data.get('allow_qty') else 0)
     )
     db.commit()
 
@@ -2968,10 +2994,13 @@ def update_food_item(iid):
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
     db.execute(
-        "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=? WHERE id=?",
+        "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=?, price=?, allow_qty=? WHERE id=?",
         (d.get('name', row['name']), d.get('unit', row['unit']),
          d.get('is_active', row['is_active']), d.get('display_order', row['display_order']),
-         d.get('category_id', row['category_id']), iid)
+         d.get('category_id', row['category_id']),
+         float(d['price']) if 'price' in d else (row['price'] if 'price' in row.keys() else 0),
+         (1 if d['allow_qty'] else 0) if 'allow_qty' in d else (row['allow_qty'] if 'allow_qty' in row.keys() else 0),
+         iid)
     )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()))
@@ -3037,10 +3066,12 @@ def update_bundle_size_rules():
     for item in items:
         db.execute(
             '''UPDATE bundle_size_rules
-               SET min_household=?, max_household=?, label=?
+               SET min_household=?, max_household=?, label=?, budget=?
                WHERE bundle_size=?''',
             (item.get('min_household'), item.get('max_household'),
-             item.get('label'), item.get('bundle_size'))
+             item.get('label'),
+             float(item['budget']) if 'budget' in item else 0,
+             item.get('bundle_size'))
         )
     db.commit()
     return jsonify([dict(r) for r in db.execute(
@@ -3463,42 +3494,26 @@ def get_cycle_shopping_list(cid):
     rows = db.execute(
         '''SELECT fi.id as item_id, fi.name as item_name, fi.unit,
                   fc.name as category, fc.display_order as cat_order, fi.display_order as item_order,
-                  fr.bundle_size,
-                  bq.quantity,
+                  SUM(COALESCE(fri.quantity, 1)) as total_qty,
                   COUNT(DISTINCT fr.id) as order_count
            FROM food_requests fr
            JOIN food_request_items fri ON fri.request_id = fr.id AND fri.selected = 1
            JOIN food_items fi ON fri.food_item_id = fi.id
            JOIN food_categories fc ON fi.category_id = fc.id
-           LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = fr.bundle_size
            WHERE fr.cycle_id=? AND fr.status = 'confirmed'
-           GROUP BY fi.id, fr.bundle_size
-           ORDER BY fc.display_order, fi.display_order, fr.bundle_size''',
+           GROUP BY fi.id
+           ORDER BY fc.display_order, fi.display_order''',
         (cid,)
     ).fetchall()
 
-    # Aggregate by item, summing across bundle sizes
-    from collections import defaultdict
-    items = defaultdict(lambda: {'category': '', 'unit': '', 'cat_order': 0, 'item_order': 0, 'breakdown': []})
-    for r in rows:
-        key = r['item_name']
-        items[key]['category'] = r['category']
-        items[key]['unit'] = r['unit']
-        items[key]['cat_order'] = r['cat_order']
-        items[key]['item_order'] = r['item_order']
-        items[key]['breakdown'].append({
-            'bundle_size': r['bundle_size'],
-            'quantity': r['quantity'],
-            'order_count': r['order_count']
-        })
-
     shopping_list = []
-    for name, info in sorted(items.items(), key=lambda x: (x[1]['cat_order'], x[1]['item_order'])):
+    for r in rows:
         shopping_list.append({
-            'item_name': name,
-            'category': info['category'],
-            'unit': info['unit'],
-            'breakdown': info['breakdown']
+            'item_name':   r['item_name'],
+            'category':    r['category'],
+            'unit':        r['unit'],
+            'total_qty':   r['total_qty'],
+            'order_count': r['order_count'],
         })
 
     cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()
@@ -4361,9 +4376,14 @@ def check_food_order_eligibility():
     all_cycles.sort(key=lambda r: r['delivery_date_start'])
 
     def _build_items_for_selection(bsize):
-        """Return bundle item list grouped by category for the order placement form."""
+        """Return bundle item list grouped by category for the order placement form.
+        NOTE: price is included for silent client-side budget math — never display it to families.
+        allow_qty controls whether +/- qty stepper is shown (vs simple checkbox).
+        """
         rows = db.execute(
             '''SELECT fi.id, fi.name, fi.unit,
+                      COALESCE(fi.price, 0) as price,
+                      COALESCE(fi.allow_qty, 0) as allow_qty,
                       fc.name as category, fc.display_order as cat_order,
                       COALESCE(bq.quantity,'') as quantity
                FROM food_items fi
@@ -4375,9 +4395,12 @@ def check_food_order_eligibility():
         ).fetchall()
         cats = {}
         for r in rows:
-            cats.setdefault(r['category'], []).append(
-                {'id': r['id'], 'name': r['name'], 'unit': r['unit'], 'quantity': r['quantity']}
-            )
+            cats.setdefault(r['category'], []).append({
+                'id': r['id'], 'name': r['name'], 'unit': r['unit'],
+                'quantity': r['quantity'],
+                'price': r['price'],          # used for budget math only — never shown
+                'allow_qty': r['allow_qty'],  # 1 = show +/- stepper; 0 = checkbox only
+            })
         return [{'category': k, 'items': v} for k, v in cats.items()]
 
     def _build_order_obj(existing, cycle):
@@ -4528,6 +4551,13 @@ def check_food_order_eligibility():
             (cycle['id'], family['id'])
         ).fetchone()
 
+        # Fetch budget for this family's bundle size (never expose to family UI — for internal use)
+        _budget_row = db.execute(
+            "SELECT COALESCE(budget, 0) as budget FROM bundle_size_rules WHERE bundle_size=?",
+            (bundle_size,)
+        ).fetchone()
+        _bundle_budget = float(_budget_row['budget']) if _budget_row else 0.0
+
         cycle_obj = {
             'id':                   cycle['id'],
             'title':                cycle['title'],
@@ -4537,6 +4567,7 @@ def check_food_order_eligibility():
             'order':                None,
             'can_place_order':      False,
             'items_for_selection':  [],
+            'bundle_budget':        _bundle_budget,  # used for silent client-side budget check
         }
 
         if existing:
@@ -4625,13 +4656,37 @@ def submit_food_order():
             (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts)
         )
 
-    # Save item selections
+    # Budget validation (server-side safety net)
+    # item_quantities: {item_id: qty} — provided when families use qty steppers
+    item_quantities = data.get('item_quantities', {})  # {item_id: int}
     selected_ids = set(data.get('selected_items', []))
+    if selected_ids:
+        budget_row = db.execute(
+            "SELECT COALESCE(budget, 0) as budget FROM bundle_size_rules WHERE bundle_size=?",
+            (bundle_size,)
+        ).fetchone()
+        bundle_budget = float(budget_row['budget']) if budget_row else 0.0
+        if bundle_budget > 0:
+            price_rows = db.execute(
+                "SELECT id, COALESCE(price, 0) as price FROM food_items WHERE id IN ({})".format(
+                    ','.join('?' * len(selected_ids))
+                ), list(selected_ids)
+            ).fetchall()
+            total_cost = sum(
+                float(r['price']) * max(1, int(item_quantities.get(r['id'], 1) or 1))
+                for r in price_rows
+            )
+            if total_cost > bundle_budget:
+                return jsonify({'error': 'Your selection exceeds your bundle limit. Please remove some items.'}), 422
+
+    # Save item selections with quantities
     all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
     for item in all_items:
+        is_selected = 1 if item['id'] in selected_ids else 0
+        qty = max(1, int(item_quantities.get(item['id'], 1) or 1)) if is_selected else 1
         db.execute(
-            "INSERT INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,?)",
-            (str(uuid.uuid4()), rid, item['id'], 1 if item['id'] in selected_ids else 0)
+            "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity) VALUES (?,?,?,?,?)",
+            (str(uuid.uuid4()), rid, item['id'], is_selected, qty)
         )
 
     # Ensure slots exist (safety net — should already be pre-created)
@@ -4652,18 +4707,18 @@ def submit_food_order():
     item_lines = []
     if claimed_slots:
         item_rows = db.execute(
-            '''SELECT fi.name, fi.unit, bq.quantity, fc.name as category
+            '''SELECT fi.name, fi.unit, COALESCE(fri.quantity, 1) as ord_qty, fc.name as category
                FROM food_request_items fri
                JOIN food_items fi ON fri.food_item_id = fi.id
                JOIN food_categories fc ON fi.category_id = fc.id
-               LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = ?
                WHERE fri.request_id = ? AND fri.selected = 1
                ORDER BY fc.display_order, fi.name''',
-            (bundle_size, rid)
+            (rid,)
         ).fetchall()
         for ir in item_rows:
-            qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
-            item_lines.append(f"  • {ir['name']}{(' — ' + qty_str) if qty_str else ''}")
+            qty_label = f"×{ir['ord_qty']}" if ir['ord_qty'] and ir['ord_qty'] > 1 else ''
+            unit_str = ir['unit'] or ''
+            item_lines.append(f"  • {ir['name']}{(' ' + qty_label) if qty_label else ''}{(' (' + unit_str + ')') if unit_str else ''}")
 
     # Update slot statuses to confirmed (DB only — no WA yet)
     for slot in claimed_slots:

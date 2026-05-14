@@ -4084,20 +4084,14 @@ async function viewShoppingList(cycleId) {
             </div>
             <table>
               <thead><tr>
-                <th>Item</th><th>Small Orders</th><th>Medium Orders</th><th>Large Orders</th>
+                <th>Item</th><th style="text-align:center">Total Qty</th><th style="text-align:center">Orders</th>
               </tr></thead>
               <tbody>
-                ${items.map(item => {
-                  const s = item.breakdown.find(b=>b.bundle_size==='S');
-                  const m = item.breakdown.find(b=>b.bundle_size==='M');
-                  const l = item.breakdown.find(b=>b.bundle_size==='L');
-                  return `<tr>
+                ${items.map(item => `<tr>
                     <td><strong>${item.item_name}</strong> <span style="color:var(--gray-4);font-size:11px">(${item.unit})</span></td>
-                    <td>${s ? `${s.quantity} × ${s.order_count} = <strong>${s.order_count} orders</strong>` : '—'}</td>
-                    <td>${m ? `${m.quantity} × ${m.order_count} = <strong>${m.order_count} orders</strong>` : '—'}</td>
-                    <td>${l ? `${l.quantity} × ${l.order_count} = <strong>${l.order_count} orders</strong>` : '—'}</td>
-                  </tr>`;
-                }).join('')}
+                    <td style="text-align:center;font-weight:700;font-size:15px">${item.total_qty}</td>
+                    <td style="text-align:center;color:var(--gray-4);font-size:12px">${item.order_count} order${item.order_count!==1?'s':''}</td>
+                  </tr>`).join('')}
               </tbody>
             </table>
           </div>`).join('')}`;
@@ -4331,8 +4325,21 @@ async function openItemForm(id, defaultCatId) {
         </select>
       </div>
     </div>
+    <div class="form-row" style="margin-top:12px;">
+      <div class="form-group">
+        <label>Price per Unit ($) <span style="font-size:11px;color:var(--gray-4);font-weight:400">— never shown to families</span></label>
+        <input type="number" id="item-price" min="0" step="0.01" placeholder="0.00" value="${item?.price != null ? item.price : ''}" style="text-align:center">
+      </div>
+      <div class="form-group">
+        <label>Allow Qty Adjustment</label>
+        <select id="item-allow-qty">
+          <option value="0" ${!item?.allow_qty?'selected':''}>No (select/deselect only)</option>
+          <option value="1" ${item?.allow_qty?'selected':''}>Yes (+/− stepper)</option>
+        </select>
+      </div>
+    </div>
     <div style="margin-top:12px;margin-bottom:4px">
-      <label style="font-size:12px;font-weight:600;color:var(--gray-5)">Quantity per Bundle Size</label>
+      <label style="font-size:12px;font-weight:600;color:var(--gray-5)">Reference Quantity per Bundle Size</label>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -4363,7 +4370,9 @@ async function saveItem() {
   const payload = {
     name, category_id: catId,
     unit: document.getElementById('item-unit').value.trim() || 'each',
-    is_active: parseInt(document.getElementById('item-active').value)
+    is_active: parseInt(document.getElementById('item-active').value),
+    price: parseFloat(document.getElementById('item-price').value) || 0,
+    allow_qty: parseInt(document.getElementById('item-allow-qty').value)
   };
   try {
     let itemId = STATE.editId;
@@ -4461,19 +4470,23 @@ async function openBundleRulesForm() {
   try { rules = await GET('/bundle-size-rules'); } catch(e) { alert(e.message); return; }
   openDrawer('Bundle Size Rules', `
     <p style="font-size:12px;color:var(--gray-4);margin-bottom:16px">
-      Set the household size ranges that determine which bundle size a family receives. Families never see these labels.
+      Set the household size ranges and budgets that determine which bundle a family receives. Families never see bundle sizes, labels, or budgets.
     </p>
     ${rules.map(r => `
       <div style="border:1px solid var(--gray-2);padding:14px;margin-bottom:12px">
         <div style="font-size:12px;font-weight:700;margin-bottom:10px">${r.label} (${r.bundle_size})</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
           <div class="form-group" style="margin:0">
-            <label>Min Household Size</label>
+            <label>Min Household</label>
             <input type="number" min="1" id="br-min-${r.bundle_size}" value="${r.min_household}">
           </div>
           <div class="form-group" style="margin:0">
-            <label>Max Household Size</label>
-            <input type="number" min="1" id="br-max-${r.bundle_size}" placeholder="Leave blank = no max" value="${r.max_household||''}">
+            <label>Max Household</label>
+            <input type="number" min="1" id="br-max-${r.bundle_size}" placeholder="No max" value="${r.max_household||''}">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Budget ($) <span style="font-size:10px;color:var(--gray-4)">hidden</span></label>
+            <input type="number" min="0" step="0.01" id="br-budget-${r.bundle_size}" placeholder="0.00" value="${r.budget||''}">
           </div>
         </div>
       </div>`).join('')}
@@ -4489,7 +4502,8 @@ async function saveBundleRules(sizes) {
     bundle_size: size,
     min_household: parseInt(document.getElementById('br-min-' + size)?.value)||1,
     max_household: parseInt(document.getElementById('br-max-' + size)?.value)||null,
-    label: size === 'S' ? 'Small' : size === 'M' ? 'Medium' : 'Large'
+    label: size === 'S' ? 'Small' : size === 'M' ? 'Medium' : 'Large',
+    budget: parseFloat(document.getElementById('br-budget-' + size)?.value)||0
   }));
   try {
     await fetch('/api/bundle-size-rules', {
