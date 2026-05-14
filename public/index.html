@@ -4401,7 +4401,10 @@ async function saveItem() {
       await PUT('/bundle-quantities', bqPayload).catch(() => {}); // non-fatal
     }
 
-    closeDrawer(); renderCatalog();
+    closeDrawer();
+    const cb = STATE._afterItemSave;
+    STATE._afterItemSave = null;
+    cb ? cb() : renderCatalog();
   } catch(e) { showErr(e.message); }
 }
 
@@ -4522,33 +4525,46 @@ async function saveBundleRules(sizes) {
 
 // ── Pricing Table ──────────────────────────────────────────────────────────────
 
+// Bundle qty cache for pricing table: { itemId_S: qty, itemId_M: qty, itemId_L: qty }
+let _ptBqMap = {};
+
 async function renderPricingTable() {
   document.getElementById('topbar-actions').innerHTML = `
-    <button class="btn btn-outline" onclick="renderCatalog()">← Back to Catalog</button>`;
+    <button class="btn btn-outline" onclick="renderCatalog()">← Back to Catalog</button>
+    <button class="btn" onclick="STATE._afterItemSave=renderPricingTable;openItemForm()">+ Add Item</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const [cats, items, rules] = await Promise.all([
-      GET('/food-categories'), GET('/food-items'), GET('/bundle-size-rules')
+    const [cats, items, rules, bqs] = await Promise.all([
+      GET('/food-categories'), GET('/food-items'), GET('/bundle-size-rules'), GET('/bundle-quantities')
     ]);
+    // Cache cats into global so openItemForm can use it
+    _catalogCats = cats;
+    _catalogItems = items;
+
     const catMap = {};
     cats.forEach(c => { catMap[c.id] = c.name; });
 
-    // Build bundle budget summary
+    // Build bundle qty lookup
+    _ptBqMap = {};
+    bqs.forEach(bq => { _ptBqMap[bq.food_item_id + '_' + bq.bundle_size] = bq.quantity; });
+
     const budgetSummary = rules.map(r =>
       `<span style="margin-right:16px"><strong>${r.label}:</strong> $${parseFloat(r.budget||0).toFixed(2)}</span>`
     ).join('');
+
+    const inputStyle = 'width:60px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px;text-align:center';
 
     document.getElementById('content').innerHTML = `
       <div style="margin-bottom:16px">
         <div style="font-size:12px;color:var(--gray-4);margin-bottom:6px">Bundle Budgets (families never see these)</div>
         <div style="font-size:13px;font-weight:600">${budgetSummary}
-          <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="openBundleRulesForm()">Edit</button>
+          <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="openBundleRulesForm()">Edit Budgets</button>
         </div>
       </div>
       <div class="table-card">
         <div class="table-header">
-          <span class="table-title">Item Price List</span>
-          <span style="font-size:12px;color:var(--gray-4)">${items.length} items — click any cell to edit, press Enter or Tab to save</span>
+          <span class="table-title">Items &amp; Bundle Assignments</span>
+          <span style="font-size:12px;color:var(--gray-4)">Qty 0 = not in that bundle · Enter/Tab to save row</span>
         </div>
         <table id="pricing-table">
           <thead><tr>
@@ -4556,43 +4572,59 @@ async function renderPricingTable() {
             <th>Category</th>
             <th>Unit</th>
             <th>Price ($)</th>
-            <th>Allow Qty</th>
+            <th title="Family can pick quantity">Adj Qty</th>
+            <th style="background:var(--gray-1);text-align:center">S qty</th>
+            <th style="background:var(--gray-1);text-align:center">M qty</th>
+            <th style="background:var(--gray-1);text-align:center">L qty</th>
             <th>Active</th>
             <th></th>
           </tr></thead>
           <tbody>
-            ${items.map(item => `
-              <tr id="pt-row-${item.id}" data-item-id="${item.id}">
+            ${items.map(item => {
+              const qS = _ptBqMap[item.id+'_S'] ?? 0;
+              const qM = _ptBqMap[item.id+'_M'] ?? 0;
+              const qL = _ptBqMap[item.id+'_L'] ?? 0;
+              return `
+              <tr id="pt-row-${item.id}">
                 <td><strong>${item.name}</strong></td>
                 <td style="font-size:12px;color:var(--gray-4)">${catMap[item.category_id]||'—'}</td>
                 <td>
-                  <input type="text" id="pt-unit-${item.id}"
-                    value="${item.unit||''}"
+                  <input type="text" id="pt-unit-${item.id}" value="${item.unit||''}"
                     style="width:90px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
                 <td>
-                  <input type="number" id="pt-price-${item.id}"
-                    value="${parseFloat(item.price||0).toFixed(2)}"
-                    min="0" step="0.01"
-                    style="width:80px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px"
+                  <input type="number" id="pt-price-${item.id}" value="${parseFloat(item.price||0).toFixed(2)}"
+                    min="0" step="0.01" style="width:75px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
                 <td style="text-align:center">
-                  <input type="checkbox" id="pt-aq-${item.id}"
-                    ${item.allow_qty ? 'checked' : ''}
-                    title="Family can adjust quantity">
+                  <input type="checkbox" id="pt-aq-${item.id}" ${item.allow_qty?'checked':''} title="Family can adjust qty">
+                </td>
+                <td style="background:var(--gray-1);text-align:center">
+                  <input type="number" id="pt-qS-${item.id}" value="${qS}" min="0"
+                    style="${inputStyle}" placeholder="0"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
+                </td>
+                <td style="background:var(--gray-1);text-align:center">
+                  <input type="number" id="pt-qM-${item.id}" value="${qM}" min="0"
+                    style="${inputStyle}" placeholder="0"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
+                </td>
+                <td style="background:var(--gray-1);text-align:center">
+                  <input type="number" id="pt-qL-${item.id}" value="${qL}" min="0"
+                    style="${inputStyle}" placeholder="0"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
                 <td style="text-align:center">
-                  <input type="checkbox" id="pt-active-${item.id}"
-                    ${item.is_active ? 'checked' : ''}>
+                  <input type="checkbox" id="pt-active-${item.id}" ${item.is_active?'checked':''}>
                 </td>
                 <td>
-                  <button class="btn btn-sm" id="pt-save-${item.id}"
-                    onclick="savePricingRow('${item.id}')">Save</button>
-                  <span id="pt-status-${item.id}" style="font-size:11px;color:var(--green);margin-left:6px;display:none">✓</span>
+                  <button class="btn btn-sm" id="pt-save-${item.id}" onclick="savePricingRow('${item.id}')">Save</button>
+                  <span id="pt-status-${item.id}" style="font-size:11px;color:var(--green);margin-left:4px;display:none">✓</span>
                 </td>
-              </tr>`).join('')}
+              </tr>`;
+            }).join('')}
           </tbody>
         </table>
       </div>`;
@@ -4602,35 +4634,41 @@ async function renderPricingTable() {
 }
 
 async function savePricingRow(itemId) {
-  const btn = document.getElementById('pt-save-' + itemId);
+  const btn    = document.getElementById('pt-save-'   + itemId);
   const status = document.getElementById('pt-status-' + itemId);
-  const unit     = document.getElementById('pt-unit-'   + itemId)?.value?.trim() || '';
-  const price    = parseFloat(document.getElementById('pt-price-'  + itemId)?.value) || 0;
-  const allowQty = document.getElementById('pt-aq-'     + itemId)?.checked ? 1 : 0;
-  const isActive = document.getElementById('pt-active-' + itemId)?.checked ? 1 : 0;
+  const unit     = document.getElementById('pt-unit-'  + itemId)?.value?.trim() || '';
+  const price    = parseFloat(document.getElementById('pt-price-' + itemId)?.value) || 0;
+  const allowQty = document.getElementById('pt-aq-'    + itemId)?.checked ? 1 : 0;
+  const isActive = document.getElementById('pt-active-'+ itemId)?.checked ? 1 : 0;
+  const qS       = parseInt(document.getElementById('pt-qS-' + itemId)?.value) || 0;
+  const qM       = parseInt(document.getElementById('pt-qM-' + itemId)?.value) || 0;
+  const qL       = parseInt(document.getElementById('pt-qL-' + itemId)?.value) || 0;
 
-  // Find full item data to pass required fields
   const item = _catalogItems.find(i => i.id === itemId);
   if (!item) return;
 
-  btn.disabled = true;
-  btn.textContent = '…';
+  btn.disabled = true; btn.textContent = '…';
   try {
+    // Save item price/unit/flags
     await PUT('/food-items/' + itemId, {
-      name:         item.name,
-      category_id:  item.category_id,
+      name: item.name, category_id: item.category_id,
       display_order: item.display_order,
       unit, price, allow_qty: allowQty, is_active: isActive
     });
-    // Update local cache
+    // Save bundle quantities (S/M/L)
+    await PUT('/bundle-quantities', [
+      { food_item_id: itemId, bundle_size: 'S', quantity: qS },
+      { food_item_id: itemId, bundle_size: 'M', quantity: qM },
+      { food_item_id: itemId, bundle_size: 'L', quantity: qL },
+    ]);
+    // Update local caches
     item.unit = unit; item.price = price; item.allow_qty = allowQty; item.is_active = isActive;
-    btn.textContent = 'Save';
-    btn.disabled = false;
+    _ptBqMap[itemId+'_S'] = qS; _ptBqMap[itemId+'_M'] = qM; _ptBqMap[itemId+'_L'] = qL;
+    btn.textContent = 'Save'; btn.disabled = false;
     status.style.display = 'inline';
     setTimeout(() => { status.style.display = 'none'; }, 2000);
   } catch(e) {
-    btn.textContent = 'Save';
-    btn.disabled = false;
+    btn.textContent = 'Save'; btn.disabled = false;
     alert('Save failed: ' + e.message);
   }
 }
