@@ -1287,3 +1287,108 @@ class TestFamilySessionAuth:
         """No Bearer token and no ?phone= → 401 (Authentication required)."""
         res = client.get('/api/food-order/check')
         assert res.status_code == 401
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 12 — FOOD CATALOG (price + allow_qty)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestFoodCatalog:
+    """Tests that price and allow_qty fields round-trip correctly through create + update."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth):
+        # Get a real seeded category id
+        res = client.get('/api/food-categories', headers=auth)
+        assert res.status_code == 200
+        cats = res.get_json()
+        assert cats, 'No seeded food categories found'
+        self.cat_id = cats[0]['id']
+        self.client = client
+        self.auth = auth
+
+    def _create_item(self, name='Test Item', price=0.0, allow_qty=0):
+        res = self.client.post('/api/food-items', headers=self.auth, json={
+            'name': name,
+            'category_id': self.cat_id,
+            'unit': 'each',
+            'price': price,
+            'allow_qty': allow_qty,
+        })
+        assert res.status_code == 201, f'Create failed: {res.data}'
+        return res.get_json()
+
+    def test_create_item_with_price(self):
+        item = self._create_item(name='Eggs', price=5.87)
+        assert item['price'] == pytest.approx(5.87)
+        assert item['allow_qty'] == 0
+
+    def test_create_item_with_allow_qty(self):
+        item = self._create_item(name='Apples', price=6.22, allow_qty=1)
+        assert item['price'] == pytest.approx(6.22)
+        assert item['allow_qty'] == 1
+
+    def test_create_item_zero_price_default(self):
+        item = self._create_item(name='Free Item')
+        assert item['price'] == pytest.approx(0.0)
+
+    def test_update_item_price(self):
+        item = self._create_item(name='Bananas', price=2.00)
+        iid = item['id']
+        res = self.client.put(f'/api/food-items/{iid}', headers=self.auth, json={
+            'name': 'Bananas', 'price': 2.16, 'allow_qty': 0,
+        })
+        assert res.status_code == 200, f'Update failed: {res.data}'
+        updated = res.get_json()
+        assert updated['price'] == pytest.approx(2.16), \
+            f'Expected price 2.16 but got {updated["price"]}'
+
+    def test_update_item_allow_qty_toggle(self):
+        item = self._create_item(name='Pasta', price=8.52, allow_qty=0)
+        iid = item['id']
+        # Toggle allow_qty on
+        res = self.client.put(f'/api/food-items/{iid}', headers=self.auth, json={
+            'name': 'Pasta', 'price': 8.52, 'allow_qty': 1,
+        })
+        assert res.status_code == 200
+        assert res.get_json()['allow_qty'] == 1
+        # Toggle allow_qty off
+        res = self.client.put(f'/api/food-items/{iid}', headers=self.auth, json={
+            'name': 'Pasta', 'price': 8.52, 'allow_qty': 0,
+        })
+        assert res.status_code == 200
+        assert res.get_json()['allow_qty'] == 0
+
+    def test_update_price_persists_in_list(self):
+        """Price set via PUT must be visible in GET /api/food-items."""
+        item = self._create_item(name='Red Potato', price=1.00)
+        iid = item['id']
+        self.client.put(f'/api/food-items/{iid}', headers=self.auth, json={
+            'name': 'Red Potato', 'price': 4.92, 'allow_qty': 1,
+        })
+        res = self.client.get('/api/food-items', headers=self.auth)
+        assert res.status_code == 200
+        items = res.get_json()
+        match = next((i for i in items if i['id'] == iid), None)
+        assert match is not None, 'Item not found in list'
+        assert match['price'] == pytest.approx(4.92), \
+            f'Price not persisted: expected 4.92, got {match["price"]}'
+        assert match['allow_qty'] == 1
+
+    def test_update_nonexistent_item_returns_404(self):
+        res = self.client.put('/api/food-items/nonexistent-id', headers=self.auth, json={
+            'name': 'Ghost', 'price': 1.0,
+        })
+        assert res.status_code == 404
+
+    def test_create_item_requires_auth(self):
+        res = self.client.post('/api/food-items', json={
+            'name': 'Unauthorized', 'category_id': self.cat_id,
+        })
+        assert res.status_code == 401
+
+    def test_create_item_missing_name_returns_422(self):
+        res = self.client.post('/api/food-items', headers=self.auth, json={
+            'category_id': self.cat_id,
+        })
+        assert res.status_code == 422
