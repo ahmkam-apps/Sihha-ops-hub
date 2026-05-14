@@ -1154,6 +1154,10 @@ def bootstrap_db():
             conn.execute("UPDATE bundle_size_rules SET budget=? WHERE bundle_size=?", (_bud, _sz))
             log.info(f'Bundle budget set: {_sz}=${_bud}')
 
+    # Ensure users CHECK constraint includes ALL roles (treasurer + family)
+    # Runs on every boot — idempotent, bails immediately if already correct
+    _ensure_treasurer_role(conn)
+
     conn.commit()
     conn.close()
     final_size_kb = os.path.getsize(abs_db) / 1024
@@ -1287,32 +1291,38 @@ def _validate_password(password):
     return True, ''
 
 def _ensure_treasurer_role(conn):
-    """Patch the users table CHECK constraint to include 'treasurer'.
+    """Patch the users table CHECK constraint to include all required roles.
     Uses PRAGMA writable_schema to update sqlite_master directly — no exclusive
     lock needed, safe with concurrent gunicorn workers in WAL mode."""
+    REQUIRED_ROLES = ('admin', 'volunteer', 'finance', 'treasurer', 'viewer', 'family')
+    FULL_CHECK = "CHECK(role IN ('admin','volunteer','finance','treasurer','viewer','family'))"
+
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
     ).fetchone()
-    if not row or 'treasurer' in row[0]:
-        return  # already migrated or table doesn't exist
+    if not row:
+        return  # table doesn't exist yet
 
-    log.info('_ensure_treasurer_role: patching CHECK constraint via writable_schema')
     old_sql = row[0]
-    # Replace the old CHECK list with one that includes treasurer
-    old_check = "'admin','volunteer','finance','viewer'"
-    new_check = "'admin','volunteer','finance','treasurer','viewer'"
-    if old_check in old_sql:
-        new_sql = old_sql.replace(old_check, new_check)
-    else:
-        # Fallback: try without spaces variant
-        old_check2 = "'admin', 'volunteer', 'finance', 'viewer'"
-        new_check2 = "'admin', 'volunteer', 'finance', 'treasurer', 'viewer'"
-        if old_check2 in old_sql:
-            new_sql = old_sql.replace(old_check2, new_check2)
-        else:
-            log.warning(f'_ensure_treasurer_role: unrecognised CHECK format, falling back to table recreation\nSQL: {old_sql}')
-            _recreate_users_table(conn)
-            return
+    # Check if ALL required roles are already present
+    if all(f"'{r}'" in old_sql for r in REQUIRED_ROLES):
+        return  # already fully migrated
+
+    log.info('_ensure_treasurer_role: patching CHECK constraint to include all roles')
+
+    # Try to find and replace any existing CHECK(...role IN...) fragment
+    import re as _re
+    new_sql = _re.sub(
+        r"CHECK\s*\(\s*role\s+IN\s*\([^)]+\)\s*\)",
+        FULL_CHECK,
+        old_sql,
+        flags=_re.IGNORECASE
+    )
+    if new_sql == old_sql:
+        # Regex didn't match — fall back to table recreation
+        log.warning(f'_ensure_treasurer_role: regex patch failed, falling back to recreation\nSQL: {old_sql}')
+        _recreate_users_table(conn)
+        return
 
     try:
         conn.execute('PRAGMA writable_schema = ON')
@@ -1320,7 +1330,6 @@ def _ensure_treasurer_role(conn):
             "UPDATE sqlite_master SET sql=? WHERE type='table' AND name='users'",
             (new_sql,)
         )
-        # Bump schema_version so all connections reparse the schema
         ver = conn.execute('PRAGMA schema_version').fetchone()[0]
         conn.execute(f'PRAGMA schema_version = {ver + 1}')
         conn.execute('PRAGMA writable_schema = OFF')
