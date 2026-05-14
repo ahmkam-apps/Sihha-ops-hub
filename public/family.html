@@ -637,6 +637,21 @@ async function _loadAndShow() {
       window.location.href = '/login';
       return;
     }
+    if (res.status === 403 && data.error === 'account_pending') {
+      // Family account exists but not yet approved by admin — show message, don't loop
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('login-screen') && (document.getElementById('login-screen').style.display = 'none');
+      document.body.innerHTML = `
+        <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;background:#f8f8f8">
+          <div style="max-width:360px;text-align:center;padding:40px 24px">
+            <div style="font-size:40px;margin-bottom:16px">⏳</div>
+            <h2 style="margin:0 0 12px;font-size:20px">Application Pending</h2>
+            <p style="color:#666;line-height:1.6;margin:0 0 24px">${data.message || 'Your account is pending approval. Please contact SIHAA.'}</p>
+            <a href="/login" style="color:#000;font-size:14px;text-decoration:underline">← Back to Login</a>
+          </div>
+        </div>`;
+      return;
+    }
     if (!data.registered) {
       window.location.href = '/login';
       return;

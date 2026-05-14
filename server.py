@@ -4460,10 +4460,13 @@ def check_food_order_eligibility():
         if not fam_session:
             return jsonify({'error': 'Session expired — please log in again'}), 401
         fam_row = db.execute(
-            "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
-            "FROM families WHERE id=? AND status='active'", (fam_session['family_id'],)
+            "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone, status "
+            "FROM families WHERE id=?", (fam_session['family_id'],)
         ).fetchone()
         if fam_row:
+            if fam_row['status'] != 'active':
+                return jsonify({'error': 'account_pending',
+                                'message': 'Your account is pending approval. Please contact SIHAA.'}), 403
             family = dict(fam_row)
 
     # --- Phone-based lookup (legacy / fallback) ---
