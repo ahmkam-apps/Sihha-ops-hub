@@ -4199,13 +4199,17 @@ async function renderCatalog() {
           </div>
           <table>
             <thead><tr>
-              <th>Item</th><th>Unit</th><th>Small</th><th>Medium</th><th>Large</th><th>Status</th><th></th>
+              <th>Item</th><th>Unit</th><th>Price</th><th>Qty Adj</th><th>Small</th><th>Medium</th><th>Large</th><th>Status</th><th></th>
             </tr></thead>
             <tbody>
               ${items.length ? items.map(item => {
+                const priceLabel = (item.price && item.price > 0) ? `$${parseFloat(item.price).toFixed(2)}` : '—';
+                const qtyLabel   = item.allow_qty ? '<span style="color:var(--green);font-weight:700">+/−</span>' : '—';
                 return `<tr>
                   <td><strong>${item.name}</strong></td>
                   <td style="font-size:12px;color:var(--gray-4)">${item.unit||'—'}</td>
+                  <td style="font-size:12px;font-weight:600">${priceLabel}</td>
+                  <td style="font-size:12px;text-align:center">${qtyLabel}</td>
                   <td style="font-size:12px" data-bq="${item.id}_S">—</td>
                   <td style="font-size:12px" data-bq="${item.id}_M">—</td>
                   <td style="font-size:12px" data-bq="${item.id}_L">—</td>
@@ -4213,7 +4217,7 @@ async function renderCatalog() {
                   <td><button class="btn btn-outline btn-sm" onclick="openItemForm('${item.id}')">Edit</button></td>
                 </tr>`;
               }).join('') :
-              '<tr class="empty-row"><td colspan="7">No items in this category</td></tr>'}
+              '<tr class="empty-row"><td colspan="9">No items in this category</td></tr>'}
             </tbody>
           </table>
         </div>`).join('')}

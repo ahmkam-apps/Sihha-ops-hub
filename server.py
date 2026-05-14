@@ -2998,8 +2998,8 @@ def update_food_item(iid):
         (d.get('name', row['name']), d.get('unit', row['unit']),
          d.get('is_active', row['is_active']), d.get('display_order', row['display_order']),
          d.get('category_id', row['category_id']),
-         float(d['price']) if 'price' in d else (row['price'] if 'price' in row.keys() else 0),
-         (1 if d['allow_qty'] else 0) if 'allow_qty' in d else (row['allow_qty'] if 'allow_qty' in row.keys() else 0),
+         float(d['price'] or 0) if 'price' in d else float(row['price'] if 'price' in row.keys() else 0),
+         (1 if d['allow_qty'] else 0) if 'allow_qty' in d else int(row['allow_qty'] if 'allow_qty' in row.keys() else 0),
          iid)
     )
     db.commit()
