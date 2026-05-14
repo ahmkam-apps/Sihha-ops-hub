@@ -2320,8 +2320,8 @@ def family_preview_token(fid):
     token = secrets.token_urlsafe(32)
     expires = (datetime.utcnow() + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S')
     db.execute(
-        "INSERT INTO sessions (id, user_id, token, created_at, expires_at) VALUES (?,?,?,?,?)",
-        (str(uuid.uuid4()), user_id, token, now(), expires)
+        "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
+        (token, user_id, expires, now())
     )
     db.commit()
     log.info(f'Admin preview token minted for family {fid} ({fam["name"]})')
