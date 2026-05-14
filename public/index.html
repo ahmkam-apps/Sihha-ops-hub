@@ -546,10 +546,14 @@
     </div>
 
     <div class="sidebar-nav">
-      <div class="nav-section">Operations</div>
       <div class="nav-item active" onclick="nav('dashboard')" id="nav-dashboard">
         <span class="icon">◈</span> Dashboard
       </div>
+      <div class="nav-item" onclick="nav('orders')" id="nav-orders">
+        <span class="icon">◳</span> Orders
+      </div>
+
+      <div class="nav-section">Operations</div>
       <div class="nav-item" onclick="nav('deliveries')" id="nav-deliveries">
         <span class="icon">↻</span> Deliveries
       </div>
@@ -568,12 +572,15 @@
         <span class="icon">♦</span> Donations
       </div>
 
-      <div class="nav-section" id="nav-section-admin" style="display:none">Settings</div>
-      <div class="nav-item" onclick="nav('catalog')" id="nav-catalog" style="display:none">
-        <span class="icon">☰</span> Food Catalog
-      </div>
+      <div class="nav-section" id="nav-section-admin" style="display:none">Administrator</div>
       <div class="nav-item" onclick="nav('users')" id="nav-users" style="display:none">
         <span class="icon">◉</span> Users
+      </div>
+      <div class="nav-item" onclick="nav('pricing')" id="nav-pricing" style="display:none">
+        <span class="icon">◫</span> Pricing Table
+      </div>
+      <div class="nav-item" onclick="nav('catalog')" id="nav-catalog" style="display:none">
+        <span class="icon">☰</span> Food Catalog
       </div>
 
       <div class="nav-section">Public Links</div>
@@ -693,6 +700,7 @@ function showApp() {
     document.getElementById('nav-section-admin').style.display = '';
     document.getElementById('nav-catalog').style.display = '';
     document.getElementById('nav-users').style.display = '';
+    document.getElementById('nav-pricing').style.display = '';
   }
   // Treasurer: show only Finance section
   if (STATE.user.role === 'treasurer') {
@@ -718,14 +726,15 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Navigation ────────────────────────────────────────────────────────────────
 function nav(page) {
   STATE.page = page; STATE.filter = 'all'; STATE.editId = null;
+  if (page !== 'orders') { STATE._ordersFilter = 'all'; STATE._ordersSearch = ''; STATE._ordersCycleId = null; }
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const navEl = document.getElementById('nav-' + page);
   if (navEl) navEl.classList.add('active');
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     payments: 'Payments', donations: 'Donations', users: 'Users',
-    deliveries: 'Deliveries', catalog: 'Food Catalog',
-    cycle_detail: 'Delivery Detail', orders: 'Food Orders',
+    deliveries: 'Deliveries', catalog: 'Food Catalog', pricing: 'Pricing Table',
+    cycle_detail: 'Delivery Detail', orders: 'Orders',
     requests: '📋 Change Requests'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -735,7 +744,7 @@ function nav(page) {
     volunteers: renderVolunteers,
     payments: renderPayments, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, catalog: renderCatalog,
-    orders: renderOrders, requests: renderRequests
+    pricing: renderPricingTable, orders: renderOrders, requests: renderRequests
   };
   if (renders[page]) renders[page]();
 }
@@ -2081,7 +2090,11 @@ async function viewFamily(id) {
           <span style="font-size:13px;font-weight:700;min-width:0;flex:1;">${o.cycle_title}</span>
           ${o.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);white-space:nowrap;">${fmtDate(o.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;white-space:nowrap;background:${sc.bg};color:${sc.color};">${sc.label}</span>
-          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;">${btns}
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;">
+            ${o.status !== 'delivered' && o.status !== 'cancelled' && o.status !== 'skipped' ? `
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;"
+                onclick="openEditOrderItems('${o.id}','${r.name}','${o.bundle_size||''}','${o.cycle_id}')">✏ Edit</button>` : ''}
+            ${btns}
             ${o.status !== 'delivered' ? `
               <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="adminCancelOrder('${fid}','${o.cycle_id}','${r.name}')">✕ Cancel</button>
               <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
@@ -3531,120 +3544,115 @@ async function saveUser() {
 // ── Food Orders ───────────────────────────────────────────────────────────────
 
 async function renderOrders() {
+  document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
-
   try {
     const cycles = await GET('/delivery-cycles');
-    const defaultCycle = cycles.find(c => c.status === 'shopping')
-                      || cycles.find(c => c.status === 'open')
-                      || cycles.find(c => c.status === 'upcoming') || cycles[0];
-    const defaultCycleId = defaultCycle ? defaultCycle.id : null;
+    const defaultCycle = cycles.find(c => c.status === 'open')
+                      || cycles.find(c => c.status === 'shopping')
+                      || cycles[0];
+    STATE._ordersCycleId = STATE._ordersCycleId || (defaultCycle ? defaultCycle.id : null);
+    STATE._ordersFilter  = STATE._ordersFilter  || 'all';
+    STATE._ordersSearch  = STATE._ordersSearch  || '';
 
-    const cycleOptions = cycles.length
-      ? cycles.map(c =>
-          `<option value="${c.id}" ${c.id === defaultCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
-        ).join('')
-      : '<option value="">No deliveries yet</option>';
-
-    document.getElementById('topbar-actions').innerHTML =
-      `<button class="btn" onclick="window.open('/order','_blank')">⇗ Family Order Form</button>`;
+    const cycleOptions = cycles.map(c =>
+      `<option value="${c.id}" ${c.id === STATE._ordersCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
+    ).join('');
 
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header">
-          <span class="table-title">Food Orders</span>
+          <span class="table-title">Orders</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <select id="orders-cycle-select" class="search-input" style="min-width:240px;"
-                    onchange="loadOrdersForCycle(this.value)">
-              <option value="">— Select a delivery —</option>
+            <select id="orders-cycle-sel" class="search-input" style="min-width:220px;"
+                    onchange="STATE._ordersCycleId=this.value;loadOrders()">
               ${cycleOptions}
             </select>
-            <button class="btn" id="gen-slots-btn" onclick="generateSlotsForSelected()" style="display:none;">
-              Generate Slots
-            </button>
+            <input class="search-input" id="orders-search" placeholder="Search family…" value="${STATE._ordersSearch}"
+                   oninput="STATE._ordersSearch=this.value;loadOrders()">
           </div>
         </div>
-        <div id="orders-table-wrap">
-          <p style="padding:24px;color:var(--gray-4);">Select a delivery above to view orders.</p>
+        <div style="padding:4px 16px 10px;display:flex;gap:6px;flex-wrap:wrap;">
+          ${['all','confirmed','submitted','no_order'].map(f =>
+            `<div class="filter-tab ${STATE._ordersFilter===f?'active':''}" id="otab-${f}"
+              onclick="STATE._ordersFilter='${f}';document.querySelectorAll('[id^=otab-]').forEach(el=>el.classList.remove('active'));document.getElementById('otab-${f}').classList.add('active');loadOrders()">
+              ${f==='no_order'?'No Order':f.charAt(0).toUpperCase()+f.slice(1)}</div>`
+          ).join('')}
         </div>
+        <div id="orders-body"><p style="padding:24px;color:var(--gray-4);">Loading…</p></div>
       </div>`;
 
-    if (defaultCycleId) loadOrdersForCycle(defaultCycleId);
+    if (STATE._ordersCycleId) loadOrders();
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
 }
 
-async function loadOrdersForCycle(cycleId) {
-  const wrap = document.getElementById('orders-table-wrap');
-  const genBtn = document.getElementById('gen-slots-btn');
-  if (!cycleId) { wrap.innerHTML = ''; if(genBtn) genBtn.style.display='none'; return; }
+async function loadOrders() {
+  const body = document.getElementById('orders-body');
+  if (!body) return;
+  body.innerHTML = '<p style="padding:16px;color:var(--gray-4);">Loading…</p>';
+  const cycleId = STATE._ordersCycleId;
+  const filter  = STATE._ordersFilter || 'all';
+  const search  = STATE._ordersSearch || '';
+  if (!cycleId) { body.innerHTML = '<p style="padding:24px;color:var(--gray-4);">Select a cycle.</p>'; return; }
+  try {
+    let url = `/orders?cycle_id=${cycleId}&status=${filter}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    const rows = await GET(url);
 
-  wrap.innerHTML = '<p style="padding:16px;color:var(--gray-4);">Loading…</p>';
+    if (rows.length === 0) {
+      body.innerHTML = `<p style="padding:32px;text-align:center;color:var(--gray-4);">${filter==='no_order'?'All active families have placed orders.':'No orders found.'}</p>`;
+      return;
+    }
 
-  const [orders, slots] = await Promise.all([
-    GET('/delivery-cycles/' + cycleId + '/orders'),
-    GET('/volunteer-slots?cycle_id=' + cycleId)
-  ]);
+    const bundleLabel = {S:'Small',M:'Medium',L:'Large'};
+    const statusStyle = {
+      confirmed:'background:#e8f5e9;color:#1a5e34', auto_confirmed:'background:#e8f5e9;color:#1a5e34',
+      submitted:'background:#fff8e1;color:#7a5200', skipped:'background:var(--gray-1);color:var(--gray-4)',
+      pending_confirmation:'background:#e8f0ff;color:#3a3a9a', delivered:'background:#e3f2fd;color:#0d47a1',
+      cancelled:'background:#fdecea;color:#c00', no_order:'background:#fff3e0;color:#8a4000'
+    };
+    const statusLabel = s => s==='auto_confirmed'?'Confirmed':s==='no_order'?'No Order':s==='pending_confirmation'?'Awaiting':s;
 
-  // Show Generate Slots button when slots haven't been made yet
-  if (genBtn) genBtn.style.display = slots.length === 0 && orders.length > 0 ? '' : 'none';
+    const html = rows.map(o => {
+      const sStyle = statusStyle[o.status] || '';
+      const items  = o.items && o.items.length
+        ? `<span style="font-size:11px;color:var(--gray-5);">${o.items.slice(0,3).join(', ')}${o.items.length>3?` +${o.items.length-3}`:''}</span>`
+        : `<span style="color:var(--gray-3);font-size:11px;">—</span>`;
+      const safeName = (o.family_name||'').replace(/'/g,"\\'");
+      const actions = o.status === 'no_order' ? `
+        <button class="btn btn-sm" style="background:#1a8754;color:#fff;font-size:11px;"
+          onclick="manualConfirmFamily('${o.id}','${safeName}')">＋ Add to Cycle</button>` : `
+        ${o.id?`<button class="btn btn-sm btn-outline" style="font-size:11px;"
+          onclick="openEditOrderItems('${o.id}','${safeName}','${o.bundle_size||''}','${cycleId}')">✏ Edit</button>`:''}
+        ${(o.status==='submitted'||o.status==='pending_confirmation')?`<button class="btn btn-sm" style="background:#1a8754;color:#fff;font-size:11px;margin-left:4px;"
+          onclick="overrideFoodRequest('${o.id}','confirmed','${cycleId}','${o.family_id}')">✓</button>`:''}
+        ${(o.status==='confirmed'||o.status==='auto_confirmed')?`<button class="btn btn-sm btn-outline" style="font-size:11px;margin-left:4px;"
+          onclick="overrideFoodRequest('${o.id}','skipped','${cycleId}','${o.family_id}')">Skip</button>`:''}
+        <button class="btn btn-sm btn-outline" style="font-size:11px;margin-left:4px;" title="Preview portal"
+          onclick="previewFamilyPortal('${o.family_id}')">👁</button>`;
+      return `<tr>
+        <td><strong>${o.family_name}</strong><br><span style="font-family:monospace;font-size:11px;color:var(--gray-4)">${o.family_code||''}</span></td>
+        <td style="font-size:12px;font-weight:700;">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
+        <td><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;${sStyle}">${statusLabel(o.status)}</span></td>
+        <td>${items}</td>
+        <td style="font-size:12px;">${o.shopper||'<span style="color:var(--gray-3)">—</span>'}</td>
+        <td style="font-size:12px;">${o.deliverer||'<span style="color:var(--gray-3)">—</span>'}</td>
+        <td style="white-space:nowrap">${actions}</td>
+      </tr>`;
+    }).join('');
 
-  const slotMap = {};
-  slots.forEach(s => {
-    if (!slotMap[s.family_id]) slotMap[s.family_id] = {};
-    slotMap[s.family_id][s.task_type] = s;
-  });
-
-  const statusBadge = s => {
-    const map = { submitted:'#2e86c1', assigned:'#1a8754', delivered:'#155724', cancelled:'#c0392b' };
-    return `<span class="badge" style="background:${map[s]||'#888'};color:#fff;border:none;">${s}</span>`;
-  };
-
-  const slotBadge = slot => {
-    if (!slot) return `<span style="color:#bbb;font-size:12px;">no slot</span>`;
-    const colors = { open:'#e0a800', claimed:'#1a8754', complete:'#155724', cancelled:'#c0392b' };
-    const label = (slot.status === 'claimed' || slot.status === 'complete')
-      ? `${slot.claimed_by_name || '?'}`
-      : slot.status;
-    return `<span class="badge" style="background:${colors[slot.status]||'#888'};color:#fff;border:none;font-size:11px;" title="${slot.status}">${label}</span>`;
-  };
-
-  if (orders.length === 0) {
-    wrap.innerHTML = `
-      <div style="padding:32px;text-align:center;color:var(--gray-4);">
-        No orders for this delivery yet.<br>
-        <a href="/family" target="_blank" style="color:#1a3a2a;font-weight:600;">Open the family order portal →</a>
-      </div>`;
-    return;
+    body.innerHTML = `
+      <table>
+        <thead><tr><th>Family</th><th>Bundle</th><th>Status</th><th>Items</th><th>Shopper</th><th>Deliverer</th><th></th></tr></thead>
+        <tbody>${html}</tbody>
+      </table>
+      <div style="padding:10px 16px;font-size:12px;color:var(--gray-4);border-top:1px solid var(--gray-2);">
+        ${rows.length} ${filter==='no_order'?'families without orders':'orders'}</div>`;
+  } catch(e) {
+    body.innerHTML = `<p style="padding:16px;color:#c00">${e.message}</p>`;
   }
-
-  const rows = orders.map(o => {
-    const shop = slotMap[o.family_id]?.shopping;
-    const del  = slotMap[o.family_id]?.delivery;
-    return `<tr>
-      <td><span style="font-family:monospace;font-weight:700;font-size:13px">${o.family_code||'—'}</span></td>
-      <td style="color:var(--gray-4);">${o.family_size || '—'}</td>
-      <td><span class="badge">${o.bundle_size}</span></td>
-      <td>${statusBadge(o.status)}</td>
-      <td>${slotBadge(shop)}</td>
-      <td>${slotBadge(del)}</td>
-    </tr>`;
-  }).join('');
-
-  wrap.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Family ID</th><th>Size</th><th>Bundle</th>
-          <th>Status</th><th>Shopper</th><th>Delivery</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div style="padding:12px 16px;font-size:12px;color:var(--gray-4);border-top:1px solid var(--gray-2);">
-      ${orders.length} order${orders.length !== 1 ? 's' : ''} · ${slots.length} slots generated
-    </div>`;
 }
 
 async function generateSlotsForSelected() {

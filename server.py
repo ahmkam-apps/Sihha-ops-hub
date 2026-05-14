@@ -3486,6 +3486,90 @@ def update_delivery_cycle(cid):
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()))
 
+@app.route('/api/orders', methods=['GET'])
+@require_auth()
+def get_orders():
+    """Orders module: returns orders for a cycle enriched with volunteer slot info.
+    Supports status=no_order to return active families without an order."""
+    db        = get_db()
+    cycle_id  = request.args.get('cycle_id')
+    status_f  = request.args.get('status', 'all')
+    search    = (request.args.get('search') or '').strip().lower()
+
+    if not cycle_id:
+        row = db.execute(
+            "SELECT id FROM delivery_cycles WHERE status IN ('open','shopping') "
+            "ORDER BY delivery_date_start LIMIT 1"
+        ).fetchone()
+        if not row:
+            row = db.execute(
+                "SELECT id FROM delivery_cycles ORDER BY delivery_date_start DESC LIMIT 1"
+            ).fetchone()
+        cycle_id = row['id'] if row else None
+    if not cycle_id:
+        return jsonify([])
+
+    if status_f == 'no_order':
+        ordered_ids = {r['family_id'] for r in db.execute(
+            "SELECT family_id FROM food_requests WHERE cycle_id=?", (cycle_id,)
+        ).fetchall()}
+        families = db.execute(
+            "SELECT id, name, family_code, bundle_size FROM families "
+            "WHERE status='active' ORDER BY name"
+        ).fetchall()
+        result = []
+        for f in families:
+            if f['id'] in ordered_ids:
+                continue
+            if search and search not in f['name'].lower() and search not in (f['family_code'] or '').lower():
+                continue
+            result.append({**dict(f), 'status': 'no_order', 'items': [],
+                           'shopper': None, 'deliverer': None, 'request_id': None})
+        return jsonify(result)
+
+    orders = db.execute(
+        '''SELECT fr.id, fr.status, fr.bundle_size, fr.family_id, fr.cycle_id,
+                  f.name as family_name, f.family_code
+           FROM food_requests fr
+           JOIN families f ON fr.family_id = f.id
+           WHERE fr.cycle_id=? ORDER BY f.name''', (cycle_id,)
+    ).fetchall()
+
+    slots = db.execute(
+        '''SELECT vs.family_id, vs.task_type, v.name as vol_name
+           FROM volunteer_slots vs
+           LEFT JOIN volunteers v ON vs.claimed_by = v.id
+           WHERE vs.cycle_id=? AND vs.status IN ('claimed','confirmed','complete')''',
+        (cycle_id,)
+    ).fetchall()
+    slot_map = {}
+    for s in slots:
+        fid = s['family_id']
+        if fid not in slot_map:
+            slot_map[fid] = {}
+        slot_map[fid][s['task_type']] = s['vol_name']
+
+    result = []
+    for order in orders:
+        o = dict(order)
+        if status_f != 'all' and o['status'] != status_f:
+            continue
+        if search and search not in o['family_name'].lower() and search not in (o['family_code'] or '').lower():
+            continue
+        items = db.execute(
+            '''SELECT fi.name FROM food_request_items fri
+               JOIN food_items fi ON fri.food_item_id = fi.id
+               WHERE fri.request_id=? AND fri.selected=1
+               ORDER BY fi.display_order''', (o['id'],)
+        ).fetchall()
+        o['items'] = [i['name'] for i in items]
+        fam_slots     = slot_map.get(o['family_id'], {})
+        o['shopper']  = fam_slots.get('shopping')
+        o['deliverer']= fam_slots.get('delivery')
+        result.append(o)
+    return jsonify(result)
+
+
 @app.route('/api/delivery-cycles/<cid>/orders', methods=['GET'])
 @require_auth()
 def get_cycle_orders(cid):
