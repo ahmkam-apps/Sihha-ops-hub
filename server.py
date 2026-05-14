@@ -2320,10 +2320,10 @@ def family_preview_token(fid):
     user = db.execute(
         "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
     ).fetchone()
+    import hashlib, secrets
     if not user:
         # Auto-create a family user if none exists
         uid = str(uuid.uuid4())
-        import hashlib, secrets
         tmp_hash = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
         db.execute(
             "INSERT INTO users (id, username, password_hash, name, role, active, linked_id, created_at) "
