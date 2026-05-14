@@ -724,8 +724,8 @@ def bootstrap_db():
 
     # ── Phase 5 migrations: family phone fields + food_request confirmation ───────
 
-    # Add wa_phone / wa_apikey to families (for confirmation messages)
-    for _col in ['wa_phone', 'wa_apikey']:
+    # Add wa_phone / wa_apikey / email to families
+    for _col in ['wa_phone', 'wa_apikey', 'email']:
         try:
             conn.execute(f'ALTER TABLE families ADD COLUMN {_col} TEXT')
             log.info(f'Migration: added {_col} to families')
@@ -2246,16 +2246,17 @@ def create_family():
     fid = str(uuid.uuid4())
     db = get_db()
     family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
+    family_email = (data.get('email') or '').strip() or None
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
-            dietary_notes,frequency,income_range,status,notes,source,family_code,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            dietary_notes,frequency,income_range,status,notes,source,family_code,email,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (fid, data['name'], phone, data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
          data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'),
-         family_code, now())
+         family_code, family_email, now())
     )
 
     # Auto-create login account for the family
@@ -2282,6 +2283,23 @@ def create_family():
     fam['login_username'] = username
     fam['login_temp_password'] = temp_pw
     log.info(f'Family created: {data["name"]} — account: {username}')
+
+    # Send credentials email if email provided
+    email_sent = False
+    if family_email:
+        email_body = (
+            f"Welcome to the Sihha Food Program!\n\n"
+            f"Your account has been created. Use the credentials below to log in:\n\n"
+            f"  Login URL:  https://ops.sihha.org/login\n"
+            f"  Username:   {username}\n"
+            f"  Password:   {temp_pw}\n\n"
+            f"You will be asked to set a new password after your first login.\n\n"
+            f"If you have any questions, please contact us.\n\n"
+            f"— Sihha Food Program"
+        )
+        email_sent = _email_send(family_email, 'Your Sihha Food Program Login', email_body)
+    fam['email_sent'] = email_sent
+
     return jsonify(fam), 201
 
 @app.route('/api/families/<fid>', methods=['GET'])
