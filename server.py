@@ -2257,6 +2257,43 @@ def get_family(fid):
     row = get_db().execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
     return (jsonify(dict(row)) if row else (jsonify({'error': 'Not found'}), 404))
 
+@app.route('/api/families/<fid>/preview-token', methods=['POST'])
+@require_auth(roles=['admin'])
+def family_preview_token(fid):
+    """Admin-only: mint a short-lived (2h) family session token for portal testing."""
+    db = get_db()
+    fam = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+    if not fam:
+        return jsonify({'error': 'Family not found'}), 404
+    # Find or create the family's user account
+    user = db.execute(
+        "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
+    ).fetchone()
+    if not user:
+        # Auto-create a family user if none exists
+        uid = str(uuid.uuid4())
+        import hashlib, secrets
+        tmp_hash = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+        db.execute(
+            "INSERT INTO users (id, username, password_hash, name, role, active, linked_id, created_at) "
+            "VALUES (?,?,?,?,?,1,?,?)",
+            (uid, f'family_{fam["family_code"]}', tmp_hash, fam['name'], 'family', fid, now())
+        )
+        db.commit()
+        user_id = uid
+    else:
+        user_id = user['id']
+    # Create a 2-hour preview session
+    token = secrets.token_urlsafe(32)
+    expires = (datetime.utcnow() + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S')
+    db.execute(
+        "INSERT INTO sessions (id, user_id, token, created_at, expires_at) VALUES (?,?,?,?,?)",
+        (str(uuid.uuid4()), user_id, token, now(), expires)
+    )
+    db.commit()
+    log.info(f'Admin preview token minted for family {fid} ({fam["name"]})')
+    return jsonify({'token': token, 'family_name': fam['name'], 'expires_at': expires})
+
 @app.route('/api/families/<fid>', methods=['PUT'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_family(fid):

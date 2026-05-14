@@ -1661,6 +1661,7 @@ async function renderFamilies(filter, search) {
                     <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
                     <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusFamily('${r.id}','inactive')">✗</button>
                   ` : ''}
+                  <button class="btn btn-sm btn-outline" style="margin-left:4px" title="Open family portal as this family" onclick="previewFamilyPortal('${r.id}')">👁 Preview</button>
                 </td>
               </tr>`).join('') :
               `<tr class="empty-row"><td colspan="${colCount}">No families found</td></tr>`}
@@ -1685,6 +1686,20 @@ async function quickStatusFamily(id, status) {
   } catch(e) {
     if (row) row.style.opacity = '1';
     alert(e.message);
+  }
+}
+
+async function previewFamilyPortal(familyId) {
+  try {
+    const res = await fetch('/api/families/' + familyId + '/preview-token', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed'); }
+    const { token } = await res.json();
+    window.open('/family?preview_token=' + encodeURIComponent(token), '_blank');
+  } catch(e) {
+    alert('Could not open preview: ' + e.message);
   }
 }
 

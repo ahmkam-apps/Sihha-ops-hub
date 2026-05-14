@@ -594,6 +594,20 @@ const EVENT_LABELS = {
 };
 
 // ── Auth (session-based) ──────────────────────────────────────────────────────
+
+// Admin preview: ?preview_token=<token> injects a short-lived family session
+(function checkPreviewToken() {
+  const params = new URLSearchParams(window.location.search);
+  const pt = params.get('preview_token');
+  if (pt) {
+    localStorage.setItem('familyToken', pt);
+    localStorage.setItem('familyUser', JSON.stringify({ preview: true }));
+    // Remove token from URL bar (clean up)
+    const clean = window.location.pathname;
+    window.history.replaceState({}, '', clean);
+  }
+})();
+
 let _familyToken = localStorage.getItem('familyToken');
 let _familyUser  = JSON.parse(localStorage.getItem('familyUser') || 'null');
 
@@ -734,6 +748,13 @@ function doLogout() {
   window.location.href = '/login';
 }
 
+function closeFamilyPreview() {
+  localStorage.removeItem('familyToken');
+  localStorage.removeItem('familyUser');
+  window.close(); // close the tab; fallback to admin page
+  setTimeout(() => { window.location.href = '/'; }, 300);
+}
+
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   STATE.activeTab = tab;
@@ -747,6 +768,19 @@ function switchTab(tab) {
 function renderAll() {
   const L = currentLang;
   document.getElementById('family-name-display').textContent = STATE.family || '';
+  // Show admin preview banner if applicable
+  const isPreview = _familyUser && _familyUser.preview;
+  let banner = document.getElementById('admin-preview-banner');
+  if (isPreview) {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'admin-preview-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f0a500;color:#000;text-align:center;padding:6px 12px;font-size:13px;font-weight:700;';
+      banner.innerHTML = '🔑 Admin Preview Mode — viewing as family. <a href="javascript:void(0)" onclick="closeFamilyPreview()" style="color:#000;text-decoration:underline;margin-left:12px">Close Preview</a>';
+      document.body.prepend(banner);
+      document.body.style.paddingTop = '34px';
+    }
+  }
   document.querySelectorAll('[data-en]').forEach(el => {
     el.textContent = el.getAttribute('data-' + L) || el.getAttribute('data-en');
   });
