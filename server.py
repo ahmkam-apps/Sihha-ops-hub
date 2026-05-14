@@ -3495,6 +3495,62 @@ def update_food_request_status(rid):
     return jsonify(dict(db.execute("SELECT * FROM food_requests WHERE id=?", (rid,)).fetchone()))
 
 
+@app.route('/api/food-requests/<rid>/items', methods=['PUT'])
+@require_auth(roles=['admin'])
+def admin_edit_order_items(rid):
+    """Admin replaces the item list for any food request.
+    Body: [{ food_item_id, quantity }]  — only selected items (qty >= 1).
+    Deselects everything first, then marks supplied items as selected with qty.
+    """
+    db  = get_db()
+    row = db.execute("SELECT * FROM food_requests WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    items = request.json
+    if not isinstance(items, list):
+        return jsonify({'error': 'Expected array of {food_item_id, quantity}'}), 422
+
+    # Deselect all existing items for this request
+    db.execute("UPDATE food_request_items SET selected=0, quantity=1 WHERE request_id=?", (rid,))
+
+    for item in items:
+        iid = item.get('food_item_id')
+        qty = max(1, int(item.get('quantity') or 1))
+        if not iid:
+            continue
+        # Upsert: update if exists, insert if not
+        existing = db.execute(
+            "SELECT id FROM food_request_items WHERE request_id=? AND food_item_id=?",
+            (rid, iid)
+        ).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE food_request_items SET selected=1, quantity=? WHERE request_id=? AND food_item_id=?",
+                (qty, rid, iid)
+            )
+        else:
+            db.execute(
+                "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity) VALUES (?,?,?,1,?)",
+                (str(uuid.uuid4()), rid, iid, qty)
+            )
+
+    _log_order_event(db, rid, 'admin_edit_items', actor='admin',
+                     payload={'item_count': len(items)})
+    db.commit()
+
+    # Return updated item list
+    updated = db.execute(
+        '''SELECT fri.*, fi.name, fi.unit, fi.price, fc.name as category
+           FROM food_request_items fri
+           JOIN food_items fi ON fri.food_item_id = fi.id
+           JOIN food_categories fc ON fi.category_id = fc.id
+           WHERE fri.request_id=? AND fri.selected=1
+           ORDER BY fc.display_order, fi.display_order''',
+        (rid,)
+    ).fetchall()
+    return jsonify([dict(i) for i in updated])
+
+
 @app.route('/api/families/<fid>/manual-confirm', methods=['POST'])
 @require_auth(roles=['admin'])
 def manual_confirm_family(fid):

@@ -3855,7 +3855,7 @@ async function viewCycleDetail(cycleId) {
         <div class="table-header"><span class="table-title">Family Responses</span></div>
         <table>
           <thead><tr>
-            <th>Family</th><th>Phone</th><th>Bundle</th><th>Response</th><th>Items</th><th>Override</th>
+            <th>Family</th><th>Phone</th><th>Bundle</th><th>Response</th><th>Items</th><th>Override</th><th></th>
           </tr></thead>
           <tbody>
             ${orders.length ? orders.map(o => `
@@ -3865,11 +3865,15 @@ async function viewCycleDetail(cycleId) {
                 <td style="font-size:12px">${{S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size}</td>
                 <td>${confStatusBadge(o)}</td>
                 <td style="font-size:11px;color:var(--gray-4);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                  ${o.status==='confirmed' && o.selected_items.length ? o.selected_items.map(i=>i.name).join(', ') : '—'}
+                  ${o.selected_items?.length ? o.selected_items.map(i=>`${i.name}${i.quantity>1?' ×'+i.quantity:''}`).join(', ') : '—'}
                 </td>
                 <td style="white-space:nowrap">${overrideBtns(o)}</td>
+                <td style="white-space:nowrap">
+                  <button class="btn btn-sm btn-outline" style="font-size:11px;padding:2px 8px"
+                    onclick="openEditOrderItems('${o.id}','${o.family_name}','${o.bundle_size}','${cycleId}')">✏ Items</button>
+                </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="6">No families notified yet — notifications send 7 days before delivery</td></tr>'}
+              '<tr class="empty-row"><td colspan="7">No families notified yet — notifications send 7 days before delivery</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -3946,6 +3950,128 @@ async function overrideFoodRequest(requestId, newStatus, cycleId, fromFamilyId) 
     if (fromFamilyId) viewFamily(fromFamilyId);
     else viewCycleDetail(cycleId);
   } catch(e) { alert('Failed to update: ' + e.message); }
+}
+
+async function openEditOrderItems(requestId, familyName, bundleSize, cycleId) {
+  // Load catalog + current order items in parallel
+  let cats, allItems, bundleRules, orderItems;
+  try {
+    [cats, allItems, bundleRules] = await Promise.all([
+      GET('/food-categories'), GET('/food-items'), GET('/bundle-size-rules')
+    ]);
+    // Get current selected items from the cycle orders cache
+    const orders = await GET('/delivery-cycles/' + cycleId + '/orders');
+    const order  = orders.find(o => o.id === requestId);
+    orderItems   = order?.selected_items || [];
+  } catch(e) { alert('Could not load order data: ' + e.message); return; }
+
+  const budget   = bundleRules.find(r => r.bundle_size === bundleSize)?.budget || 0;
+  const bundleLabel = {S:'Small',M:'Medium',L:'Large'}[bundleSize] || bundleSize;
+
+  // Build lookup of currently selected items: { food_item_id: quantity }
+  const selectedMap = {};
+  orderItems.forEach(i => { selectedMap[i.food_item_id] = i.quantity || 1; });
+
+  // Group active items by category
+  const byCat = {};
+  cats.forEach(c => { byCat[c.id] = { name: c.name, items: [] }; });
+  allItems.filter(i => i.is_active).forEach(i => {
+    if (byCat[i.category_id]) byCat[i.category_id].items.push(i);
+  });
+
+  const catHtml = Object.values(byCat).filter(c => c.items.length).map(c => `
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:6px">${c.name}</div>
+      ${c.items.map(item => {
+        const checked = selectedMap[item.id] !== undefined;
+        const qty     = selectedMap[item.id] || 1;
+        const price   = parseFloat(item.price || 0);
+        return `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--gray-1)" id="ei-row-${item.id}">
+          <input type="checkbox" id="ei-chk-${item.id}" ${checked ? 'checked' : ''}
+            onchange="eiUpdateTotal('${requestId}')"
+            style="width:16px;height:16px;cursor:pointer">
+          <div style="flex:1">
+            <span style="font-weight:600;font-size:13px">${item.name}</span>
+            <span style="font-size:11px;color:var(--gray-4);margin-left:6px">${item.unit||''}</span>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:#333;min-width:48px;text-align:right">$${price.toFixed(2)}</span>
+          ${item.allow_qty ? `
+            <div style="display:flex;align-items:center;gap:4px">
+              <button type="button" style="width:24px;height:24px;border:1px solid var(--gray-2);background:#fff;cursor:pointer;font-size:14px;border-radius:3px"
+                onclick="eiChangeQty('${item.id}','${requestId}',-1)">−</button>
+              <input type="number" id="ei-qty-${item.id}" value="${qty}" min="1" max="20"
+                style="width:40px;text-align:center;border:1px solid var(--gray-2);border-radius:3px;padding:2px;font-size:13px"
+                onchange="eiUpdateTotal('${requestId}')">
+              <button type="button" style="width:24px;height:24px;border:1px solid var(--gray-2);background:#fff;cursor:pointer;font-size:14px;border-radius:3px"
+                onclick="eiChangeQty('${item.id}','${requestId}',1)">+</button>
+            </div>` : `<input type="hidden" id="ei-qty-${item.id}" value="${qty}">`}
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+
+  openDrawer(`Edit Order — ${familyName} (${bundleLabel})`,
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:10px 12px;background:var(--gray-1);border-radius:6px">
+       <span style="font-size:13px;font-weight:600">Total</span>
+       <span style="font-size:16px;font-weight:800" id="ei-total">$0.00</span>
+       ${budget > 0 ? `<span style="font-size:12px;color:var(--gray-4)">Budget: $${parseFloat(budget).toFixed(2)}</span>` : ''}
+     </div>
+     ${catHtml}
+     <div class="alert alert-error" id="ei-err" style="margin-top:12px"></div>`,
+    `<button class="btn" onclick="saveEditOrderItems('${requestId}','${cycleId}')">Save Order</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
+  );
+
+  // Store items ref for total calc
+  window._eiItems = allItems.filter(i => i.is_active);
+  eiUpdateTotal(requestId);
+}
+
+function eiChangeQty(itemId, requestId, delta) {
+  const inp = document.getElementById('ei-qty-' + itemId);
+  if (!inp) return;
+  const chk = document.getElementById('ei-chk-' + itemId);
+  let v = parseInt(inp.value) + delta;
+  if (v < 1) v = 1;
+  inp.value = v;
+  if (chk && !chk.checked) chk.checked = true;
+  eiUpdateTotal(requestId);
+}
+
+function eiUpdateTotal(requestId) {
+  if (!window._eiItems) return;
+  let total = 0;
+  window._eiItems.forEach(item => {
+    const chk = document.getElementById('ei-chk-' + item.id);
+    if (chk?.checked) {
+      const qty = parseInt(document.getElementById('ei-qty-' + item.id)?.value) || 1;
+      total += parseFloat(item.price || 0) * qty;
+    }
+  });
+  const el = document.getElementById('ei-total');
+  if (el) el.textContent = '$' + total.toFixed(2);
+}
+
+async function saveEditOrderItems(requestId, cycleId) {
+  const showErr = msg => { const el=document.getElementById('ei-err'); if(el){el.textContent=msg;el.style.display='block';} };
+  if (!window._eiItems) return;
+  const payload = [];
+  window._eiItems.forEach(item => {
+    const chk = document.getElementById('ei-chk-' + item.id);
+    if (chk?.checked) {
+      const qty = parseInt(document.getElementById('ei-qty-' + item.id)?.value) || 1;
+      payload.push({ food_item_id: item.id, quantity: qty });
+    }
+  });
+  try {
+    await fetch('/api/food-requests/' + requestId + '/items', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+      body: JSON.stringify(payload)
+    }).then(async r => { if (!r.ok) { const e = await r.json(); throw new Error(e.error||'Save failed'); } });
+    closeDrawer();
+    viewCycleDetail(cycleId);
+  } catch(e) { showErr(e.message); }
 }
 
 async function manualConfirmFamily(familyId, familyName) {
