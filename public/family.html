@@ -990,7 +990,10 @@ function renderPlaceOrderBody(cycle) {
 
 function toggleOrderForm(cid) {
   const panel = document.getElementById(`form-${cid}`);
-  if (panel) panel.classList.toggle('open');
+  if (panel) {
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) _updateBundleBar(cid);
+  }
 }
 
 function _getBudget(cid) {
@@ -1020,7 +1023,8 @@ function _updateBundleBar(cid) {
   const fill   = document.getElementById(`bundle-bar-fill-${cid}`);
   const msg    = document.getElementById(`bundle-limit-msg-${cid}`);
   if (fill) fill.style.width = pct + '%';
-  if (msg)  msg.style.display = pct >= 100 ? 'inline' : 'none';
+  // Only HIDE the message here — it is shown exclusively when an add is blocked
+  if (msg && pct < 100) msg.style.display = 'none';
 }
 
 function toggleItem(row, cid) {
