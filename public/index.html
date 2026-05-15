@@ -1984,19 +1984,28 @@ async function viewFamily(id) {
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
 
   try {
-    const [r, hist, vols, taskTypes] = await Promise.all([
+    const [r, hist, vols, taskTypes, allUsers] = await Promise.all([
       GET('/families/' + id),
       GET('/families/' + id + '/history'),
       GET('/volunteers?status=active'),
-      GET('/task-types')
+      GET('/task-types'),
+      GET('/users').catch(() => [])
     ]);
 
     const orders     = hist.orders || [];
     const activeCycle = hist.active_cycle || null;
     const fid        = r.id;
     const activeTT   = taskTypes.filter(t => t.is_active);
+    const famUser    = allUsers.find(u => u.role === 'family' && u.linked_id === fid);
 
     document.getElementById('page-title').textContent = r.name;
+
+    // Add Reset Password button to topbar if family has a user account
+    if (famUser) {
+      document.getElementById('topbar-actions').innerHTML +=
+        ` <button class="btn btn-outline" style="margin-left:8px" onclick="openResetPassword('${famUser.id}','${famUser.username}','${r.name.replace(/'/g,"\\'")}')">🔑 Reset Password</button>
+          <button class="btn btn-outline" style="margin-left:4px" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
+    }
 
     // ── Field helpers ─────────────────────────────────────────────────────────
     const markDirty = `document.getElementById('fam-save-btn').style.display='inline-flex';`;
@@ -3373,7 +3382,7 @@ async function renderUsers() {
                 <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
-                  <button class="btn btn-sm btn-outline" style="margin-left:4px" onclick="forceReset('${r.id}','${r.username}')" title="Force password reset on next login">↺ Reset PW</button>
+                  <button class="btn btn-sm btn-outline" style="margin-left:4px" onclick="openResetPassword('${r.id}','${r.username}','${r.name||r.username}')">🔑 Reset PW</button>
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -3382,6 +3391,44 @@ async function renderUsers() {
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
   }
+}
+
+function openResetPassword(uid, username, name) {
+  openDrawer(`Reset Password — ${name}`,
+    `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
+       A new password will be generated and shown here. You can share it with the user directly or it will be emailed if they have an email on file.
+     </p>
+     <div class="form-group">
+       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+         <input type="checkbox" id="rp-must-change" checked style="width:16px;height:16px;">
+         <span>Require user to set a new password on next login</span>
+       </label>
+       <div style="font-size:11px;color:var(--gray-4);margin-top:4px;margin-left:24px;">Uncheck this if you want to set a fixed password the user can keep using directly.</div>
+     </div>`,
+    `<button class="btn" onclick="doResetPassword('${uid}','${username}')">Generate New Password</button>
+     <button class="btn btn-outline" onclick="closeDrawer()" style="margin-left:8px">Cancel</button>`
+  );
+}
+
+async function doResetPassword(uid, username) {
+  const mustChange = document.getElementById('rp-must-change')?.checked !== false;
+  try {
+    const res = await POST('/users/' + uid + '/reset-password', {must_change: mustChange});
+    openDrawer(`New Password — ${username}`,
+      `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
+         Share these credentials with the user.${mustChange ? ' They will be asked to set a new password on first login.' : ''}
+       </p>
+       <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-family:monospace;font-size:15px;line-height:2">
+         <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${res.username}</strong></div>
+         <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">NEW PASSWORD</span><br><strong>${res.new_password}</strong></div>
+       </div>
+       <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
+       ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Emailed to ${res.email}</p>` :
+         res.email ? `<p style="font-size:12px;color:#c00;margin-top:4px">⚠ Email failed — share manually</p>` :
+         `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email on file — share manually</p>`}`,
+      `<button class="btn" onclick="closeDrawer();renderUsers()">Done</button>`
+    );
+  } catch(e) { alert(e.message); }
 }
 
 async function forceReset(uid, username) {

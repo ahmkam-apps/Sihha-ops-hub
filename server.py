@@ -1796,6 +1796,45 @@ def force_password_reset(uid):
     db.commit()
     return jsonify({'ok': True})
 
+@app.route('/api/users/<uid>/reset-password', methods=['POST'])
+@require_auth(roles=['admin'])
+def admin_reset_password(uid):
+    """Admin sets a new password for any user.
+    Body: {must_change: bool}  — if true, user must change on next login.
+    Returns: {new_password, email_sent}"""
+    db = get_db()
+    row = db.execute(
+        "SELECT u.*, f.email as family_email FROM users u "
+        "LEFT JOIN families f ON u.linked_id = f.id AND u.role='family' "
+        "WHERE u.id=?", (uid,)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    data = request.json or {}
+    must_change = 1 if data.get('must_change', True) else 0
+    new_pw = _generate_temp_password()
+    db.execute(
+        "UPDATE users SET password_hash=?, must_change_password=?, password_changed_at=? WHERE id=?",
+        (generate_password_hash(new_pw), must_change, now() if not must_change else None, uid)
+    )
+    db.commit()
+    # Email if family has email on file
+    email_sent = False
+    to_email = (row['email'] or '') or (row['family_email'] or '')
+    if to_email:
+        body = (
+            f"Your Sihha Food Program password has been reset by an admin.\n\n"
+            f"  Login URL:  https://ops.sihha.org/login\n"
+            f"  Username:   {row['username']}\n"
+            f"  Password:   {new_pw}\n\n"
+            + (f"You will be asked to set a new password after logging in.\n\n" if must_change else "")
+            + f"— Sihha Food Program"
+        )
+        email_sent = _email_send(to_email, 'Your Sihha Password Has Been Reset', body)
+    log.info(f'Admin reset password for user {row["username"]} (must_change={must_change})')
+    return jsonify({'new_password': new_pw, 'username': row['username'],
+                    'email_sent': email_sent, 'email': to_email or None})
+
 @app.route('/api/users/bulk-create', methods=['POST'])
 @require_auth(roles=['admin'])
 def bulk_create_users():
