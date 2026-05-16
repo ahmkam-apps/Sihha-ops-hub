@@ -388,6 +388,31 @@ class TestFoodOrders:
         if check.get('open_cycle'):
             assert check['bundle_size'] == 'L'
 
+    def test_family_cancel_allows_reorder(self, client):
+        """Family cancel hard-deletes the row → family can place a fresh order in same cycle."""
+        # Submit initial order
+        client.post('/api/food-order',
+                    json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
+                          'selected_items': []})
+        check = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        cycle = next((c for c in check.get('cycles', []) if c['id'] == self.cycle_id), None)
+        if not cycle or not cycle.get('order'):
+            pytest.skip('Order not found after submit')
+
+        request_id = cycle['order']['id']
+
+        # Cancel it
+        res = client.post('/api/food-order/cancel',
+                          json={'family_id': self.family_id, 'request_id': request_id})
+        assert res.status_code == 200, f'Cancel failed: {res.get_json()}'
+
+        # Row must be gone — family can place a fresh order (no UNIQUE violation)
+        res2 = client.post('/api/food-order',
+                           json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
+                                 'selected_items': []})
+        assert res2.status_code == 201, \
+            f'Re-order after family cancel failed with {res2.status_code}: {res2.get_json()}'
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 7 — VOLUNTEER PORTAL + PRIVACY RULES

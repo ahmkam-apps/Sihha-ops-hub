@@ -5438,18 +5438,6 @@ def cancel_food_order():
             (req['cycle_id'], family_id)
         ).fetchall()
 
-        # Mark as cancelled (not skipped — this is family-initiated)
-        try:
-            db.execute(
-                "UPDATE food_requests SET status='cancelled', updated_at=? WHERE id=?",
-                (now(), request_id)
-            )
-        except Exception:
-            db.execute(
-                "UPDATE food_requests SET status='cancelled' WHERE id=?",
-                (request_id,)
-            )
-
         # Release claimed + confirmed volunteer slots back to open
         try:
             db.execute(
@@ -5462,9 +5450,16 @@ def cancel_food_order():
                 (req['cycle_id'], family_id)
             )
 
+        # Log event BEFORE hard-delete so the event is committed to history
         _log_order_event(db, request_id, 'cancelled', actor='family',
                          payload={'days_until_delivery': days_until})
+        db.commit()
 
+        # Hard-delete the order row so the family can place a fresh order (same as admin cancel)
+        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (request_id,))
+        db.execute("DELETE FROM food_request_items    WHERE request_id=?", (request_id,))
+        db.execute("DELETE FROM order_change_requests WHERE request_id=?", (request_id,))
+        db.execute("DELETE FROM food_requests         WHERE id=?",         (request_id,))
         db.commit()
 
         # Fire notifications in background
@@ -5491,7 +5486,7 @@ def cancel_food_order():
         _send_sms_async(vol_sms)
 
         log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
-        return jsonify({'ok': True, 'message': 'Your order has been cancelled.'})
+        return jsonify({'ok': True, 'message': 'Your order has been cancelled. You can place a new order if needed.'})
 
     except Exception as _e:
         log.exception(f'cancel_food_order ERROR — family={family_id!r} request={request_id!r}')
