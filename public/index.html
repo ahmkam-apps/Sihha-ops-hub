@@ -4742,7 +4742,7 @@ async function openBundleRulesForm() {
         </div>
       </div>`).join('')}
     <div class="alert alert-error" id="br-err"></div>`,
-    `<button class="btn" onclick="saveBundleRules(${JSON.stringify(rules.map(r=>r.bundle_size))})">Save</button>
+    `<button class="btn" onclick="saveBundleRules(['S','M','L'])">Save</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
   );
 }
