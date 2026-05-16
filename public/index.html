@@ -554,6 +554,9 @@
       </div>
 
       <div class="nav-section">Operations</div>
+      <div class="nav-item" onclick="nav('active-cycle')" id="nav-active-cycle">
+        <span class="icon">⊕</span> Active Cycle
+      </div>
       <div class="nav-item" onclick="nav('deliveries')" id="nav-deliveries">
         <span class="icon">↻</span> Deliveries
       </div>
@@ -704,7 +707,7 @@ function showApp() {
   }
   // Treasurer: show only Finance section
   if (STATE.user.role === 'treasurer') {
-    ['nav-dashboard','nav-deliveries','nav-volunteers',
+    ['nav-dashboard','nav-active-cycle','nav-deliveries','nav-volunteers',
      'nav-families'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
@@ -733,7 +736,8 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     payments: 'Payments', donations: 'Donations', users: 'Users',
-    deliveries: 'Deliveries', catalog: 'Food Catalog', pricing: 'Pricing Table',
+    deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
+    catalog: 'Food Catalog', pricing: 'Pricing Table',
     cycle_detail: 'Delivery Detail', orders: 'Orders',
     requests: '📋 Change Requests'
   };
@@ -743,8 +747,9 @@ function nav(page) {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
     payments: renderPayments, donations: renderDonations,
-    users: renderUsers, deliveries: renderDeliveries, catalog: renderCatalog,
-    pricing: renderPricingTable, orders: renderOrders, requests: renderRequests
+    users: renderUsers, deliveries: renderDeliveries, 'active-cycle': renderActiveCycle,
+    catalog: renderCatalog, pricing: renderPricingTable, orders: renderOrders,
+    requests: renderRequests
   };
   if (renders[page]) renders[page]();
 }
@@ -825,7 +830,7 @@ async function renderDashboard() {
         actions.push(`<button class="btn btn-sm" onclick="generateSlotsFromDash('${activeCycle.id}')">Slots</button>`);
         actions.push(`<button class="btn btn-sm" onclick="triggerRemindersFromDash()">Remind</button>`);
       }
-      actions.push(`<button class="btn btn-sm btn-outline" onclick="nav('deliveries')">Manage →</button>`);
+      actions.push(`<button class="btn btn-sm btn-outline" onclick="nav('active-cycle')">Manage →</button>`);
 
       const slotsTotal = s.slots_open + s.slots_claimed + s.slots_complete;
       const slotsPct   = slotsTotal > 0 ? Math.round((s.slots_claimed + s.slots_complete) / slotsTotal * 100) : 0;
@@ -3719,6 +3724,36 @@ async function generateSlotsForSelected() {
 
 let _cyclesCache = [];
 
+async function renderActiveCycle() {
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    _cyclesCache = await GET('/delivery-cycles');
+    // Pick most active cycle: open > shopping > upcoming
+    const priority = ['open', 'shopping', 'upcoming'];
+    let active = null;
+    for (const s of priority) {
+      active = _cyclesCache.find(c => c.status === s);
+      if (active) break;
+    }
+    if (!active) {
+      document.getElementById('topbar-actions').innerHTML =
+        `<button class="btn" onclick="nav('deliveries');openCycleForm()">+ New Delivery</button>`;
+      document.getElementById('content').innerHTML = `
+        <div style="text-align:center;padding:60px 20px;color:var(--gray-4)">
+          <div style="font-size:22px;font-weight:700;margin-bottom:8px">No active delivery cycle</div>
+          <div style="font-size:14px;margin-bottom:24px">Create a new cycle or advance an upcoming one to start accepting orders.</div>
+          <button class="btn btn-outline" onclick="nav('deliveries')">View All Cycles →</button>
+        </div>`;
+      return;
+    }
+    document.getElementById('page-title').textContent = active.title;
+    await viewCycleDetail(active.id);
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
 async function renderDeliveries(filterStatus) {
   filterStatus = filterStatus || STATE.filter || 'all';
   STATE.filter = filterStatus;
@@ -3810,7 +3845,7 @@ async function advanceCycleStatus(id, current) {
         }
       } catch(_) {}
     }
-    renderDeliveries();
+    if (STATE.page === 'active-cycle') renderActiveCycle(); else renderDeliveries();
   } catch(e) { alert(e.message); }
 }
 
@@ -3821,7 +3856,7 @@ async function revertCycleStatus(id, current) {
   if (!confirm(`Revert this cycle back to "${label[prev[current]]}"?\n\nThis will undo the status advance.`)) return;
   try {
     await PUT('/delivery-cycles/' + id, { status: prev[current] });
-    renderDeliveries();
+    if (STATE.page === 'active-cycle') renderActiveCycle(); else renderDeliveries();
   } catch(e) { alert(e.message); }
 }
 
@@ -3884,8 +3919,21 @@ async function saveCycle() {
 async function viewCycleDetail(cycleId) {
   const cycle = _cyclesCache.find(c => c.id === cycleId);
   document.getElementById('page-title').textContent = cycle ? cycle.title : 'Delivery Detail';
+  const _isActiveCyclePage = STATE.page === 'active-cycle';
+  const _statusAdvanceBtns = (() => {
+    if (!_isActiveCyclePage) return '';
+    const c = _cyclesCache.find(x => x.id === cycleId);
+    if (!c) return '';
+    if (c.status === 'upcoming')  return `<button class="btn btn-sm" style="background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Accepting Orders</button>`;
+    if (c.status === 'open')      return `<button class="btn btn-sm btn-outline" onclick="revertCycleStatus('${c.id}','open')">← Upcoming</button> <button class="btn btn-sm" style="background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>`;
+    if (c.status === 'shopping')  return `<button class="btn btn-sm btn-outline" onclick="revertCycleStatus('${c.id}','shopping')">← Accepting Orders</button> <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>`;
+    return '';
+  })();
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="renderDeliveries()">← Back</button>
+    `${_isActiveCyclePage
+        ? `<button class="btn btn-outline" onclick="nav('deliveries')">All Cycles</button>`
+        : `<button class="btn btn-outline" onclick="renderDeliveries()">← Back</button>`}
+     ${_statusAdvanceBtns}
      <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
      <button class="btn btn-outline" onclick="viewSlotBoard('${cycleId}')">Slot Board</button>
      <button class="btn btn-outline" onclick="downloadPDF('/reports/shopping-list/${cycleId}')">⬇ Shopping PDF</button>
@@ -4356,7 +4404,7 @@ async function viewSlotBoard(cycleId) {
   const cycle = _cyclesCache.find(c => c.id === cycleId);
   document.getElementById('page-title').textContent = (cycle ? cycle.title : 'Delivery') + ' — Slot Board';
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="renderDeliveries()">← Back to Deliveries</button>
+    `<button class="btn btn-outline" onclick="${STATE.page === 'active-cycle' ? 'renderActiveCycle()' : 'renderDeliveries()'}">← Back</button>
      <button class="btn btn-outline" onclick="viewCycleDetail('${cycleId}')">Orders</button>
      <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
      <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
