@@ -1096,6 +1096,26 @@ def bootstrap_db():
     except Exception:
         pass
 
+    # food_request_items: custom_value for free-text items (e.g. "Other Fruit")
+    try:
+        conn.execute('ALTER TABLE food_request_items ADD COLUMN custom_value TEXT')
+        log.info('Migration: added food_request_items.custom_value')
+    except Exception:
+        pass
+
+    # food_items: item selection rules (defaults, mutual-exclusion groups, free-text)
+    for _col, _def in [
+        ('is_default',   'INTEGER NOT NULL DEFAULT 0'),
+        ('group_id',     'TEXT'),
+        ('group_max',    'INTEGER NOT NULL DEFAULT 1'),
+        ('is_free_text', 'INTEGER NOT NULL DEFAULT 0'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE food_items ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added food_items.{_col}')
+        except Exception:
+            pass
+
     # ── One-time catalog pricing migration (Sam's Club prices) ──────────────────
     # Updates existing seeded items: name, unit, price, allow_qty (only if price=0)
     _catalog_updates = [
@@ -1143,7 +1163,7 @@ def bootstrap_db():
                 log.info(f'Catalog migration: added {_name!r} @ ${_price}')
 
     # Deactivate placeholder items not in approved catalog (only if still unpriced)
-    for _inactive in ('Bread', 'Brown Lentils', 'Oranges'):
+    for _inactive in ('Oranges',):
         conn.execute("UPDATE food_items SET is_active=0 WHERE name=? AND (price=0 OR price IS NULL)", (_inactive,))
 
     # Set S/M/L bundle budgets if still at default 0
@@ -1153,6 +1173,119 @@ def bootstrap_db():
         if _br and (not _br['budget'] or _br['budget'] == 0):
             conn.execute("UPDATE bundle_size_rules SET budget=? WHERE bundle_size=?", (_bud, _sz))
             log.info(f'Bundle budget set: {_sz}=${_bud}')
+
+    # ── Migration: item selection rules (defaults + mutual-exclusion groups) ──────
+    # Only runs once — when all items still have is_default=0 (fresh migration)
+    _rules_seeded = conn.execute(
+        "SELECT COUNT(*) FROM food_items WHERE is_default=1"
+    ).fetchone()[0]
+    if not _rules_seeded:
+        log.info('Seeding item selection rules…')
+        # Per-item: (name, is_default, group_id, is_free_text)
+        _item_rules = [
+            ('Rice',             1, None,          0),
+            ('Pasta',            0, 'bread_pasta',  0),
+            ('Eggs',             1, None,          0),
+            ('Red Kidney Beans', 0, 'beans',        0),
+            ('Whole Chicken',    1, None,          0),
+            ('Red Potato',       1, None,          0),
+            ('Bananas',          1, None,          0),
+            ('Apples',           0, 'fruit',        0),
+            ('Red Onion',        1, None,          0),
+            ('Grapes',           0, 'fruit',        0),
+            ('Brown Lentils',    0, None,          0),
+            ('Bread',            1, 'bread_pasta',  0),
+            ('Italian Dressing', 0, None,          0),
+        ]
+        for _nm, _def, _grp, _ft in _item_rules:
+            conn.execute(
+                "UPDATE food_items SET is_default=?, group_id=?, group_max=1, is_free_text=? WHERE name=?",
+                (_def, _grp, _ft, _nm)
+            )
+            log.info(f'Item rules: {_nm!r} default={_def} group={_grp!r}')
+
+        # Bread: reactivate with price (was deactivated as placeholder)
+        _bread = conn.execute("SELECT id, price, is_active FROM food_items WHERE name='Bread'").fetchone()
+        if _bread:
+            conn.execute(
+                "UPDATE food_items SET is_active=1, price=3.50, is_default=1, group_id='bread_pasta', group_max=1 WHERE id=?",
+                (_bread['id'],)
+            )
+            log.info('Catalog: reactivated Bread @ $3.50')
+        else:
+            # Add Bread if missing — find Staples/Pantry/Grains category
+            _bc = conn.execute(
+                "SELECT id FROM food_categories WHERE LOWER(name) LIKE '%staple%' OR LOWER(name) LIKE '%pantry%' OR LOWER(name) LIKE '%grain%'"
+            ).fetchone() or conn.execute("SELECT id FROM food_categories LIMIT 1").fetchone()
+            if _bc:
+                _bid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO food_items (id,category_id,name,unit,is_active,display_order,created_at,price,allow_qty,is_default,group_id,group_max,is_free_text) "
+                    "VALUES (?,?,'Bread','loaf',1,3,?,3.50,0,1,'bread_pasta',1,0)",
+                    (_bid, _bc['id'], now())
+                )
+                for _sz in ('S','M','L'):
+                    conn.execute("INSERT OR IGNORE INTO bundle_quantities (id,food_item_id,bundle_size,quantity) VALUES (?,?,?,0)",
+                                 (str(uuid.uuid4()), _bid, _sz))
+                log.info('Catalog: added Bread @ $3.50')
+
+        # Brown Lentils: reactivate (was deactivated as placeholder)
+        _lentils = conn.execute("SELECT id FROM food_items WHERE name='Brown Lentils'").fetchone()
+        if _lentils:
+            conn.execute(
+                "UPDATE food_items SET is_active=1, price=4.00, is_default=0, group_id=NULL, is_free_text=0 WHERE id=?",
+                (_lentils['id'],)
+            )
+            log.info('Catalog: reactivated Brown Lentils @ $4.00')
+        else:
+            _pc = conn.execute("SELECT id FROM food_categories WHERE name='Produce'").fetchone()
+            if _pc:
+                _lid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO food_items (id,category_id,name,unit,is_active,display_order,created_at,price,allow_qty,is_default,group_id,group_max,is_free_text) "
+                    "VALUES (?,?,'Brown Lentils','bag',1,10,?,4.00,0,0,NULL,1,0)",
+                    (_lid, _pc['id'], now())
+                )
+                for _sz in ('S','M','L'):
+                    conn.execute("INSERT OR IGNORE INTO bundle_quantities (id,food_item_id,bundle_size,quantity) VALUES (?,?,?,0)",
+                                 (str(uuid.uuid4()), _lid, _sz))
+                log.info('Catalog: added Brown Lentils @ $4.00')
+
+        # Red Beans Cans: add to beans group (same category as Red Kidney Beans)
+        if not conn.execute("SELECT id FROM food_items WHERE name='Red Beans Cans'").fetchone():
+            _rk_row = conn.execute("SELECT category_id FROM food_items WHERE name='Red Kidney Beans'").fetchone()
+            _rb_cat = _rk_row['category_id'] if _rk_row else None
+            if not _rb_cat:
+                _rb_cat = conn.execute("SELECT id FROM food_categories LIMIT 1").fetchone()['id']
+            _rbid = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO food_items (id,category_id,name,unit,is_active,display_order,created_at,price,allow_qty,is_default,group_id,group_max,is_free_text) "
+                "VALUES (?,?,'Red Beans Cans','can',1,12,?,3.50,0,0,'beans',1,0)",
+                (_rbid, _rb_cat, now())
+            )
+            for _sz in ('S','M','L'):
+                conn.execute("INSERT OR IGNORE INTO bundle_quantities (id,food_item_id,bundle_size,quantity) VALUES (?,?,?,0)",
+                             (str(uuid.uuid4()), _rbid, _sz))
+            log.info('Catalog: added Red Beans Cans @ $3.50 (beans group)')
+
+        # Other Fruit: free-text item in fruit group
+        if not conn.execute("SELECT id FROM food_items WHERE name='Other Fruit'").fetchone():
+            _pcat = conn.execute("SELECT id FROM food_categories WHERE name='Produce'").fetchone()
+            if not _pcat:
+                _pcat = conn.execute("SELECT id FROM food_categories LIMIT 1").fetchone()
+            _ofid = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO food_items (id,category_id,name,unit,is_active,display_order,created_at,price,allow_qty,is_default,group_id,group_max,is_free_text) "
+                "VALUES (?,?,'Other Fruit','each',1,9,?,6.00,0,0,'fruit',1,1)",
+                (_ofid, _pcat['id'], now())
+            )
+            for _sz in ('S','M','L'):
+                conn.execute("INSERT OR IGNORE INTO bundle_quantities (id,food_item_id,bundle_size,quantity) VALUES (?,?,?,0)",
+                             (str(uuid.uuid4()), _ofid, _sz))
+            log.info('Catalog: added Other Fruit (free-text, fruit group) @ $6.00')
+
+        conn.commit()
+        log.info('Item selection rules seeded.')
 
     # Ensure users CHECK constraint includes ALL roles (treasurer + family)
     # Runs on every boot — idempotent, bails immediately if already correct
@@ -2412,8 +2545,49 @@ def update_family(fid):
          now(), fid)
     )
     db.commit()
-    # Pre-create volunteer slots when a family is activated for the first time
+    # When a family is activated for the first time (any status → active)
     if new_status == 'active' and prev_status != 'active':
+        # 1. Auto-create login account if none exists
+        try:
+            existing_user = db.execute(
+                "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
+            ).fetchone()
+            if not existing_user:
+                fam_name      = d.get('name', row['name'])
+                fam_email     = (d.get('email') or row.get('email') or '').strip() or None
+                name_parts    = (fam_name or 'family').lower().split()
+                base_username = '.'.join(name_parts[:2]) if len(name_parts) >= 2 else name_parts[0]
+                username      = base_username
+                suffix        = 1
+                while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+                    username = f'{base_username}{suffix}'
+                    suffix  += 1
+                temp_pw = _generate_temp_password()
+                uid     = str(uuid.uuid4())
+                db.execute(
+                    '''INSERT INTO users (id, username, password_hash, name, role,
+                       linked_id, linked_type, must_change_password, created_at)
+                       VALUES (?,?,?,?,?,?,?,1,?)''',
+                    (uid, username, generate_password_hash(temp_pw),
+                     fam_name, 'family', fid, 'family', now())
+                )
+                db.commit()
+                log.info(f'update_family: auto-created account "{username}" for newly active family {fid}')
+                if fam_email:
+                    email_body = (
+                        f"Welcome to the Sihha Food Program!\n\n"
+                        f"Your account has been created. Use the credentials below to log in:\n\n"
+                        f"  Login URL:  https://ops.sihha.org/login\n"
+                        f"  Username:   {username}\n"
+                        f"  Password:   {temp_pw}\n\n"
+                        f"You will be asked to set a new password after your first login.\n\n"
+                        f"If you have any questions, please contact us.\n\n"
+                        f"— Sihha Food Program"
+                    )
+                    _email_send(fam_email, 'Your Sihha Food Program Login', email_body)
+        except Exception as _e:
+            log.warning(f'update_family: account auto-creation failed for family {fid}: {_e}')
+        # 2. Pre-create volunteer slots
         try:
             slots = _pre_create_slots_for_family(db, fid)
             db.commit()
@@ -3185,15 +3359,29 @@ def update_food_item(iid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+    rk = row.keys()
     try:
-        price_val    = float(d['price'] or 0) if 'price' in d else float(row['price'] if 'price' in row.keys() else 0)
-        allow_qty_val= (1 if d['allow_qty'] else 0) if 'allow_qty' in d else int(row['allow_qty'] if 'allow_qty' in row.keys() else 0)
+        price_val     = float(d['price'] or 0)       if 'price'     in d else float(row['price']     if 'price'     in rk else 0)
+        allow_qty_val = (1 if d['allow_qty'] else 0)  if 'allow_qty' in d else int(row['allow_qty']   if 'allow_qty' in rk else 0)
+        is_default_v  = (1 if d['is_default'] else 0) if 'is_default' in d else int(row['is_default'] if 'is_default' in rk else 0)
+        group_id_v    = d.get('group_id',     row['group_id']    if 'group_id'    in rk else None)
+        group_max_v   = int(d.get('group_max', row['group_max']  if 'group_max'   in rk else 1) or 1)
+        is_free_text_v= (1 if d['is_free_text'] else 0) if 'is_free_text' in d else int(row['is_free_text'] if 'is_free_text' in rk else 0)
+        # Ensure new columns exist before writing (safety net)
+        for _c, _def in [('is_default','INTEGER NOT NULL DEFAULT 0'),('group_id','TEXT'),
+                          ('group_max','INTEGER NOT NULL DEFAULT 1'),('is_free_text','INTEGER NOT NULL DEFAULT 0')]:
+            try:
+                db.execute(f'ALTER TABLE food_items ADD COLUMN {_c} {_def}')
+                db.commit()
+            except Exception:
+                pass
         db.execute(
-            "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=?, price=?, allow_qty=? WHERE id=?",
+            "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=?, "
+            "price=?, allow_qty=?, is_default=?, group_id=?, group_max=?, is_free_text=? WHERE id=?",
             (d.get('name', row['name']), d.get('unit', row['unit']),
              d.get('is_active', row['is_active']), d.get('display_order', row['display_order']),
              d.get('category_id', row['category_id']),
-             price_val, allow_qty_val, iid)
+             price_val, allow_qty_val, is_default_v, group_id_v or None, group_max_v, is_free_text_v, iid)
         )
         db.commit()
     except Exception as e:
@@ -3568,6 +3756,7 @@ def get_orders():
 
     orders = db.execute(
         '''SELECT fr.id, fr.status, fr.bundle_size, fr.family_id, fr.cycle_id,
+                  fr.family_notes,
                   f.name as family_name, f.family_code
            FROM food_requests fr
            JOIN families f ON fr.family_id = f.id
@@ -4718,11 +4907,18 @@ def check_food_order_eligibility():
         """Return bundle item list grouped by category for the order placement form.
         NOTE: price is included for silent client-side budget math — never display it to families.
         allow_qty controls whether +/- qty stepper is shown (vs simple checkbox).
+        is_default: pre-checked when family opens the form.
+        group_id/group_max: mutual-exclusion group (e.g. 'beans', 'fruit', 'bread_pasta').
+        is_free_text: show a text input alongside the checkbox (for 'Other Fruit' etc).
         """
         rows = db.execute(
             '''SELECT fi.id, fi.name, fi.unit,
                       COALESCE(fi.price, 0) as price,
                       COALESCE(fi.allow_qty, 0) as allow_qty,
+                      COALESCE(fi.is_default, 0) as is_default,
+                      fi.group_id,
+                      COALESCE(fi.group_max, 1) as group_max,
+                      COALESCE(fi.is_free_text, 0) as is_free_text,
                       fc.name as category, fc.display_order as cat_order,
                       COALESCE(bq.quantity,'') as quantity
                FROM food_items fi
@@ -4735,10 +4931,16 @@ def check_food_order_eligibility():
         cats = {}
         for r in rows:
             cats.setdefault(r['category'], []).append({
-                'id': r['id'], 'name': r['name'], 'unit': r['unit'],
-                'quantity': r['quantity'],
-                'price': r['price'],          # used for budget math only — never shown
-                'allow_qty': r['allow_qty'],  # 1 = show +/- stepper; 0 = checkbox only
+                'id':          r['id'],
+                'name':        r['name'],
+                'unit':        r['unit'],
+                'quantity':    r['quantity'],
+                'price':       r['price'],       # budget math only — never shown to family
+                'allow_qty':   r['allow_qty'],   # 1 = +/- stepper; 0 = checkbox
+                'is_default':  r['is_default'],  # pre-checked on form open
+                'group_id':    r['group_id'],    # mutual-exclusion group key
+                'group_max':   r['group_max'],   # max items selectable from this group
+                'is_free_text':r['is_free_text'],# show text input when checked
             })
         return [{'category': k, 'items': v} for k, v in cats.items()]
 
@@ -4997,7 +5199,8 @@ def submit_food_order():
 
     # Budget validation (server-side safety net)
     # item_quantities: {item_id: qty} — provided when families use qty steppers
-    item_quantities = data.get('item_quantities', {})  # {item_id: int}
+    item_quantities  = data.get('item_quantities', {})   # {item_id: int}
+    item_custom_vals = data.get('item_custom_values', {}) # {item_id: str} — free-text items
     selected_ids = set(data.get('selected_items', []))
     if selected_ids:
         budget_row = db.execute(
@@ -5018,15 +5221,38 @@ def submit_food_order():
             if total_cost > bundle_budget:
                 return jsonify({'error': 'Your selection exceeds your bundle limit. Please remove some items.'}), 422
 
-    # Save item selections with quantities
+        # Group constraint validation (at most group_max items per group)
+        if selected_ids:
+            group_rows = db.execute(
+                "SELECT id, group_id, COALESCE(group_max,1) as group_max FROM food_items WHERE is_active=1 AND group_id IS NOT NULL"
+            ).fetchall()
+            group_counts = {}
+            group_maxes  = {}
+            for gr in group_rows:
+                if gr['id'] in selected_ids:
+                    gid = gr['group_id']
+                    group_counts[gid] = group_counts.get(gid, 0) + 1
+                    group_maxes[gid]  = gr['group_max']
+            for gid, cnt in group_counts.items():
+                if cnt > group_maxes.get(gid, 1):
+                    return jsonify({'error': f'You can only select one item from the {gid.replace("_"," ")} group.'}), 422
+
+    # Save item selections with quantities and custom values
     all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
     for item in all_items:
-        is_selected = 1 if item['id'] in selected_ids else 0
-        qty = max(1, int(item_quantities.get(item['id'], 1) or 1)) if is_selected else 1
-        db.execute(
-            "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity) VALUES (?,?,?,?,?)",
-            (str(uuid.uuid4()), rid, item['id'], is_selected, qty)
-        )
+        is_selected  = 1 if item['id'] in selected_ids else 0
+        qty          = max(1, int(item_quantities.get(item['id'], 1) or 1)) if is_selected else 1
+        custom_val   = (item_custom_vals.get(item['id']) or '').strip() if is_selected else None
+        try:
+            db.execute(
+                "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity, custom_value) VALUES (?,?,?,?,?,?)",
+                (str(uuid.uuid4()), rid, item['id'], is_selected, qty, custom_val or None)
+            )
+        except Exception:
+            db.execute(
+                "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity) VALUES (?,?,?,?,?)",
+                (str(uuid.uuid4()), rid, item['id'], is_selected, qty)
+            )
 
     # Ensure slots exist (safety net — should already be pre-created)
     slots_created = _ensure_volunteer_slots(db, data['cycle_id'], data['family_id'])
