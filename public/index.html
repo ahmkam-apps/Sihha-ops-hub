@@ -4757,12 +4757,19 @@ async function saveBundleRules(sizes) {
     budget: parseFloat(document.getElementById('br-budget-' + size)?.value)||0
   }));
   try {
-    await fetch('/api/bundle-size-rules', {
+    const res = await fetch('/api/bundle-size-rules', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
       body: JSON.stringify(updates)
     });
-    closeDrawer(); renderCatalog();
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showErr(d.error || `Save failed (${res.status})`);
+      return;
+    }
+    closeDrawer();
+    // Re-render the current page (Pricing Table or Catalog depending on where we came from)
+    if (STATE.page === 'pricing') renderPricingTable(); else renderCatalog();
   } catch(e) { showErr(e.message); }
 }
 
