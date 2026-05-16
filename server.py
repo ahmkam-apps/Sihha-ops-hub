@@ -1287,6 +1287,55 @@ def bootstrap_db():
         conn.commit()
         log.info('Item selection rules seeded.')
 
+    # Migration: remove 'paused' from families.status CHECK constraint
+    # First migrate any paused rows to inactive, then recreate the table without 'paused'
+    try:
+        fam_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='families'"
+        ).fetchone()
+        if fam_sql and 'paused' in (fam_sql['sql'] or ''):
+            conn.execute("UPDATE families SET status='inactive' WHERE status='paused'")
+            conn.executescript('''
+                PRAGMA foreign_keys=OFF;
+                CREATE TABLE IF NOT EXISTS _families_new (
+                    id                  TEXT PRIMARY KEY,
+                    name                TEXT NOT NULL,
+                    phone               TEXT,
+                    address             TEXT,
+                    city                TEXT,
+                    family_size         INTEGER,
+                    children_count      INTEGER,
+                    dietary_notes       TEXT,
+                    frequency           TEXT,
+                    income_range        TEXT,
+                    status              TEXT NOT NULL DEFAULT 'pending'
+                                        CHECK(status IN ('pending','active','inactive')),
+                    notes               TEXT,
+                    source              TEXT DEFAULT 'admin',
+                    created_at          TEXT NOT NULL,
+                    updated_at          TEXT,
+                    family_code         TEXT,
+                    bundle_size         TEXT,
+                    pending_bundle_size TEXT,
+                    wa_phone            TEXT,
+                    wa_apikey           TEXT,
+                    email               TEXT
+                );
+                INSERT INTO _families_new
+                    SELECT id, name, phone, address, city, family_size, children_count,
+                           dietary_notes, frequency, income_range, status, notes, source,
+                           created_at, updated_at, family_code, bundle_size, pending_bundle_size,
+                           wa_phone, wa_apikey, email
+                    FROM families;
+                DROP TABLE families;
+                ALTER TABLE _families_new RENAME TO families;
+                PRAGMA foreign_keys=ON;
+            ''')
+            conn.commit()
+            log.info("Migration: removed 'paused' from families.status CHECK constraint")
+    except Exception as _e:
+        log.warning(f"Migration: families paused-removal skipped ({_e})")
+
     # Ensure users CHECK constraint includes ALL roles (treasurer + family)
     # Runs on every boot — idempotent, bails immediately if already correct
     _ensure_treasurer_role(conn)
@@ -5808,45 +5857,20 @@ def reset_family_order(fid):
 
         ts = now()
 
-        if req['status'] in ('cancelled', 'skipped', 'pending_confirmation'):
-            # Hard delete — frees the slot so family can place a fresh portal order
-            db.execute("DELETE FROM food_request_events     WHERE request_id=?", (req['id'],))
-            db.execute("DELETE FROM food_request_items      WHERE request_id=?", (req['id'],))
-            db.execute("DELETE FROM order_change_requests   WHERE request_id=?", (req['id'],))
-            db.execute("DELETE FROM food_requests           WHERE id=?",         (req['id'],))
-            db.execute("UPDATE families SET pending_bundle_size=NULL WHERE id=? AND pending_bundle_size IS NOT NULL", (fid,))
-            db.commit()
-            log.info(f'Order {req["id"]} DELETED (status={req["status"]}) by admin {g.user["username"]} for family {fid}')
-            return jsonify({'ok': True, 'message': 'Order cleared. Family can now place a fresh order.'})
-
-        # Confirmed order: soft reset back to pending_confirmation
-        try:
-            db.execute(
-                "UPDATE food_requests SET status='pending_confirmation', confirmed_at=NULL, updated_at=? WHERE id=?",
-                (ts, req['id'])
-            )
-        except Exception:
-            db.execute(
-                "UPDATE food_requests SET status='pending_confirmation', confirmed_at=NULL WHERE id=?",
-                (req['id'],)
-            )
-        db.execute("UPDATE food_request_items SET selected=0 WHERE request_id=?", (req['id'],))
-        db.execute(
-            "UPDATE order_change_requests SET status='retracted', reviewed_at=? WHERE request_id=? AND status='pending'",
-            (ts, req['id'])
-        )
-        # Release any claimed/confirmed volunteer slots back to open on reset
+        # All statuses: hard-delete the order so family can place a fresh one via the portal
+        # Release any claimed/confirmed volunteer slots back to open first
         db.execute(
             "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
             (ts, req['cycle_id'], fid)
         )
-        # Clear any pending bundle size change request
+        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (req['id'],))
+        db.execute("DELETE FROM food_request_items    WHERE request_id=?", (req['id'],))
+        db.execute("DELETE FROM order_change_requests WHERE request_id=?", (req['id'],))
+        db.execute("DELETE FROM food_requests         WHERE id=?",         (req['id'],))
         db.execute("UPDATE families SET pending_bundle_size=NULL WHERE id=? AND pending_bundle_size IS NOT NULL", (fid,))
-        _log_order_event(db, req['id'], 'order_reset', actor='admin', payload={'reset_by': g.user['username']})
         db.commit()
-
-        log.info(f'Order {req["id"]} reset to pending_confirmation by admin {g.user["username"]} for family {fid}')
-        return jsonify({'ok': True, 'message': 'Order reset to pending confirmation.'})
+        log.info(f'Order {req["id"]} DELETED (status={req["status"]}) by admin {g.user["username"]} for family {fid}')
+        return jsonify({'ok': True, 'message': 'Order cleared. Family can now place a fresh order.'})
 
     except Exception as _e:
         log.exception(f'reset_family_order ERROR fid={fid}')
@@ -6320,56 +6344,7 @@ def portal_get_slots(cycle_id):
         result.append(row)
     return jsonify({'cycle': dict(cycle), 'slots': result, 'volunteer_id': vol_id})
 
-@app.route('/api/portal/claim', methods=['POST'])
-@require_portal_auth()
-def portal_claim_slot():
-    slot_id = (request.json or {}).get('slot_id')
-    if not slot_id:
-        return jsonify({'error': 'slot_id required'}), 422
-    db = get_db()
-    slot = db.execute("SELECT * FROM volunteer_slots WHERE id=?", (slot_id,)).fetchone()
-    if not slot:
-        return jsonify({'error': 'Slot not found'}), 404
-    if slot['status'] != 'open':
-        return jsonify({'error': 'This slot has already been claimed'}), 409
-    vol_id = g.pv['volunteer_id']
-    db.execute(
-        "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='claimed', updated_at=? WHERE id=?",
-        (vol_id, now(), now(), slot_id)
-    )
-    db.commit()
-
-    # SMS confirmation to volunteer
-    vol = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
-    family = db.execute("SELECT * FROM families WHERE id=?", (slot['family_id'],)).fetchone()
-    cycle = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (slot['cycle_id'],)).fetchone()
-    if vol['phone']:
-        fcode = family['family_code'] or ''
-        if slot['task_type'] == 'delivery':
-            msg = (f"Sihha Delivery Signed Up!\n"
-                   f"Family ID: {fcode}\n"
-                   f"Address: {family['address']}, {family['city']}\n"
-                   f"Deliver by: {cycle['delivery_date_end']} (by 5pm)\n"
-                   f"JazakAllah Khair!")
-        else:
-            size_row = db.execute(
-                "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
-                (family['family_size'] or 1, family['family_size'] or 1)
-            ).fetchone()
-            bsize = size_row['bundle_size'] if size_row else 'M'
-            items = db.execute(
-                '''SELECT fi.name, bq.quantity FROM bundle_quantities bq
-                   JOIN food_items fi ON bq.food_item_id=fi.id
-                   WHERE bq.bundle_size=? AND fi.is_active=1 ORDER BY fi.display_order''', (bsize,)
-            ).fetchall()
-            item_list = '\n'.join([f"- {i['name']}: {i['quantity']}" for i in items])
-            msg = (f"Sihha Shopping Signed Up!\n"
-                   f"Family ID: {fcode} (Bundle {bsize})\n"
-                   f"Shopping list:\n{item_list}\n"
-                   f"Drop off at Abu Baqr by Sunday 2pm.\n"
-                   f"Send receipt to treasurer. JazakAllah Khair!")
-        _send_sms(_normalize_phone(vol['phone']), msg)
-    return jsonify({'ok': True})
+# /api/portal/claim removed — superseded by /api/portal/signup (Sprint 2)
 
 
 @app.route('/api/portal/my-tasks')
@@ -7446,70 +7421,61 @@ def db_debug():
         return jsonify({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 def _send_family_confirmation_reminders():
-    """7 days before delivery: create food_requests for all active families then SMS opt-in link.
-    All families with a phone number get an SMS. Idempotent — confirmation_sent_at prevents
-    double-sends; INSERT OR IGNORE prevents duplicate records."""
+    """7 days before delivery: send SMS to all active families with a link to /family portal.
+    Does NOT create food_request rows — families place orders via the portal (single creation path).
+    Idempotent via reminder_log (slot_id='opt_in_{cycle_id}', sent_to=family_id)."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        target = (datetime.utcnow() + timedelta(days=7)).strftime('%Y-%m-%d')
-        # Cutoff = T-5 (when _skip_nonresponding_families fires) = today + 2 days from now
-        # We tell families to respond within 2 days, matching the actual auto-skip deadline
-        cutoff_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
-        base_url = os.environ.get('APP_URL', 'https://sihha-ops-hub-production.up.railway.app')
+        target      = (datetime.utcnow() + timedelta(days=7)).strftime('%Y-%m-%d')
+        base_url    = os.environ.get('APP_URL', 'https://sihha-ops-hub-production.up.railway.app')
+        portal_link = f"{base_url}/family"
 
-        # Find the cycle(s) with delivery_date_start = target
-        # Include 'open' (Accepting Orders) as well as 'upcoming' — coordinator may have already
-        # advanced the cycle before T-7, which is the normal flow
         cycles = conn.execute(
             "SELECT * FROM delivery_cycles WHERE delivery_date_start = ? AND status IN ('upcoming','open')",
             (target,)
         ).fetchall()
 
+        sent = 0
         for cycle in cycles:
             cycle_id = cycle['id']
-            # Create food_requests for ALL active families (INSERT OR IGNORE — idempotent)
+            log_key  = f'opt_in_{cycle_id}'
+
             families = conn.execute(
-                "SELECT id, family_size FROM families WHERE status = 'active'"
+                "SELECT id, name, phone FROM families WHERE status='active' AND phone IS NOT NULL AND TRIM(phone) != ''"
             ).fetchall()
-            items = conn.execute(
-                "SELECT id FROM food_items WHERE is_active = 1"
-            ).fetchall()
+
             for fam in families:
-                bsize_row = conn.execute(
-                    "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
-                    (fam['family_size'] or 1, fam['family_size'] or 1)
+                fam_phone = ''.join(c for c in (fam['phone'] or '') if c.isdigit())
+                if not fam_phone:
+                    continue
+                # Idempotency: skip if already notified for this family+cycle
+                already = conn.execute(
+                    "SELECT id FROM reminder_log WHERE slot_id=? AND sent_to=?",
+                    (log_key, fam['id'])
                 ).fetchone()
-                bsize = bsize_row['bundle_size'] if bsize_row else 'M'
-                token = str(uuid.uuid4())
-                rid   = str(uuid.uuid4())
-                try:
+                if already:
+                    continue
+                msg = (
+                    f"Assalamu Alaikum {fam['name']}!\n\n"
+                    f"Sihha has a food delivery on {cycle['delivery_date_start']}.\n"
+                    f"Tap here to place or manage your order:\n{portal_link}\n\n"
+                    f"JazakAllah Khair — Sihha Food Program"
+                )
+                if _send_sms(fam_phone, msg):
                     conn.execute(
-                        '''INSERT OR IGNORE INTO food_requests
-                           (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmation_token)
-                           VALUES (?,?,?,?,?,?,?)''',
-                        (rid, cycle_id, fam['id'], bsize, datetime.utcnow().isoformat(), 'pending_confirmation', token)
+                        "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
+                        (str(uuid.uuid4()), log_key, fam['id'], datetime.utcnow().isoformat())
                     )
-                    # Pre-populate items as selected (INSERT OR IGNORE — safe if record already existed)
-                    req_row = conn.execute(
-                        "SELECT id, confirmation_token FROM food_requests WHERE cycle_id=? AND family_id=?",
-                        (cycle_id, fam['id'])
-                    ).fetchone()
-                    if req_row:
-                        for item in items:
-                            conn.execute(
-                                'INSERT OR IGNORE INTO food_request_items (id, request_id, food_item_id, selected) VALUES (?,?,?,1)',
-                                (str(uuid.uuid4()), req_row['id'], item['id'])
-                            )
-                except Exception as _e:
-                    log.warning(f'_send_family_confirmation_reminders: insert error for family {fam["id"]}: {_e}')
+                    sent += 1
             conn.commit()
 
-        # SMS opt-in link to all families with phone who haven't been notified yet
-        rows = conn.execute(
-            '''SELECT fr.id, fr.confirmation_token, fr.bundle_size,
+        # Legacy: also send to any existing pending_confirmation rows that haven't been notified
+        # (handles rows created before this scheduler change was deployed)
+        legacy_rows = conn.execute(
+            '''SELECT fr.id, fr.confirmation_token,
                       f.name as family_name, f.phone as family_phone,
-                      dc.title as cycle_title, dc.delivery_date_start
+                      dc.delivery_date_start
                FROM food_requests fr
                JOIN families f ON fr.family_id = f.id
                JOIN delivery_cycles dc ON fr.cycle_id = dc.id
@@ -7520,16 +7486,15 @@ def _send_family_confirmation_reminders():
             (target,)
         ).fetchall()
 
-        sent = 0
-        for r in rows:
+        for r in legacy_rows:
             fam_phone = ''.join(c for c in (r['family_phone'] or '') if c.isdigit())
             if not fam_phone:
                 continue
             link = f"{base_url}/confirm/{r['confirmation_token']}"
             msg  = (f"Assalamu Alaikum {r['family_name']}!\n\n"
                     f"Sihha has a food delivery on {r['delivery_date_start']}.\n"
-                    f"Tap to review your items and confirm or decline:\n{link}\n\n"
-                    f"Please respond by {cutoff_date}.\nJazakAllah Khair!")
+                    f"Tap to place your order:\n{portal_link}\n\n"
+                    f"JazakAllah Khair — Sihha Food Program")
             if _send_sms(fam_phone, msg):
                 conn.execute(
                     "UPDATE food_requests SET confirmation_sent_at=? WHERE id=?",
@@ -7543,37 +7508,78 @@ def _send_family_confirmation_reminders():
         conn.close()
 
 def _skip_nonresponding_families():
-    """5 days before delivery (cutoff): mark all pending_confirmation families as skipped.
-    These families did not respond to the opt-in WA — they are excluded from the shopping list."""
+    """5 days before delivery (cutoff): mark non-responding families as skipped.
+    Handles two cases:
+    1. Legacy pending_confirmation rows (created by old scheduler) — UPDATE to skipped.
+    2. Active families with NO food_request for this cycle — INSERT a skipped row (tracking only)."""
+    import json as _json
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        target = (datetime.utcnow() + timedelta(days=5)).strftime('%Y-%m-%d')
-        rows = conn.execute(
-            '''SELECT fr.id FROM food_requests fr
-               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-               WHERE dc.delivery_date_start = ?
-                 AND fr.status = 'pending_confirmation' ''',
+        target  = (datetime.utcnow() + timedelta(days=5)).strftime('%Y-%m-%d')
+        ts_skip = datetime.utcnow().isoformat()
+        cycles  = conn.execute(
+            "SELECT * FROM delivery_cycles WHERE delivery_date_start = ? AND status IN ('upcoming','open','shopping')",
             (target,)
         ).fetchall()
-        skipped = len(rows)
-        if skipped:
-            ts_skip = datetime.utcnow().isoformat()
-            conn.execute(
-                '''UPDATE food_requests SET status='skipped', confirmed_at=?
-                   WHERE id IN ({})'''.format(','.join('?' * skipped)),
-                [ts_skip] + [r['id'] for r in rows]
-            )
-            import json as _json
-            for _r in rows:
+
+        total_skipped = 0
+        for cycle in cycles:
+            cycle_id = cycle['id']
+
+            # 1. Legacy: mark any pending_confirmation rows as skipped
+            legacy = conn.execute(
+                "SELECT fr.id FROM food_requests fr WHERE fr.cycle_id=? AND fr.status='pending_confirmation'",
+                (cycle_id,)
+            ).fetchall()
+            if legacy:
                 conn.execute(
-                    "INSERT INTO food_request_events (id, request_id, event_type, actor, payload, created_at) VALUES (?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), _r['id'], 'auto_skipped', 'scheduler',
-                     _json.dumps({'note': 'no response by cutoff'}), ts_skip)
+                    'UPDATE food_requests SET status=\'skipped\', confirmed_at=? WHERE id IN ({})'.format(
+                        ','.join('?' * len(legacy))),
+                    [ts_skip] + [r['id'] for r in legacy]
                 )
+                for _r in legacy:
+                    conn.execute(
+                        "INSERT INTO food_request_events (id,request_id,event_type,actor,payload,created_at) VALUES (?,?,?,?,?,?)",
+                        (str(uuid.uuid4()), _r['id'], 'auto_skipped', 'scheduler',
+                         _json.dumps({'note': 'no response by cutoff (legacy row)'}), ts_skip)
+                    )
+                total_skipped += len(legacy)
+
+            # 2. Active families with no food_request row for this cycle → INSERT skipped
+            active_fams = conn.execute(
+                "SELECT f.id, f.family_size FROM families f WHERE f.status='active'"
+            ).fetchall()
+            for fam in active_fams:
+                exists = conn.execute(
+                    "SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
+                    (cycle_id, fam['id'])
+                ).fetchone()
+                if exists:
+                    continue
+                brow = conn.execute(
+                    "SELECT bundle_size FROM bundle_size_rules WHERE min_household<=? AND (max_household IS NULL OR max_household>=?) ORDER BY min_household DESC LIMIT 1",
+                    (fam['family_size'] or 1, fam['family_size'] or 1)
+                ).fetchone()
+                bsize = brow['bundle_size'] if brow else 'M'
+                rid   = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT OR IGNORE INTO food_requests (id,cycle_id,family_id,bundle_size,submitted_at,status) VALUES (?,?,?,?,?,?)",
+                    (rid, cycle_id, fam['id'], bsize, ts_skip, 'skipped')
+                )
+                inserted = conn.execute("SELECT id FROM food_requests WHERE id=?", (rid,)).fetchone()
+                if inserted:
+                    conn.execute(
+                        "INSERT INTO food_request_events (id,request_id,event_type,actor,payload,created_at) VALUES (?,?,?,?,?,?)",
+                        (str(uuid.uuid4()), rid, 'auto_skipped', 'scheduler',
+                         _json.dumps({'note': 'no order placed by cutoff'}), ts_skip)
+                    )
+                    total_skipped += 1
+
             conn.commit()
-        log.info(f'Cutoff: {skipped} non-responding families marked skipped for delivery {target}')
-        return skipped
+
+        log.info(f'Cutoff: {total_skipped} families marked skipped for delivery {target}')
+        return total_skipped
     finally:
         conn.close()
 

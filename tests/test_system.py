@@ -318,7 +318,20 @@ class TestFoodOrders:
         open_cycle = next((c for c in check.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
-        item_ids = [i['id'] for cat in open_cycle['items_for_selection'] for i in cat['items']][:3]
+        # Select at most one item per group to avoid mutual-exclusion constraint
+        seen_groups, item_ids = set(), []
+        for cat in open_cycle['items_for_selection']:
+            for i in cat['items']:
+                g = i.get('group_id')
+                if g and g in seen_groups:
+                    continue
+                if g:
+                    seen_groups.add(g)
+                item_ids.append(i['id'])
+                if len(item_ids) >= 3:
+                    break
+            if len(item_ids) >= 3:
+                break
         res = client.post('/api/food-order',
                           json={'family_id': self.family_id,
                                 'cycle_id':  self.cycle_id,
@@ -508,16 +521,16 @@ class TestVolunteerPortal:
     def test_shopper_claim_and_no_address_in_wa(self, client, wa_mock):
         headers = self._portal_headers(self.shopper_phone)
         slots_res = client.get(f'/api/portal/slots/{self.cycle_id}', headers=headers)
-        shopping_slot = next(
-            (s for s in slots_res.get_json()['slots']
-             if s['task_type'] == 'shopping' and s['status'] == 'open'), None
-        )
-        if not shopping_slot:
+        open_shopping = [s for s in slots_res.get_json()['slots']
+                         if s['task_type'] == 'shopping' and s['status'] == 'open']
+        if not open_shopping:
             pytest.skip('No open shopping slot available')
 
-        res = client.post('/api/portal/claim',
-                          headers=headers, json={'slot_id': shopping_slot['id']})
-        assert res.status_code == 200
+        res = client.post('/api/portal/signup',
+                          headers=headers, json={'cycle_id': self.cycle_id,
+                                                 'family_id': self.family_id,
+                                                 'task_types': ['shopping']})
+        assert res.status_code == 201
 
         # SMS confirmation must NOT contain the family address
         assert wa_mock.called
@@ -533,8 +546,10 @@ class TestVolunteerPortal:
         open_shopping = [s for s in slots_res.get_json()['slots']
                          if s['task_type'] == 'shopping' and s['status'] == 'open']
         if open_shopping:
-            client.post('/api/portal/claim',
-                        headers=headers, json={'slot_id': open_shopping[0]['id']})
+            client.post('/api/portal/signup',
+                        headers=headers, json={'cycle_id': self.cycle_id,
+                                               'family_id': self.family_id,
+                                               'task_types': ['shopping']})
 
         tasks_res = client.get('/api/portal/my-tasks', headers=headers)
         assert tasks_res.status_code == 200
@@ -551,17 +566,17 @@ class TestVolunteerPortal:
         headers = self._portal_headers(self.delivery_phone)
         slots_res = client.get(f'/api/portal/slots/{self.cycle_id}', headers=headers)
         # Target the slot for self.family_id specifically — it has a known address
-        delivery_slot = next(
-            (s for s in slots_res.get_json()['slots']
-             if s['task_type'] == 'delivery' and s['status'] == 'open'
-             and s['family_id'] == self.family_id), None
-        )
-        if not delivery_slot:
+        open_delivery = [s for s in slots_res.get_json()['slots']
+                         if s['task_type'] == 'delivery' and s['status'] == 'open'
+                         and s['family_id'] == self.family_id]
+        if not open_delivery:
             pytest.skip('No open delivery slot for test family')
 
-        res = client.post('/api/portal/claim',
-                          headers=headers, json={'slot_id': delivery_slot['id']})
-        assert res.status_code == 200
+        res = client.post('/api/portal/signup',
+                          headers=headers, json={'cycle_id': self.cycle_id,
+                                                 'family_id': self.family_id,
+                                                 'task_types': ['delivery']})
+        assert res.status_code == 201
 
         # Delivery SMS must contain the family address
         assert wa_mock.called
@@ -577,8 +592,10 @@ class TestVolunteerPortal:
                     if s['task_type'] == 'delivery' and s['status'] == 'open'
                     and s['family_id'] == self.family_id]
         if open_del:
-            client.post('/api/portal/claim',
-                        headers=headers, json={'slot_id': open_del[0]['id']})
+            client.post('/api/portal/signup',
+                        headers=headers, json={'cycle_id': self.cycle_id,
+                                               'family_id': self.family_id,
+                                               'task_types': ['delivery']})
 
         tasks_res = client.get('/api/portal/my-tasks', headers=headers)
         assert tasks_res.status_code == 200
@@ -600,12 +617,16 @@ class TestVolunteerPortal:
         if not open_slots:
             pytest.skip('No open slots available for double-claim test')
 
-        slot_id = open_slots[0]['id']
+        # Use the first open slot's family_id + task_type for the double-claim test
+        first_slot = open_slots[0]
+        signup_payload = {'cycle_id': self.cycle_id,
+                          'family_id': first_slot['family_id'],
+                          'task_types': [first_slot['task_type']]}
         # First claim succeeds
-        r1 = client.post('/api/portal/claim', headers=h_shopper, json={'slot_id': slot_id})
-        assert r1.status_code == 200
+        r1 = client.post('/api/portal/signup', headers=h_shopper, json=signup_payload)
+        assert r1.status_code == 201
         # Second claim by different volunteer → 409
-        r2 = client.post('/api/portal/claim', headers=h_delivery, json={'slot_id': slot_id})
+        r2 = client.post('/api/portal/signup', headers=h_delivery, json=signup_payload)
         assert r2.status_code == 409
 
     # ── Mark complete ──────────────────────────────────────────────────────────
@@ -617,8 +638,10 @@ class TestVolunteerPortal:
         open_shopping = [s for s in slots_res.get_json()['slots']
                          if s['task_type'] == 'shopping' and s['status'] == 'open']
         if open_shopping:
-            client.post('/api/portal/claim', headers=headers,
-                        json={'slot_id': open_shopping[0]['id']})
+            client.post('/api/portal/signup', headers=headers,
+                        json={'cycle_id': self.cycle_id,
+                              'family_id': self.family_id,
+                              'task_types': ['shopping']})
 
         tasks = client.get('/api/portal/my-tasks', headers=headers).get_json()
         claimed = [t for t in tasks if t['status'] == 'claimed']
@@ -877,7 +900,20 @@ class TestOrderPage:
         open_cycle = next((c for c in check.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
-        item_ids = [i['id'] for cat in open_cycle['items_for_selection'] for i in cat['items']][:4]
+        # Select at most one item per group to avoid mutual-exclusion constraint
+        seen_groups, item_ids = set(), []
+        for cat in open_cycle['items_for_selection']:
+            for i in cat['items']:
+                g = i.get('group_id')
+                if g and g in seen_groups:
+                    continue
+                if g:
+                    seen_groups.add(g)
+                item_ids.append(i['id'])
+                if len(item_ids) >= 4:
+                    break
+            if len(item_ids) >= 4:
+                break
         res = client.post('/api/food-order', json={
             'family_id': self.family_id,
             'cycle_id':  self.cycle_id,

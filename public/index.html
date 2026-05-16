@@ -1630,7 +1630,7 @@ async function renderFamilies(filter, search) {
               id="family-search" value="${search||''}"
               oninput="renderFamilies('${filter}', this.value)">
             <div class="filter-tabs">
-              ${['all','pending','active','inactive','paused'].map(f =>
+              ${['all','pending','active','inactive'].map(f =>
                 `<div class="filter-tab ${filter===f?'active':''}"
                   onclick="renderFamilies('${f}', document.getElementById('family-search').value)"
                   >${f}</div>`
@@ -1783,7 +1783,7 @@ function familyFormHTML(r) {
       <div class="form-group">
         <label>Status</label>
         <select id="f-status">
-          ${['pending','active','inactive','paused'].map(v =>
+          ${['pending','active','inactive'].map(v =>
             `<option value="${v}" ${(r.status||'pending')===v?'selected':''}>${v}</option>`).join('')}
         </select>
       </div>
@@ -2153,7 +2153,7 @@ async function viewFamily(id) {
           ${row('City',        inp('city',          r.city))}
           ${row('Family Size', inp('family_size',   r.family_size,   'number'))}
           ${row('Children',    inp('children_count',r.children_count,'number'))}
-          ${row('Status',      sel('status',      r.status,      ['active','pending','paused','inactive']))}
+          ${row('Status',      sel('status',      r.status,      ['active','pending','inactive']))}
           ${row('Bundle Size', sel('bundle_size', r.bundle_size, ['S','M','L']))}
           ${row('Frequency',   sel('frequency',   r.frequency,   [
             {value:'weekly',    label:'Weekly'},
@@ -3679,8 +3679,11 @@ async function loadOrders() {
           onclick="overrideFoodRequest('${o.id}','skipped','${cycleId}','${o.family_id}')">Skip</button>`:''}
         <button class="btn btn-sm btn-outline" style="font-size:11px;margin-left:4px;" title="Preview portal"
           onclick="previewFamilyPortal('${o.family_id}')">👁</button>`;
+      const notesFlag = o.family_notes
+        ? `<span title="${(o.family_notes||'').replace(/"/g,'&quot;')}" style="cursor:help;margin-left:4px;font-size:13px;" onclick="alert('Notes: '+${JSON.stringify(o.family_notes||'')})">💬</span>`
+        : '';
       return `<tr>
-        <td><strong>${o.family_name}</strong><br><span style="font-family:monospace;font-size:11px;color:var(--gray-4)">${o.family_code||''}</span></td>
+        <td><strong>${o.family_name}</strong>${notesFlag}<br><span style="font-family:monospace;font-size:11px;color:var(--gray-4)">${o.family_code||''}</span></td>
         <td style="font-size:12px;font-weight:700;">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
         <td><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;${sStyle}">${statusLabel(o.status)}</span></td>
         <td>${items}</td>
@@ -4101,12 +4104,20 @@ async function openEditOrderItems(requestId, familyName, bundleSize, cycleId) {
       }).join('')}
     </div>`).join('');
 
+  const familyNotes = orders.find(o => o.id === requestId)?.family_notes || '';
+  const notesBlock = familyNotes
+    ? `<div style="margin-bottom:14px;padding:10px 12px;background:#fff8e6;border:1px solid #f0c040;border-radius:6px;font-size:13px;">
+         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#7a4a00;margin-bottom:4px;">💬 Family Notes</div>
+         <div style="color:#5a3000;">${familyNotes.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+       </div>` : '';
+
   openDrawer(`Edit Order — ${familyName} (${bundleLabel})`,
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:10px 12px;background:var(--gray-1);border-radius:6px">
        <span style="font-size:13px;font-weight:600">Total</span>
        <span style="font-size:16px;font-weight:800" id="ei-total">$0.00</span>
        ${budget > 0 ? `<span style="font-size:12px;color:var(--gray-4)">Budget: $${parseFloat(budget).toFixed(2)}</span>` : ''}
      </div>
+     ${notesBlock}
      ${catHtml}
      <div class="alert alert-error" id="ei-err" style="margin-top:12px"></div>`,
     `<button class="btn" onclick="saveEditOrderItems('${requestId}','${cycleId}')">Save Order</button>
@@ -4805,6 +4816,9 @@ async function renderPricingTable() {
             <th>Unit</th>
             <th>Price ($)</th>
             <th title="Family can pick quantity">Adj Qty</th>
+            <th title="Pre-checked when order form opens">Default</th>
+            <th title="Mutual-exclusion group (beans / fruit / bread_pasta)">Group</th>
+            <th title="Show free-text input (e.g. Other Fruit)">Free Text</th>
             <th style="background:var(--gray-1);text-align:center">S qty</th>
             <th style="background:var(--gray-1);text-align:center">M qty</th>
             <th style="background:var(--gray-1);text-align:center">L qty</th>
@@ -4832,6 +4846,18 @@ async function renderPricingTable() {
                 </td>
                 <td style="text-align:center">
                   <input type="checkbox" id="pt-aq-${item.id}" ${item.allow_qty?'checked':''} title="Family can adjust qty">
+                </td>
+                <td style="text-align:center">
+                  <input type="checkbox" id="pt-default-${item.id}" ${item.is_default?'checked':''} title="Pre-selected on order form">
+                </td>
+                <td>
+                  <input type="text" id="pt-group-${item.id}" value="${item.group_id||''}"
+                    style="width:100px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:12px"
+                    placeholder="e.g. beans"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
+                </td>
+                <td style="text-align:center">
+                  <input type="checkbox" id="pt-ft-${item.id}" ${item.is_free_text?'checked':''} title="Show free-text input">
                 </td>
                 <td style="background:var(--gray-1);text-align:center">
                   <input type="number" id="pt-qS-${item.id}" value="${qS}" min="0"
@@ -4868,24 +4894,28 @@ async function renderPricingTable() {
 async function savePricingRow(itemId) {
   const btn    = document.getElementById('pt-save-'   + itemId);
   const status = document.getElementById('pt-status-' + itemId);
-  const unit     = document.getElementById('pt-unit-'  + itemId)?.value?.trim() || '';
-  const price    = parseFloat(document.getElementById('pt-price-' + itemId)?.value) || 0;
-  const allowQty = document.getElementById('pt-aq-'    + itemId)?.checked ? 1 : 0;
-  const isActive = document.getElementById('pt-active-'+ itemId)?.checked ? 1 : 0;
-  const qS       = parseInt(document.getElementById('pt-qS-' + itemId)?.value) || 0;
-  const qM       = parseInt(document.getElementById('pt-qM-' + itemId)?.value) || 0;
-  const qL       = parseInt(document.getElementById('pt-qL-' + itemId)?.value) || 0;
+  const unit      = document.getElementById('pt-unit-'    + itemId)?.value?.trim() || '';
+  const price     = parseFloat(document.getElementById('pt-price-'   + itemId)?.value) || 0;
+  const allowQty  = document.getElementById('pt-aq-'      + itemId)?.checked ? 1 : 0;
+  const isDefault = document.getElementById('pt-default-' + itemId)?.checked ? 1 : 0;
+  const groupId   = (document.getElementById('pt-group-'  + itemId)?.value || '').trim() || null;
+  const isFreeText= document.getElementById('pt-ft-'      + itemId)?.checked ? 1 : 0;
+  const isActive  = document.getElementById('pt-active-'  + itemId)?.checked ? 1 : 0;
+  const qS        = parseInt(document.getElementById('pt-qS-' + itemId)?.value) || 0;
+  const qM        = parseInt(document.getElementById('pt-qM-' + itemId)?.value) || 0;
+  const qL        = parseInt(document.getElementById('pt-qL-' + itemId)?.value) || 0;
 
   const item = _catalogItems.find(i => i.id === itemId);
   if (!item) return;
 
   btn.disabled = true; btn.textContent = '…';
   try {
-    // Save item price/unit/flags
+    // Save item price/unit/flags including rule fields
     await PUT('/food-items/' + itemId, {
       name: item.name, category_id: item.category_id,
       display_order: item.display_order,
-      unit, price, allow_qty: allowQty, is_active: isActive
+      unit, price, allow_qty: allowQty, is_active: isActive,
+      is_default: isDefault, group_id: groupId, group_max: 1, is_free_text: isFreeText
     });
     // Save bundle quantities (S/M/L)
     await PUT('/bundle-quantities', [
@@ -4895,6 +4925,7 @@ async function savePricingRow(itemId) {
     ]);
     // Update local caches
     item.unit = unit; item.price = price; item.allow_qty = allowQty; item.is_active = isActive;
+    item.is_default = isDefault; item.group_id = groupId; item.is_free_text = isFreeText;
     _ptBqMap[itemId+'_S'] = qS; _ptBqMap[itemId+'_M'] = qM; _ptBqMap[itemId+'_L'] = qL;
     btn.textContent = 'Save'; btn.disabled = false;
     status.style.display = 'inline';
