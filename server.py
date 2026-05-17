@@ -23,18 +23,10 @@ ALLOWED_EXT     = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'heic'}
 SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '')
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
 
-# ── Twilio (SMS OTP) ──────────────────────────────────────────────────────────
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
-TWILIO_AUTH_TOKEN  = os.environ.get('TWILIO_AUTH_TOKEN', '')
-TWILIO_FROM        = os.environ.get('TWILIO_FROM', '')  # E.164 e.g. +15551234567
-SMS_ENABLED        = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM)
-
+# Twilio removed — all notifications via SendGrid email
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 _early_log = logging.getLogger(__name__)
-_early_log.info(f'TWILIO_ACCOUNT_SID set={bool(TWILIO_ACCOUNT_SID)} len={len(TWILIO_ACCOUNT_SID)}')
-_early_log.info(f'TWILIO_AUTH_TOKEN  set={bool(TWILIO_AUTH_TOKEN)}  len={len(TWILIO_AUTH_TOKEN)}')
-_early_log.info(f'TWILIO_FROM        set={bool(TWILIO_FROM)}        val={TWILIO_FROM!r}')
-_early_log.info(f'SMS_ENABLED={SMS_ENABLED}')
+_early_log.info(f'SENDGRID configured={bool(SENDGRID_API_KEY)} notify_from={NOTIFY_FROM_EMAIL!r}')
 
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -1559,42 +1551,40 @@ def _recreate_users_table(conn):
         conn.execute('PRAGMA foreign_keys=ON')
         log.warning(f'_recreate_users_table: failed ({_e})')
 
-def _send_sms(phone_digits, message):
-    """Send an SMS via Twilio. phone_digits = 10-digit US number (no country code).
-    Returns True on success, False on failure. Never raises.
-    No-ops if TWILIO env vars are not set."""
-    if not SMS_ENABLED:
-        log.warning(f'SMS not configured — skipping send to {phone_digits}. '
-                    'Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM in Railway.')
+def _email_notify(to_email, subject, body):
+    """Send a notification email. Wrapper around _email_send with logging.
+    Returns True on success, False/None if no email or send fails."""
+    if not to_email:
         return False
-    try:
-        from twilio.rest import Client
-        # Normalize to E.164: strip to digits, drop leading 1 if 11-digit, prepend +1
-        digits = ''.join(c for c in phone_digits if c.isdigit())
-        if len(digits) == 11 and digits.startswith('1'):
-            digits = digits[1:]
-        to = '+1' + digits
-        log.info(f'SMS attempt: from={TWILIO_FROM!r} to={to!r} sid={TWILIO_ACCOUNT_SID[:8]}...')
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        msg = client.messages.create(body=message, from_=TWILIO_FROM, to=to)
-        log.info(f'SMS sent to {to} — Twilio sid={msg.sid} status={msg.status}')
-        return True
-    except Exception as e:
-        log.error(f'SMS FAILED to={to!r} from={TWILIO_FROM!r}: {type(e).__name__}: {e}')
-        return False
+    result = _email_send(to_email, subject, body)
+    if not result:
+        log.warning(f'Email notification failed or not configured — to={to_email!r} subject={subject!r}')
+    return result
 
 
-def _send_sms_async(sends):
-    """Fire a list of SMS messages in a background thread so the caller returns immediately.
-    sends: list of (phone_digits, message) tuples — items with missing phone are skipped."""
+def _email_notify_async(sends):
+    """Fire a list of email notifications in a background thread.
+    sends: list of (to_email, subject, body) tuples — items with missing email are skipped."""
     import threading as _t
-    items = [(p, m) for p, m in sends if p]
+    items = [(e, s, b) for e, s, b in sends if e]
     if not items:
         return
     def _run():
-        for phone, msg in items:
-            _send_sms(phone, msg)
+        for email, subject, body in items:
+            _email_notify(email, subject, body)
     _t.Thread(target=_run, daemon=True).start()
+
+
+def _lookup_volunteer_email(conn_or_db, vol_id):
+    """Look up a volunteer's email by ID. Works with both Flask db (sqlite3.Row) and direct connections."""
+    row = conn_or_db.execute("SELECT email FROM volunteers WHERE id=?", (vol_id,)).fetchone()
+    return (row['email'] or '').strip() if row else ''
+
+
+def _lookup_family_email(conn_or_db, family_id):
+    """Look up a family's email by ID."""
+    row = conn_or_db.execute("SELECT email FROM families WHERE id=?", (family_id,)).fetchone()
+    return (row['email'] or '').strip() if row else ''
 
 
 def _today_central():
@@ -3004,18 +2994,19 @@ def update_reimbursement(rid):
             vol = db.execute(
                 "SELECT name, phone FROM volunteers WHERE id=?", (row['volunteer_id'],)
             ).fetchone()
-            if vol and vol['phone']:
+            if vol and vol['email']:
                 method = d.get('payment_method', row['payment_method']) or 'bank transfer'
                 ref    = d.get('payment_ref', row['payment_ref'])
                 amount = row['amount'] or 0
                 ref_line = f'\nReference: {ref}' if ref else ''
-                msg = (f'Sihha Reimbursement Sent!\n'
-                       f'Amount: ${amount:.2f}\n'
-                       f'Method: {method.title()}{ref_line}\n'
-                       f'JazakAllah Khair for your service!')
-                _send_sms(_normalize_phone(vol['phone']), msg)
+                body = (f'Assalamu Alaikum {vol["name"]},\n\n'
+                        f'Your reimbursement has been sent!\n\n'
+                        f'Amount: ${amount:.2f}\n'
+                        f'Method: {method.title()}{ref_line}\n\n'
+                        f'JazakAllah Khair for your service!\n\n— Sihha Food Program')
+                _email_notify(vol['email'], 'Sihha Reimbursement Sent', body)
         except Exception as e:
-            log.warning(f'Volunteer payment SMS notification failed: {e}')
+            log.warning(f'Volunteer payment email notification failed: {e}')
     return jsonify(dict(db.execute("SELECT * FROM reimbursements WHERE id=?", (rid,)).fetchone()))
 
 # ── Donations ─────────────────────────────────────────────────────────────────
@@ -4068,17 +4059,18 @@ def manual_confirm_family(fid):
                      payload={'new_status': 'confirmed', 'note': 'manual confirm by coordinator'})
     db.commit()
 
-    # SMS volunteers whose slots just became confirmed
-    sms_sends = []
+    # Email volunteers whose slots just became confirmed
+    email_sends = []
     for slot in claimed_slots:
-        p = _normalize_phone(slot['vol_phone'] or '')
-        if p:
+        vol_email = _lookup_volunteer_email(db, slot['claimed_by']) if slot.get('claimed_by') else ''
+        if vol_email:
             address_line = f"\nAddress: {family['address']}, {family['city']}" if slot['task_type'] == 'delivery' and family.get('address') else ''
-            sms_sends.append((p,
-                f"Your {slot['task_type']} slot for family {family['family_code'] or fid[:8]} "
-                f"({cycle['title']}) is now confirmed — coordinator added them to this delivery.{address_line}"
-            ))
-    _send_sms_async(sms_sends)
+            body = (f"Assalamu Alaikum,\n\n"
+                    f"Your {slot['task_type']} slot for family {family['family_code'] or fid[:8]} "
+                    f"({cycle['title']}) is now confirmed — coordinator added them to this delivery.{address_line}\n\n"
+                    f"JazakAllah Khair!\n\n— Sihha Food Program")
+            email_sends.append((vol_email, f'Sihha Slot Confirmed — {cycle["title"]}', body))
+    _email_notify_async(email_sends)
 
     log.info(f'Manual confirm: family {fid} added to cycle {cycle["id"]} — {slots_created} slots created, {slots_confirmed} slots confirmed')
     return jsonify({'ok': True, 'request_id': rid, 'cycle_title': cycle['title'], 'bundle_size': bundle_size,
@@ -4768,26 +4760,27 @@ def submit_family_confirmation(token):
             qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
             item_lines_conf.append(f"  - {ir['name']}{(' - ' + qty_str) if qty_str else ''}")
     sms_sends_conf = []
+    email_sends_conf = []
     for slot in claimed_slots_conf:
         db.execute("UPDATE volunteer_slots SET status='confirmed', updated_at=? WHERE id=?", (now(), slot['id']))
-        p = _normalize_phone(slot['vol_phone'] or '')
-        if p:
+        vol_email = _lookup_volunteer_email(db, slot['claimed_by']) if slot.get('claimed_by') else ''
+        if vol_email:
             if slot['task_type'] == 'shopping':
                 items_text = '\n'.join(item_lines_conf) if item_lines_conf else '  (no items selected)'
-                sms_sends_conf.append((p,
-                    f"Order Confirmed - Shopping Task\n"
-                    f"Family: {slot['family_name']}\n"
-                    f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n\n"
-                    f"Shopping list:\n{items_text}\n\nJazakAllah Khair!"))
+                body = (f"Assalamu Alaikum,\n\nOrder Confirmed — Shopping Task\n\n"
+                        f"Family: {slot['family_name']}\n"
+                        f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n\n"
+                        f"Shopping list:\n{items_text}\n\nJazakAllah Khair!\n\n— Sihha Food Program")
             else:
-                sms_sends_conf.append((p,
-                    f"Order Confirmed - Delivery Task\n"
-                    f"Family: {slot['family_name']}\n"
-                    f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n"
-                    f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\nJazakAllah Khair!"))
+                body = (f"Assalamu Alaikum,\n\nOrder Confirmed — Delivery Task\n\n"
+                        f"Family: {slot['family_name']}\n"
+                        f"Delivery: {cycle_row['delivery_date_start'] if cycle_row else 'TBD'}\n"
+                        f"Address: {slot['address'] or 'TBD'}, {slot['city'] or ''}\n\n"
+                        f"JazakAllah Khair!\n\n— Sihha Food Program")
+            email_sends_conf.append((vol_email, f'Sihha Order Confirmed — {slot["family_name"]}', body))
 
     db.commit()
-    _send_sms_async(sms_sends_conf)
+    _email_notify_async(email_sends_conf)
     return jsonify({'ok': True, 'action': 'confirmed'})
 
 # ── PWA assets ────────────────────────────────────────────────────────────────
@@ -4899,45 +4892,8 @@ def check_food_order_eligibility():
                                 'message': 'Your account is pending approval. Please contact SIHAA.'}), 403
             family = dict(fam_row)
 
-    # --- Phone-based lookup (legacy / fallback) ---
-    if family is None:
-        phone = _normalize_phone(request.args.get('phone') or '')
-        if not phone:
-            return jsonify({'error': 'Authentication required'}), 401
-
-        try:
-            last10 = phone[-10:] if len(phone) >= 10 else phone
-            for r in db.execute(
-                "SELECT id, name, family_size, family_code, bundle_size, pending_bundle_size, phone "
-                "FROM families WHERE status='active' COLLATE NOCASE"
-            ).fetchall():
-                stored_norm = _normalize_phone(r['phone'] or '')
-                if stored_norm == phone or stored_norm[-10:] == last10:
-                    family = dict(r)
-                    # Auto-fix: if stored phone had dashes/spaces, clean it now
-                    if r['phone'] != stored_norm:
-                        try:
-                            db.execute("UPDATE families SET phone=? WHERE id=?", (stored_norm, r['id']))
-                            db.commit()
-                            log.info(f'Auto-normalised phone for family {r["id"]}: {r["phone"]!r} → {stored_norm!r}')
-                        except Exception:
-                            pass
-                    break
-        except Exception as exc:
-            log.exception(f'check_food_order_eligibility lookup error: {exc}')
-            return jsonify({'error': f'DB error: {exc}'}), 500
-
     if not family:
-        phone_searched = request.args.get('phone', '')
-        log.warning(f'FAMILY MISS — searched={phone_searched!r}')
-        return jsonify({
-            'registered': False,
-            'message': (
-                'We could not find an active record for that phone number. '
-                'Make sure you are using the same number you registered with, '
-                'or contact a coordinator for help.'
-            )
-        })
+        return jsonify({'error': 'Authentication required — please log in.'}), 401
 
     # Resolve bundle size for this family
     bundle_size = family['bundle_size'] or None
@@ -5380,25 +5336,26 @@ def submit_food_order():
 
     db.commit()  # ← commit everything first, then notify in background
 
-    # Notify volunteers via SMS + coordinators via email — fire-and-forget
+    # Notify volunteers via email + coordinators — fire-and-forget
     cycle_start = cycle['delivery_date_start']
     items_text  = '\n'.join(item_lines) if item_lines else '  (no items selected)'
-    sms_sends = []
+    email_sends = []
     for slot in [dict(s) for s in claimed_slots]:
-        vol_phone = _normalize_phone(slot.get('vol_phone') or '')
-        if vol_phone:
+        vol_email = _lookup_volunteer_email(db, slot.get('claimed_by') or '') if slot.get('claimed_by') else ''
+        if vol_email:
             if slot['task_type'] == 'shopping':
-                msg = (f"Order Confirmed - Shopping Task\n"
-                       f"Family: {slot['family_name']}\n"
-                       f"Delivery: {cycle_start}\n\n"
-                       f"Shopping list:\n{items_text}\n\nJazakAllah Khair!")
+                body = (f"Assalamu Alaikum,\n\nOrder Confirmed — Shopping Task\n\n"
+                        f"Family: {slot['family_name']}\n"
+                        f"Delivery: {cycle_start}\n\n"
+                        f"Shopping list:\n{items_text}\n\nJazakAllah Khair!\n\n— Sihha Food Program")
             else:
-                msg = (f"Order Confirmed - Delivery Task\n"
-                       f"Family: {slot['family_name']}\n"
-                       f"Delivery: {cycle_start}\n"
-                       f"Address: {slot.get('address') or 'TBD'}, {slot.get('city') or ''}\n\nJazakAllah Khair!")
-            sms_sends.append((vol_phone, msg))
-    _send_sms_async(sms_sends)
+                body = (f"Assalamu Alaikum,\n\nOrder Confirmed — Delivery Task\n\n"
+                        f"Family: {slot['family_name']}\n"
+                        f"Delivery: {cycle_start}\n"
+                        f"Address: {slot.get('address') or 'TBD'}, {slot.get('city') or ''}\n\n"
+                        f"JazakAllah Khair!\n\n— Sihha Food Program")
+            email_sends.append((vol_email, f'Sihha Order Confirmed — {slot["family_name"]}', body))
+    _email_notify_async(email_sends)
 
     coord_msg = (
         f"New order placed via portal:\n"
@@ -5458,7 +5415,7 @@ def cancel_food_order():
 
         # Find claimed/confirmed volunteers BEFORE releasing slots (for notification)
         claimed_volunteers = db.execute(
-            '''SELECT v.name, v.phone, vs.task_type
+            '''SELECT v.id, v.name, v.email, vs.task_type
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') ''',
@@ -5502,15 +5459,16 @@ def cancel_food_order():
         except Exception:
             pass
 
-        vol_sms = []
+        vol_emails = []
         for vol in claimed_volunteers:
-            p = _normalize_phone(vol['phone'] or '')
-            if p:
-                vol_sms.append((p,
-                    f"Update: {req['family_name']} cancelled their food order for {req['cycle_title']}.\n"
-                    f"Your {vol['task_type']} slot has been released — no action needed."
-                ))
-        _send_sms_async(vol_sms)
+            vol_email = _lookup_volunteer_email(db, vol['id']) if vol.get('id') else ''
+            if vol_email:
+                body = (f"Assalamu Alaikum {vol['name']},\n\n"
+                        f"{req['family_name']} has cancelled their food order for {req['cycle_title']}.\n"
+                        f"Your {vol['task_type']} slot has been released — no action needed.\n\n"
+                        f"JazakAllah Khair!\n\n— Sihha Food Program")
+                vol_emails.append((vol_email, f'Sihha Slot Released — {req["cycle_title"]}', body))
+        _email_notify_async(vol_emails)
 
         log.info(f'Family {family_id} cancelled order {request_id} — {days_until} days before delivery')
         return jsonify({'ok': True, 'message': 'Your order has been cancelled. You can place a new order if needed.'})
@@ -5792,12 +5750,14 @@ def approve_change_request(cr_id):
                          })
         db.commit()
 
-        # SMS to family
-        if cr['family_phone']:
-            msg = f"Sihha: Your change request for {cr['cycle_title']} has been approved."
+        # Email family
+        fam_email = _lookup_family_email(db, cr['family_id']) if cr.get('family_id') else ''
+        if fam_email:
+            body = f"Assalamu Alaikum {cr['family_name']},\n\nYour change request for {cr['cycle_title']} has been approved."
             if admin_notes:
-                msg += f"\nCoordinator note: {admin_notes}"
-            _send_sms(_normalize_phone(cr['family_phone']), msg)
+                body += f"\nCoordinator note: {admin_notes}"
+            body += "\n\n— Sihha Food Program"
+            _email_notify(fam_email, f'Sihha Change Request Approved — {cr["cycle_title"]}', body)
 
         log.info(f'Change request {cr_id} approved by {g.user["username"]}')
         return jsonify({'ok': True})
@@ -5838,12 +5798,14 @@ def reject_change_request(cr_id):
                          payload={'change_request_id': cr_id, 'admin_notes': admin_notes})
         db.commit()
 
-        # SMS to family
-        if cr['family_phone']:
-            msg = f"Sihha: Your change request for {cr['cycle_title']} was not approved."
+        # Email family
+        fam_email = _lookup_family_email(db, cr['family_id']) if cr.get('family_id') else ''
+        if fam_email:
+            body = f"Assalamu Alaikum {cr['family_name']},\n\nYour change request for {cr['cycle_title']} was not approved."
             if admin_notes:
-                msg += f"\nCoordinator note: {admin_notes}"
-            _send_sms(_normalize_phone(cr['family_phone']), msg)
+                body += f"\nCoordinator note: {admin_notes}"
+            body += "\n\n— Sihha Food Program"
+            _email_notify(fam_email, f'Sihha Change Request Update — {cr["cycle_title"]}', body)
 
         log.info(f'Change request {cr_id} rejected by {g.user["username"]}')
         return jsonify({'ok': True})
@@ -6082,20 +6044,23 @@ def edit_food_order_items():
             f"Added: {added_str}\n"
             f"Removed: {removed_str}"
         )
-        # Notify claimed shopping volunteers via SMS — fire-and-forget
+        # Notify claimed shopping volunteers via email — fire-and-forget
         claimed_vols = db.execute(
-            '''SELECT v.name, v.phone, vs.task_type
+            '''SELECT v.id, v.name, v.email, vs.task_type
                FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') AND vs.task_type='shopping' ''',
             (req['cycle_id'], family['id'])
         ).fetchall()
-        vol_sms = [
-            (_normalize_phone(v['phone'] or ''),
+        vol_email_sends = [
+            (v['email'],
+             f'Sihha Shopping List Update — {req["family_name"]}',
+             f"Assalamu Alaikum {v['name']},\n\n"
              f"Shopping list update: {req['family_name']} edited their order for {req['cycle_title']}.\n"
-             f"Added: {added_str}\nRemoved: {removed_str}\nPlease check the updated list.")
-            for v in claimed_vols if v['phone']
+             f"Added: {added_str}\nRemoved: {removed_str}\n"
+             f"Please check the updated shopping list.\n\n— Sihha Food Program")
+            for v in claimed_vols if v['email']
         ]
-        _send_sms_async(vol_sms)
+        _email_notify_async(vol_email_sends)
 
     log.info(f'Family {family["id"]} edited items for order {request_id}: +{added} -{removed}')
     return jsonify({'ok': True, 'added': added, 'removed': removed,
@@ -6166,131 +6131,15 @@ def serve_upload(filename):
 def portal_page():
     return send_from_directory('public', 'portal.html')
 
-# ── OTP Authentication ────────────────────────────────────────────────────────
+# ── OTP Authentication removed — all auth via username/password login ──────────
 
 @app.route('/api/otp/request', methods=['POST'])
 def otp_request():
-    """Step 1: validate phone, generate PIN, send via SMS.
-    Body: {phone, type}  where type='family'|'volunteer'
-    """
-    import random
-    data  = request.json or {}
-    phone = _normalize_phone(data.get('phone') or '')
-    kind  = data.get('type', 'volunteer')
-
-    if not phone:
-        return jsonify({'error': 'Phone number required'}), 400
-    if kind not in ('family', 'volunteer'):
-        return jsonify({'error': 'Invalid type'}), 400
-
-    db = get_db()
-
-    # Validate phone exists and is active
-    if kind == 'volunteer':
-        row = db.execute(
-            "SELECT id FROM volunteers WHERE phone=? AND status='active'", (phone,)
-        ).fetchone()
-        if not row:
-            return jsonify({'error': 'No active volunteer found with this number. '
-                                     'Contact a coordinator if you need help.'}), 404
-    else:
-        row = db.execute(
-            "SELECT id FROM families WHERE phone=? AND status='active'", (phone,)
-        ).fetchone()
-        if not row:
-            # Try fuzzy match (same logic as food-order/check)
-            all_fams = db.execute("SELECT id, phone FROM families WHERE status='active'").fetchall()
-            row = next(
-                (f for f in all_fams if _normalize_phone(f['phone'] or '') == phone), None
-            )
-        if not row:
-            return jsonify({'error': 'No active family account found with this number. '
-                                     'Contact us if you need help.'}), 404
-
-    # Expire any existing unused tokens for this phone+type
-    db.execute(
-        "UPDATE otp_tokens SET used=1 WHERE phone=? AND type=? AND used=0",
-        (phone, kind)
-    )
-
-    # Generate 6-digit code
-    code = str(random.randint(100000, 999999))
-    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
-    db.execute(
-        "INSERT INTO otp_tokens (id, phone, code, type, expires_at, used, created_at) VALUES (?,?,?,?,?,0,?)",
-        (str(uuid.uuid4()), phone, code, kind, expires_at, now())
-    )
-    db.commit()
-
-    # Send SMS
-    msg = f'Your Sihha verification code is: {code}\nExpires in 10 minutes. Do not share this code.'
-    sent = _send_sms(phone, msg)
-
-    # DEV MODE: always return code in response (Twilio may accept but carrier silently drops)
-    dev_mode = os.environ.get('OTP_DEV_MODE', '').lower() == 'true'
-    if dev_mode:
-        log.warning(f'OTP DEV MODE — code for {phone} is: {code}')
-        return jsonify({'sent': True, 'dev': True, 'code': code})
-
-    if not sent:
-        log.error(f'OTP SMS failed for {phone} — code was {code}')
-        return jsonify({'error': 'Could not send SMS. Please try again or contact a coordinator.'}), 500
-
-    return jsonify({'sent': True})
-
+    return jsonify({'error': 'OTP login removed. Please use username/password at /login.'}), 410
 
 @app.route('/api/otp/verify', methods=['POST'])
 def otp_verify():
-    """Step 2: verify PIN, issue session.
-    Body: {phone, code, type}
-    For volunteers: returns {token, volunteer}
-    For families:   returns {verified: true, phone}
-    """
-    data  = request.json or {}
-    phone = _normalize_phone(data.get('phone') or '')
-    code  = str(data.get('code') or '').strip()
-    kind  = data.get('type', 'volunteer')
-
-    if not phone or not code:
-        return jsonify({'error': 'Phone and code required'}), 400
-
-    db = get_db()
-    token_row = db.execute(
-        """SELECT * FROM otp_tokens
-           WHERE phone=? AND code=? AND type=? AND used=0
-             AND expires_at > ?
-           ORDER BY created_at DESC LIMIT 1""",
-        (phone, code, kind, now())
-    ).fetchone()
-
-    if not token_row:
-        return jsonify({'error': 'Invalid or expired code. Request a new one.'}), 400
-
-    # Burn the token
-    db.execute("UPDATE otp_tokens SET used=1 WHERE id=?", (token_row['id'],))
-    db.commit()
-
-    if kind == 'volunteer':
-        vol = db.execute(
-            "SELECT * FROM volunteers WHERE phone=? AND status='active'", (phone,)
-        ).fetchone()
-        if not vol:
-            return jsonify({'error': 'Volunteer account not found'}), 404
-        session_token = str(uuid.uuid4())
-        expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
-        db.execute(
-            "INSERT INTO portal_sessions (token, volunteer_id, expires_at, created_at) VALUES (?,?,?,?)",
-            (session_token, vol['id'], expires_at, now())
-        )
-        db.commit()
-        return jsonify({
-            'token': session_token,
-            'volunteer': {'id': vol['id'], 'name': vol['name'],
-                          'phone': vol['phone'], 'role': vol['role']}
-        })
-    else:
-        # Family — stateless, just return verified phone
-        return jsonify({'verified': True, 'phone': phone})
+    return jsonify({'error': 'OTP login removed. Please use username/password at /login.'}), 410
 
 
 @app.route('/api/portal/login', methods=['POST'])
@@ -6848,13 +6697,13 @@ def update_volunteer_slot(sid):
     )
     db.commit()
 
-    # SMS the displaced volunteer
+    # Email the displaced volunteer
     if 'claimed_by' in d and old_claimed_by and old_claimed_by != d.get('claimed_by'):
         try:
             old_vol = db.execute(
-                "SELECT name, phone FROM volunteers WHERE id=?", (old_claimed_by,)
+                "SELECT name, email FROM volunteers WHERE id=?", (old_claimed_by,)
             ).fetchone()
-            if old_vol and old_vol['phone']:
+            if old_vol and old_vol['email']:
                 fam = db.execute(
                     "SELECT f.name, dc.title FROM families f JOIN delivery_cycles dc ON dc.id=? WHERE f.id=?",
                     (slot['cycle_id'], slot['family_id'])
@@ -6862,12 +6711,11 @@ def update_volunteer_slot(sid):
                 fam_name    = fam['name']  if fam else 'a family'
                 cycle_title = fam['title'] if fam else ''
                 action = 'reassigned to another volunteer' if d.get('claimed_by') else 'released back to open'
-                _send_sms(_normalize_phone(old_vol['phone']),
-                    f"Sihha Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) "
-                    f"has been {action} by a coordinator. No action needed."
-                )
+                body = (f"Sihha Update: Your {slot['task_type']} assignment for {fam_name} ({cycle_title}) "
+                        f"has been {action} by a coordinator. No action needed.")
+                _email_send(old_vol['email'], 'Sihha Slot Update', body)
         except Exception as _e:
-            log.warning(f'update_volunteer_slot: SMS notify failed: {_e}')
+            log.warning(f'update_volunteer_slot: email notify failed: {_e}')
 
     row = db.execute(
         """SELECT vs.*, v.name as volunteer_name
@@ -7102,21 +6950,24 @@ def portal_signup():
 
     db.commit()
 
-    # SMS confirmation to volunteer
+    # Email confirmation to volunteer
     if claimed:
         vol_row = db.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
         vol = dict(vol_row) if vol_row else {}
         fam = dict(family) if family else {}
-        if vol.get('phone'):
+        vol_email = vol.get('email')
+        if vol_email:
             fcode      = fam.get('family_code', '')
             task_label = ', '.join(t.capitalize() for t in claimed)
-            msg = (f"Sihha Confirmed: {task_label}\n"
-                   f"Family: {fcode} - Size: {fam.get('family_size', '?')}\n"
-                   f"Delivery: {cycle['delivery_date_start']}\n"
-                   f"JazakAllah Khair!")
+            body = (f"Assalamu Alaikum {vol.get('name', '')},\n\n"
+                    f"You have been confirmed for: {task_label}\n"
+                    f"Family: {fcode} - Size: {fam.get('family_size', '?')}\n"
+                    f"Delivery: {cycle['delivery_date_start']}\n"
+                    f"JazakAllah Khair!\n\n— Sihha Food Program")
             if 'delivery' in claimed and fam.get('address'):
-                msg += f"\nAddress: {fam['address']}, {fam.get('city', '')}"
-            _send_sms(_normalize_phone(vol['phone']), msg)
+                body += f"\nAddress: {fam['address']}, {fam.get('city', '')}"
+            subject = f"Sihha Confirmed: {task_label}"
+            _email_send(vol_email, subject, body)
 
     return jsonify({'ok': True, 'claimed': claimed}), 201
 
@@ -7139,7 +6990,7 @@ def portal_cancel_slot(slot_id):
     db.commit()
     return jsonify({'ok': True})
 
-# ── SMS Reminders ─────────────────────────────────────────────────────────────
+# ── Email Reminders ────────────────────────────────────────────────────────────
 
 def _send_reminders_job():
     """Core reminder logic. Called by scheduler and by the admin trigger endpoint.
@@ -7151,42 +7002,48 @@ def _send_reminders_job():
     try:
         target_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
         slots = conn.execute(
-            '''SELECT vs.*, v.name as vol_name, v.phone as vol_phone,
+            '''SELECT vs.*, v.name as vol_name, v.email as vol_email,
                       f.name as family_name, f.family_code, f.address, f.city
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                JOIN families f ON vs.family_id = f.id
                WHERE vs.status IN ('claimed','confirmed') AND vs.task_date=?
-               AND v.phone IS NOT NULL AND TRIM(v.phone) != '' ''',
+               AND v.email IS NOT NULL AND TRIM(v.email) != '' ''',
             (target_date,)
         ).fetchall()
         sent = 0
         for s in slots:
-            vol_phone = ''.join(c for c in (s['vol_phone'] or '') if c.isdigit())
-            if not vol_phone:
+            vol_email = (s['vol_email'] or '').strip()
+            if not vol_email:
                 continue
             try:
                 conn.execute(
                     "INSERT INTO reminder_log (id,slot_id,sent_to,sent_at) VALUES (?,?,?,?)",
-                    (str(uuid.uuid4()), s['id'], vol_phone, datetime.utcnow().isoformat())
+                    (str(uuid.uuid4()), s['id'], vol_email, datetime.utcnow().isoformat())
                 )
                 conn.commit()
             except sqlite3.IntegrityError:
                 continue  # Already sent to this volunteer for this slot
             fcode = s['family_code'] or ''
             if s['task_type'] == 'delivery':
-                msg = (f"Sihha Reminder: Delivery in 2 days!\n"
-                       f"Family ID: {fcode}\n"
-                       f"Address: {s['address']}, {s['city']}\n"
-                       f"Deliver by 5pm. JazakAllah Khair!")
+                body = (f"Assalamu Alaikum {s['vol_name']},\n\n"
+                        f"Reminder: You have a delivery in 2 days!\n\n"
+                        f"Family ID: {fcode}\n"
+                        f"Address: {s['address']}, {s['city']}\n"
+                        f"Please deliver by 5pm.\n\n"
+                        f"JazakAllah Khair!\n\n— Sihha Food Program")
+                subject = f"Sihha Reminder: Delivery on {target_date}"
             else:
-                msg = (f"Sihha Reminder: Shopping in 2 days!\n"
-                       f"Family ID: {fcode}\n"
-                       f"Drop off at Abu Baqr by Sunday 2pm.\n"
-                       f"Send receipt to treasurer. JazakAllah Khair!")
-            if _send_sms(vol_phone, msg):
+                body = (f"Assalamu Alaikum {s['vol_name']},\n\n"
+                        f"Reminder: You have a shopping task in 2 days!\n\n"
+                        f"Family ID: {fcode}\n"
+                        f"Drop off at Abu Baqr by Sunday 2pm.\n"
+                        f"Send receipt to treasurer after shopping.\n\n"
+                        f"JazakAllah Khair!\n\n— Sihha Food Program")
+                subject = f"Sihha Reminder: Shopping on {target_date}"
+            if _email_send(vol_email, subject, body):
                 sent += 1
-        log.info(f'SMS Reminders: {sent} sent for target date {target_date}')
+        log.info(f'Email Reminders: {sent} sent for target date {target_date}')
         return sent, target_date
     finally:
         conn.close()
@@ -7443,7 +7300,7 @@ def db_debug():
         return jsonify({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 def _send_family_confirmation_reminders():
-    """7 days before delivery: send SMS to all active families with a link to /family portal.
+    """7 days before delivery: email all active families with a link to /family portal.
     Does NOT create food_request rows — families place orders via the portal (single creation path).
     Idempotent via reminder_log (slot_id='opt_in_{cycle_id}', sent_to=family_id)."""
     conn = sqlite3.connect(DB_PATH)
@@ -7464,12 +7321,12 @@ def _send_family_confirmation_reminders():
             log_key  = f'opt_in_{cycle_id}'
 
             families = conn.execute(
-                "SELECT id, name, phone FROM families WHERE status='active' AND phone IS NOT NULL AND TRIM(phone) != ''"
+                "SELECT id, name, email FROM families WHERE status='active' AND email IS NOT NULL AND TRIM(email) != ''"
             ).fetchall()
 
             for fam in families:
-                fam_phone = ''.join(c for c in (fam['phone'] or '') if c.isdigit())
-                if not fam_phone:
+                fam_email = (fam['email'] or '').strip()
+                if not fam_email:
                     continue
                 # Idempotency: skip if already notified for this family+cycle
                 already = conn.execute(
@@ -7478,13 +7335,13 @@ def _send_family_confirmation_reminders():
                 ).fetchone()
                 if already:
                     continue
-                msg = (
-                    f"Assalamu Alaikum {fam['name']}!\n\n"
+                body = (
+                    f"Assalamu Alaikum {fam['name']},\n\n"
                     f"Sihha has a food delivery on {cycle['delivery_date_start']}.\n"
-                    f"Tap here to place or manage your order:\n{portal_link}\n\n"
-                    f"JazakAllah Khair — Sihha Food Program"
+                    f"Please log in to place or manage your order:\n{portal_link}\n\n"
+                    f"JazakAllah Khair!\n\n— Sihha Food Program"
                 )
-                if _send_sms(fam_phone, msg):
+                if _email_send(fam_email, f'Sihha Food Delivery — {cycle["delivery_date_start"]}', body):
                     conn.execute(
                         "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
                         (str(uuid.uuid4()), log_key, fam['id'], datetime.utcnow().isoformat())
@@ -7492,39 +7349,7 @@ def _send_family_confirmation_reminders():
                     sent += 1
             conn.commit()
 
-        # Legacy: also send to any existing pending_confirmation rows that haven't been notified
-        # (handles rows created before this scheduler change was deployed)
-        legacy_rows = conn.execute(
-            '''SELECT fr.id, fr.confirmation_token,
-                      f.name as family_name, f.phone as family_phone,
-                      dc.delivery_date_start
-               FROM food_requests fr
-               JOIN families f ON fr.family_id = f.id
-               JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-               WHERE dc.delivery_date_start = ?
-                 AND fr.status = 'pending_confirmation'
-                 AND fr.confirmation_sent_at IS NULL
-                 AND f.phone IS NOT NULL AND TRIM(f.phone) != '' ''',
-            (target,)
-        ).fetchall()
-
-        for r in legacy_rows:
-            fam_phone = ''.join(c for c in (r['family_phone'] or '') if c.isdigit())
-            if not fam_phone:
-                continue
-            link = f"{base_url}/confirm/{r['confirmation_token']}"
-            msg  = (f"Assalamu Alaikum {r['family_name']}!\n\n"
-                    f"Sihha has a food delivery on {r['delivery_date_start']}.\n"
-                    f"Tap to place your order:\n{portal_link}\n\n"
-                    f"JazakAllah Khair — Sihha Food Program")
-            if _send_sms(fam_phone, msg):
-                conn.execute(
-                    "UPDATE food_requests SET confirmation_sent_at=? WHERE id=?",
-                    (datetime.utcnow().isoformat(), r['id'])
-                )
-                sent += 1
-        conn.commit()
-        log.info(f'Family opt-in notifications: {sent} SMS sent for delivery {target}')
+        log.info(f'Family opt-in notifications: {sent} emails sent for delivery {target}')
         return sent
     finally:
         conn.close()
@@ -7621,7 +7446,7 @@ def _release_unconfirmed_slots_job():
             '''SELECT vs.id, vs.task_type, vs.claimed_by,
                       dc.delivery_date_start, dc.title as cycle_title,
                       f.name as family_name, f.id as family_id,
-                      v.phone as vol_phone, v.name as vol_name
+                      v.email as vol_email, v.name as vol_name
                FROM volunteer_slots vs
                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
                JOIN families f ON vs.family_id = f.id
@@ -7662,16 +7487,16 @@ def _release_unconfirmed_slots_job():
             conn.commit()
             released += 1
 
-            # SMS to volunteer
-            vol_phone = ''.join(c for c in (slot['vol_phone'] or '') if c.isdigit())
-            if vol_phone:
+            # Email volunteer
+            vol_email = (slot['vol_email'] or '').strip() if slot['vol_email'] else ''
+            if vol_email:
                 try:
-                    _send_sms(vol_phone,
-                        f"Sihha Update - Slot Released\n"
-                        f"{slot['family_name']} has not placed an order for {slot['cycle_title']} "
-                        f"(delivery {slot['delivery_date_start']}).\n"
-                        f"Your {slot['task_type']} slot has been released — no action needed.\n"
-                        f"JazakAllah Khair for signing up!")
+                    body = (f"Assalamu Alaikum {slot['vol_name']},\n\n"
+                            f"{slot['family_name']} has not placed an order for {slot['cycle_title']} "
+                            f"(delivery {slot['delivery_date_start']}).\n"
+                            f"Your {slot['task_type']} slot has been released — no action needed.\n\n"
+                            f"JazakAllah Khair for signing up!\n\n— Sihha Food Program")
+                    _email_send(vol_email, f'Sihha Slot Released — {slot["cycle_title"]}', body)
                 except Exception:
                     pass
 
@@ -7698,24 +7523,8 @@ try:
                        id='family_cutoff_skip', replace_existing=True)
     _scheduler.add_job(_release_unconfirmed_slots_job, 'cron', hour=10, minute=0,
                        id='auto_release_unconfirmed_slots', replace_existing=True)
-
-    def _purge_otp_tokens():
-        """Delete used or expired OTP tokens daily — housekeeping only."""
-        try:
-            import sqlite3 as _sq
-            _db = _sq.connect(DB_PATH)
-            _db.row_factory = _sq.Row
-            _db.execute("DELETE FROM otp_tokens WHERE used=1 OR expires_at < ?", (now(),))
-            _db.commit()
-            _db.close()
-            log.info('OTP token cleanup complete')
-        except Exception as _e:
-            log.warning(f'OTP purge failed: {_e}')
-
-    _scheduler.add_job(_purge_otp_tokens, 'cron', hour=3, minute=0,
-                       id='otp_token_cleanup', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — reminders 08:00, family confirmations 09:00, cutoff 09:30, auto-release slots 10:00, OTP cleanup 03:00 UTC')
+    log.info('APScheduler started — email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00 UTC')
 except ImportError:
     log.warning('APScheduler not installed. Run: pip install apscheduler')
 except Exception as _e:

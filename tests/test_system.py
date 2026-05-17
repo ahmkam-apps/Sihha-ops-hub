@@ -6,6 +6,24 @@ Run: pytest tests/ -v
 import uuid, pytest
 from datetime import datetime, timedelta
 
+
+def _get_family_token(client, family_data, new_password='FamPass1!'):
+    """Complete the first-login set-password flow and return a full session Bearer token.
+    family_data must include login_username and login_temp_password (from POST /api/families response).
+    """
+    username  = family_data.get('login_username')
+    temp_pass = family_data.get('login_temp_password')
+    if not username or not temp_pass:
+        return None
+    login = client.post('/api/auth/login',
+                        json={'username': username, 'password': temp_pass}).get_json()
+    if login.get('must_change_password'):
+        sp = client.post('/api/auth/set-password',
+                         json={'temp_token': login['temp_token'],
+                               'password': new_password}).get_json()
+        return sp.get('token')
+    return login.get('token')
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — AUTH
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -270,7 +288,7 @@ class TestDeliveryCycles:
 class TestFoodOrders:
     """
     Full family food order flow. Tests key business rules:
-    - Phone not found → not registered
+    - Unauthenticated check → 401
     - No open cycle → no orders accepted
     - Bundle size auto-assigned from household_size (NEVER shown to family)
     - One order per family per cycle enforced
@@ -283,7 +301,12 @@ class TestFoodOrders:
         res = client.post('/api/families', headers=auth,
                           json={'name': 'Order Family', 'phone': self.phone,
                                 'family_size': 4, 'status': 'active'})
-        self.family_id = res.get_json()['id']
+        fam_data = res.get_json()
+        self.family_id = fam_data['id']
+
+        # Get family session token
+        self.family_token   = _get_family_token(client, fam_data)
+        self.family_headers = {'Authorization': f'Bearer {self.family_token}'}
 
         # Create an open cycle
         res = client.post('/api/delivery-cycles', headers=auth,
@@ -296,13 +319,12 @@ class TestFoodOrders:
         self.client   = client
         self.auth     = auth
 
-    def test_check_phone_not_registered(self, client):
-        res = client.get('/api/food-order/check?phone=0000000000')
-        assert res.status_code == 200
-        assert res.get_json()['registered'] is False
+    def test_check_unauthenticated_returns_401(self, client):
+        res = client.get('/api/food-order/check')
+        assert res.status_code == 401
 
-    def test_check_phone_registered_open_cycle(self, client):
-        res = client.get(f'/api/food-order/check?phone={self.phone}')
+    def test_check_registered_open_cycle(self, client):
+        res = client.get('/api/food-order/check', headers=self.family_headers)
         assert res.status_code == 200
         data = res.get_json()
         assert data['registered'] is True
@@ -314,7 +336,7 @@ class TestFoodOrders:
         assert data['bundle_size'] == 'M'
 
     def test_submit_food_order(self, client):
-        check = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         open_cycle = next((c for c in check.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
@@ -340,13 +362,10 @@ class TestFoodOrders:
         assert res.get_json()['ok'] is True
 
     def test_one_order_per_family_per_cycle(self, client):
-        # Submit first order
-        check = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
-        # Only submit if not already submitted (test isolation)
-        if not check.get('already_submitted'):
-            client.post('/api/food-order',
-                        json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
-                              'selected_items': []})
+        # Submit once (may already be submitted from another test in session scope)
+        client.post('/api/food-order',
+                    json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
+                          'selected_items': []})
         # Try to submit again → must fail
         res = client.post('/api/food-order',
                           json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
@@ -354,7 +373,7 @@ class TestFoodOrders:
         assert res.status_code == 409
 
     def test_check_shows_already_submitted(self, client):
-        check1 = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check1 = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         open_cycle = next((c for c in check1.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
@@ -364,7 +383,7 @@ class TestFoodOrders:
                         json={'family_id': check1['family_id'],
                               'cycle_id':  open_cycle['id'],
                               'selected_items': []})
-        check2 = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check2 = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         # After submitting, the cycle must have an order object (not None)
         submitted = next((c for c in check2['cycles'] if c['id'] == open_cycle['id']), None)
         assert submitted is not None
@@ -375,18 +394,22 @@ class TestFoodOrders:
         res = client.post('/api/families', headers=auth,
                           json={'name': 'Tiny Family', 'phone': phone,
                                 'family_size': 1, 'status': 'active'})
-        check = client.get(f'/api/food-order/check?phone={phone}').get_json()
-        if check.get('open_cycle'):
-            assert check['bundle_size'] == 'S'
+        tok = _get_family_token(client, res.get_json())
+        check = client.get('/api/food-order/check',
+                           headers={'Authorization': f'Bearer {tok}'}).get_json()
+        assert check['registered'] is True
+        assert check['bundle_size'] == 'S'
 
     def test_bundle_size_large_for_big_family(self, client, auth):
         phone = f'585202{uuid.uuid4().hex[:4]}'
-        client.post('/api/families', headers=auth,
-                    json={'name': 'Big Family', 'phone': phone,
-                          'family_size': 8, 'status': 'active'})
-        check = client.get(f'/api/food-order/check?phone={phone}').get_json()
-        if check.get('open_cycle'):
-            assert check['bundle_size'] == 'L'
+        res = client.post('/api/families', headers=auth,
+                          json={'name': 'Big Family', 'phone': phone,
+                                'family_size': 8, 'status': 'active'})
+        tok = _get_family_token(client, res.get_json())
+        check = client.get('/api/food-order/check',
+                           headers={'Authorization': f'Bearer {tok}'}).get_json()
+        assert check['registered'] is True
+        assert check['bundle_size'] == 'L'
 
     def test_family_cancel_allows_reorder(self, client):
         """Family cancel hard-deletes the row → family can place a fresh order in same cycle."""
@@ -394,7 +417,7 @@ class TestFoodOrders:
         client.post('/api/food-order',
                     json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
                           'selected_items': []})
-        check = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         cycle = next((c for c in check.get('cycles', []) if c['id'] == self.cycle_id), None)
         if not cycle or not cycle.get('order'):
             pytest.skip('Order not found after submit')
@@ -452,13 +475,11 @@ class TestVolunteerPortal:
         self.cycle = res.get_json()
         self.cycle_id = self.cycle['id']
 
-        # Submit a food order for the family
-        check = client.get(f'/api/food-order/check?phone={phone_family}').get_json()
-        if check.get('open_cycle') and not check.get('already_submitted'):
-            client.post('/api/food-order',
-                        json={'family_id': self.family_id,
-                              'cycle_id':  self.cycle_id,
-                              'selected_items': []})
+        # Submit a food order for the family (idempotent — 409 if already submitted is fine)
+        client.post('/api/food-order',
+                    json={'family_id': self.family_id,
+                          'cycle_id':  self.cycle_id,
+                          'selected_items': []})
 
         # Generate slots
         client.post(f'/api/delivery-cycles/{self.cycle_id}/generate-slots', headers=auth)
@@ -468,15 +489,15 @@ class TestVolunteerPortal:
         vol_phone_2 = f'5854{uuid.uuid4().int % 1000000:06d}'
         res = client.post('/api/volunteers', headers=auth,
                           json={'name': 'Shopper Vol', 'phone': vol_phone_1,
-                                'role': 'shopper', 'status': 'active',
-                                'wa_phone': '+1' + vol_phone_1, 'wa_apikey': '1111111'})
+                                'email': f'shopper_{vol_phone_1}@test.sihha.org',
+                                'role': 'shopper', 'status': 'active'})
         self.shopper_phone = vol_phone_1
         self.shopper_id    = res.get_json()['id']
 
         res = client.post('/api/volunteers', headers=auth,
                           json={'name': 'Delivery Vol', 'phone': vol_phone_2,
-                                'role': 'delivery', 'status': 'active',
-                                'wa_phone': '+1' + vol_phone_2, 'wa_apikey': '2222222'})
+                                'email': f'delivery_{vol_phone_2}@test.sihha.org',
+                                'role': 'delivery', 'status': 'active'})
         self.delivery_phone = vol_phone_2
         self.delivery_id    = res.get_json()['id']
 
@@ -557,10 +578,10 @@ class TestVolunteerPortal:
                                                  'task_types': ['shopping']})
         assert res.status_code == 201
 
-        # SMS confirmation must NOT contain the family address
+        # Email confirmation must NOT contain the family address
         assert wa_mock.called
         call_args = wa_mock.call_args
-        message = call_args[0][1]  # _send_sms(phone, message)
+        message = call_args[0][2]  # _email_send(to_email, subject, body)
         assert '123 Elm St' not in message, 'Shopper must NEVER receive family address'
         assert 'Shopping' in message or 'shopping' in message
 
@@ -603,10 +624,10 @@ class TestVolunteerPortal:
                                                  'task_types': ['delivery']})
         assert res.status_code == 201
 
-        # Delivery SMS must contain the family address
+        # Delivery email must contain the family address
         assert wa_mock.called
         call_args = wa_mock.call_args
-        message = call_args[0][1]  # _send_sms(phone, message)
+        message = call_args[0][2]  # _email_send(to_email, subject, body)
         assert '123 Elm St' in message, 'Delivery volunteer must receive family address'
 
     def test_delivery_my_tasks_has_address(self, client):
@@ -855,13 +876,13 @@ class TestPages:
 
 class TestOrderPage:
     """
-    Tests the public family food order flow (/order + /api/food-order/check + /api/food-order).
+    Tests the public family food order flow (/api/food-order/check + /api/food-order).
     Business rules verified:
-    - Unregistered phone → registered=False (no family data leaked)
-    - Registered family, open cycle → receives food items + bundle_size
+    - No auth → 401
+    - Registered family with token, open cycle → receives food items + bundle_size
     - Bundle size hidden from response labels (internal field only)
     - Submitting twice → 409
-    - already_submitted flag set correctly after first submission
+    - order flag set correctly after first submission
     - Empty selected_items list is valid (family opts out of items)
     """
 
@@ -875,7 +896,10 @@ class TestOrderPage:
         res = client.post('/api/families', headers=auth,
                           json={'name': 'Order Page Family', 'phone': self.phone,
                                 'family_size': 4, 'status': 'active'})
-        self.family_id = res.get_json()['id']
+        fam_data = res.get_json()
+        self.family_id = fam_data['id']
+        tok = _get_family_token(client, fam_data)
+        self.family_headers = {'Authorization': f'Bearer {tok}'}
 
         # Open cycle
         res = client.post('/api/delivery-cycles', headers=auth,
@@ -891,17 +915,12 @@ class TestOrderPage:
         res = client.get('/order')
         assert res.status_code in (301, 302)
 
-    def test_check_unregistered_phone(self, client):
-        res = client.get('/api/food-order/check?phone=0000000000')
-        assert res.status_code == 200
-        data = res.get_json()
-        assert data['registered'] is False
-        # Must not leak any family info
-        assert 'family_id' not in data
-        assert 'food_items' not in data
+    def test_check_no_auth_returns_401(self, client):
+        res = client.get('/api/food-order/check')
+        assert res.status_code == 401
 
     def test_check_registered_family_gets_items(self, client):
-        res = client.get(f'/api/food-order/check?phone={self.phone}')
+        res = client.get('/api/food-order/check', headers=self.family_headers)
         assert res.status_code == 200
         data = res.get_json()
         assert data['registered'] is True
@@ -915,13 +934,8 @@ class TestOrderPage:
         assert 'id' in item
         assert 'name' in item
 
-    def test_check_no_phone_param(self, client):
-        # No auth header + no phone → 401 (Authentication required)
-        res = client.get('/api/food-order/check')
-        assert res.status_code == 401
-
     def test_submit_with_selected_items(self, client):
-        check = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         open_cycle = next((c for c in check.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
@@ -977,7 +991,7 @@ class TestOrderPage:
         assert res.status_code == 409
 
     def test_already_submitted_flag_after_order(self, client):
-        check1 = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check1 = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         open_cycle = next((c for c in check1.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
@@ -986,18 +1000,10 @@ class TestOrderPage:
             'cycle_id':  open_cycle['id'],
             'selected_items': []
         })
-        check2 = client.get(f'/api/food-order/check?phone={self.phone}').get_json()
+        check2 = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         submitted = next((c for c in check2['cycles'] if c['id'] == open_cycle['id']), None)
         assert submitted is not None
         assert submitted.get('order') is not None
-
-    def test_inactive_family_not_found(self, client, auth):
-        phone = f'585602{uuid.uuid4().hex[:4]}'
-        client.post('/api/families', headers=auth,
-                    json={'name': 'Inactive Fam', 'phone': phone,
-                          'family_size': 2, 'status': 'inactive'})
-        check = client.get(f'/api/food-order/check?phone={phone}').get_json()
-        assert check['registered'] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1342,10 +1348,10 @@ class TestFamilySessionAuth:
         assert data['registered'] is True
         assert data['family_id'] == self.family_id
 
-    def test_legacy_phone_param_still_works(self, client):
+    def test_phone_param_removed_returns_401(self, client):
+        """Legacy ?phone= param is no longer supported — endpoint requires Bearer token."""
         res = client.get(f'/api/food-order/check?phone={self.phone}')
-        assert res.status_code == 200
-        assert res.get_json()['registered'] is True
+        assert res.status_code == 401
 
     def test_invalid_bearer_token_returns_401(self, client):
         res = client.get('/api/food-order/check',

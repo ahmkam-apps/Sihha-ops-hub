@@ -49,6 +49,6 @@ def auth(admin_token):
 
 @pytest.fixture
 def wa_mock():
-    """Patches _send_sms so tests can assert on SMS calls without real Twilio."""
-    with patch.object(_server, '_send_sms', return_value=True) as m:
+    """Patches _email_send so tests can assert on email notifications without real SendGrid calls."""
+    with patch.object(_server, '_email_send', return_value=True) as m:
         yield m
