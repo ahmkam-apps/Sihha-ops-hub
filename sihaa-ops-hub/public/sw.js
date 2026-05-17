@@ -1,5 +1,5 @@
-// Sihha Service Worker — v4
-const CACHE = 'sihaa-v4';
+// Sihha Service Worker — v5
+const CACHE = 'sihaa-v5';
 const PAGES = ['/family', '/portal', '/intake', '/volunteer'];
 
 // ── Install: pre-cache public pages ──────────────────────────────────────────
@@ -47,7 +47,8 @@ self.addEventListener('fetch', e => {
     e.respondWith(
       fetch(e.request)
         .then(r => {
-          caches.open(CACHE).then(c => c.put(e.request, r.clone()));
+          const toCache = r.clone(); // clone BEFORE body is consumed
+          caches.open(CACHE).then(c => c.put(e.request, toCache));
           return r;
         })
         .catch(() => caches.match(e.request).then(cached => cached || offlinePage()))
