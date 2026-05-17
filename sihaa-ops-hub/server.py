@@ -7607,9 +7607,9 @@ def _release_unconfirmed_slots_job():
     Sends WA to each released volunteer. Idempotent via reminder_log (key: slot_id + 'autorelease').
     """
     from datetime import date as _date, timedelta as _td
-    conn = _bootstrap_conn()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        conn.row_factory = sqlite3.Row
         cutoff_date = (_date.today() + _td(days=3)).isoformat()
         today_str   = _date.today().isoformat()
 
