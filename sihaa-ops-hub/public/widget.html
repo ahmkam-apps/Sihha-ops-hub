@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sihha — Donation Progress</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  @font-face {
+    font-family: 'AreaExtrabold';
+    src: url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'AreaNormal';
+    src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
+    background: transparent;
+    color: #ffffff;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  #widget { padding: 8px 12px 12px; width: 100%; }
+
+  /* ── SHARED ───────────────────────────────────────────── */
+  .w-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: rgba(255,255,255,0.4);
+    margin-bottom: 4px;
+  }
+
+  .w-bar-track {
+    width: 100%;
+    background: rgba(255,255,255,0.3);
+    overflow: hidden;
+  }
+  .w-bar-fill  { background: #000000; height: 100%; transition: width 1.2s cubic-bezier(0.4,0,0.2,1); }
+
+  .w-stat-box {
+    flex-shrink: 0;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .w-stat-num {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-weight: 800;
+    color: #111111;
+    line-height: 1;
+  }
+  .w-stat-label {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-weight: 800;
+    color: #ffffff;
+    line-height: 1.2;
+  }
+
+  .w-divider {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    margin: 10px 0;
+  }
+
+  .w-footer {
+    font-size: 9px;
+    color: rgba(255,255,255,0.2);
+    text-align: right;
+    margin-top: 8px;
+    letter-spacing: 0.4px;
+  }
+
+  /* ── DESKTOP ──────────────────────────────────────────── */
+  .d-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+  .d-title {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+  }
+  .d-legend { display: flex; gap: 16px; align-items: center; }
+  .d-legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; opacity: 0.5; }
+
+  .d-progress-meta { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .d-amount {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 26px; font-weight: 800; letter-spacing: -0.03em; line-height: 1;
+  }
+  .d-goal-label { font-size: 12px; opacity: 0.55; }
+  .d-bar-wrap { display: flex; height: 24px; }
+  .d-progress-footer { display: flex; justify-content: space-between; margin-top: 6px; }
+  .d-pct { font-size: 11px; opacity: 0.45; }
+  .d-surplus { font-size: 11px; color: #27ae60; font-weight: 700; }
+  .d-goal-met { margin-top: 8px; font-size: 12px; color: #27ae60; font-weight: 700; }
+
+  .d-chart-wrap { position: relative; width: 100%; margin-top: 20px; }
+  canvas { display: block; width: 100% !important; }
+
+  .d-stats { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+  .d-stat-row { display: flex; align-items: center; gap: 20px; }
+
+  .d-delivery { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .d-del-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .d-del-date { font-family: 'AreaExtrabold', sans-serif; font-size: 22px; font-weight: 800; color: #fff; }
+  .d-del-sub  { font-size: 12px; color: rgba(255,255,255,0.45); margin-top: 4px; }
+  .d-del-days { font-size: 12px; color: rgba(255,255,255,0.45); padding-top: 4px; }
+  .d-del-footer { display: flex; justify-content: space-between; }
+  .d-del-tag  { font-size: 10px; color: rgba(255,255,255,0.3); }
+
+  /* ── MOBILE ───────────────────────────────────────────── */
+  .m-section-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: rgba(255,255,255,0.35);
+    margin-bottom: 6px;
+  }
+  .m-amount {
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 38px; font-weight: 800; letter-spacing: -0.03em; line-height: 1;
+    color: #ffffff;
+  }
+  .m-goal-label { font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 4px; }
+  .m-pct { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 5px; }
+  .m-surplus { font-size: 11px; color: #27ae60; font-weight: 700; margin-top: 3px; }
+
+  .m-stat-row { display: flex; align-items: center; gap: 14px; }
+  .m-del-top  { display: flex; justify-content: space-between; align-items: center; }
+  .m-del-date { font-family: 'AreaExtrabold', sans-serif; font-size: 18px; font-weight: 800; color: #fff; }
+  .m-del-right{ text-align: right; }
+  .m-del-days { font-size: 12px; color: rgba(255,255,255,0.5); }
+  .m-del-sub  { font-size: 10px; color: rgba(255,255,255,0.3); margin-top: 2px; }
+  .m-del-bar  { height: 3px; background: rgba(255,255,255,0.1); margin-top: 8px; }
+  .m-del-fill { height: 3px; background: #27ae60; transition: width 1.2s ease; }
+</style>
+</head>
+<body>
+<div id="widget"></div>
+
+<script>
+const API      = '/api/donate-stats';
+const MOBILE_W = 600;
+let chart      = null;
+let lastData   = null;
+let lastMode   = null;
+
+function fmt(n) {
+  if (n == null) return '—';
+  return '$' + Math.round(n).toLocaleString('en-US');
+}
+function mLabel(ym) {
+  const [y, m] = ym.split('-');
+  return new Date(+y, +m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+}
+function isMobile() { return window.innerWidth < MOBILE_W; }
+
+function countUp(el, target, duration) {
+  const steps    = 60;
+  const interval = duration / steps;
+  const inc      = target / steps;
+  let cur        = 0;
+  const timer = setInterval(() => {
+    cur = Math.min(cur + inc, target);
+    el.textContent = Math.round(cur).toLocaleString('en-US');
+    if (cur >= target) clearInterval(timer);
+  }, interval);
+}
+
+/* ── PROGRESS BAR LOGIC (shared) ──────────────────────── */
+function calcBar(d) {
+  const monthlyNeed = d.monthly_need    || 0;
+  const adjTarget   = d.this_month_adjusted_target != null ? d.this_month_adjusted_target : monthlyNeed;
+  const surplus     = d.last_month_surplus || 0;
+  const collected   = d.month_raised    || 0;
+  const goalMet     = adjTarget === 0 && monthlyNeed > 0;
+  const barGoal     = goalMet ? monthlyNeed : adjTarget;
+
+  let fillPct = 0, pctLabel = '', surplusNote = '';
+
+  if (goalMet) {
+    fillPct  = 100;
+    pctLabel = "100% · fully covered by last month's surplus";
+  } else if (collected >= barGoal && barGoal > 0) {
+    fillPct     = 100;
+    pctLabel    = '100% · goal reached';
+    surplusNote = '+' + fmt(collected - barGoal) + ' surplus this month';
+  } else {
+    fillPct     = barGoal > 0 ? Math.min(99, Math.round(collected / barGoal * 100)) : 0;
+    pctLabel    = fillPct + '% of Monthly Goal';
+    surplusNote = surplus > 0 ? '+' + fmt(surplus) + ' surplus from last month' : '';
+  }
+
+  return { fillPct, pctLabel, surplusNote, goalMet, monthlyNeed, collected };
+}
+
+/* ── DELIVERY DATA ────────────────────────────────────── */
+function calcDelivery(d) {
+  if (!d.next_delivery_date) return null;
+  const nd       = new Date(d.next_delivery_date + 'T00:00:00');
+  const fmtDate  = nd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const days     = d.days_to_delivery;
+  const pct      = d.cycle_pct != null ? d.cycle_pct : 0;
+  const cs       = new Date(nd); cs.setDate(cs.getDate() - 30);
+  const startLbl = cs.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const daysLbl  = days === 0 ? 'Today' : days < 0 ? 'Delivered' : days === 1 ? '1 day away' : days + ' days away';
+  const title    = (d.next_cycle_title || '') + ' · Next Delivery';
+  return { fmtDate, daysLbl, pct, startLbl, title };
+}
+
+/* ── DESKTOP RENDER ───────────────────────────────────── */
+function renderDesktop(d) {
+  const bar = calcBar(d);
+  const del = calcDelivery(d);
+
+  document.getElementById('widget').innerHTML = `
+    <div class="d-header">
+      <div class="d-title">Donation Progress</div>
+      <div class="d-legend">
+        <div class="d-legend-item">
+          <svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="currentColor" stroke-width="3.5"/></svg>
+          Actual
+        </div>
+        <div class="d-legend-item">
+          <svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="currentColor" stroke-width="2.5" stroke-dasharray="5,3"/></svg>
+          Projected
+        </div>
+        <div class="d-legend-item">
+          <svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#00bcd4" stroke-width="2" stroke-dasharray="4,3"/></svg>
+          Monthly Goal
+        </div>
+      </div>
+    </div>
+
+    <div class="d-progress-meta">
+      <div class="d-amount">${fmt(bar.collected)}</div>
+      <div class="d-goal-label">Monthly Goal: ${fmt(bar.monthlyNeed)}</div>
+    </div>
+    <div class="w-bar-track" style="height:30px;">
+      <div class="w-bar-fill" style="width:${bar.fillPct}%;height:30px;"></div>
+    </div>
+    <div class="d-progress-footer">
+      <div class="d-pct">${bar.pctLabel}</div>
+      <div class="d-pct">${bar.surplusNote}</div>
+    </div>
+    ${bar.goalMet ? '<div class="d-goal-met" style="color:rgba(255,255,255,0.6);">✓ This month\'s goal is fully covered by last month\'s surplus</div>' : ''}
+
+    <div class="d-chart-wrap"><canvas id="trend-chart" height="90"></canvas></div>
+
+    <div class="d-stats">
+      <div class="d-stat-row">
+        <div class="w-stat-box" style="width:64px;height:64px;">
+          <div class="w-stat-num" style="font-size:26px;" id="d-lives">—</div>
+        </div>
+        <div class="w-stat-label" style="font-size:22px;">Lives Impacted</div>
+      </div>
+      <div class="d-stat-row">
+        <div class="w-stat-box" style="width:64px;height:64px;">
+          <div class="w-stat-num" style="font-size:26px;">${(d.volunteers_active||0).toLocaleString('en-US')}</div>
+        </div>
+        <div class="w-stat-label" style="font-size:22px;">Volunteers Mobilized</div>
+      </div>
+      ${del ? `
+      <div class="d-delivery">
+        <div class="d-del-top">
+          <div>
+            <div class="d-del-date">${del.fmtDate}</div>
+            <div class="d-del-sub">${del.title}</div>
+          </div>
+          <div class="d-del-days">${del.daysLbl}</div>
+        </div>
+        <div class="w-bar-track" style="height:4px;margin-top:8px;">
+          <div style="height:4px;background:#27ae60;width:${del.pct}%;transition:width 1.2s ease;"></div>
+        </div>
+        <div class="d-del-footer">
+          <div class="d-del-tag">Cycle started ${del.startLbl}</div>
+          <div class="d-del-tag">${del.pct}% through</div>
+        </div>
+      </div>` : ''}
+    </div>
+
+    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+
+  if (d.lives_impacted != null) {
+    countUp(document.getElementById('d-lives'), d.lives_impacted, 1800);
+  }
+
+  buildChart(d, bar.monthlyNeed);
+}
+
+/* ── MOBILE RENDER ────────────────────────────────────── */
+function renderMobile(d) {
+  const bar = calcBar(d);
+  const del = calcDelivery(d);
+
+  document.getElementById('widget').innerHTML = `
+    <div class="m-section-label">Donation Progress</div>
+    <div class="m-amount">${fmt(bar.collected)}</div>
+    <div class="m-goal-label">Monthly Goal: ${fmt(bar.monthlyNeed)}</div>
+
+    <div class="w-bar-track" style="height:30px;margin-top:12px;">
+      <div class="w-bar-fill" style="width:${bar.fillPct}%;height:30px;"></div>
+    </div>
+    <div class="m-pct">${bar.pctLabel}</div>
+    ${bar.surplusNote ? `<div class="m-pct">${bar.surplusNote}</div>` : ''}
+    ${bar.goalMet ? `<div class="m-pct">✓ Fully covered by last month's surplus</div>` : ''}
+
+    <hr class="w-divider" style="margin:16px 0;">
+
+    <div class="m-stat-row" style="margin-bottom:14px;">
+      <div class="w-stat-box" style="width:52px;height:52px;">
+        <div class="w-stat-num" style="font-size:20px;" id="m-lives">—</div>
+      </div>
+      <div class="w-stat-label" style="font-size:18px;">Lives Impacted</div>
+    </div>
+    <div class="m-stat-row">
+      <div class="w-stat-box" style="width:52px;height:52px;">
+        <div class="w-stat-num" style="font-size:20px;">${(d.volunteers_active||0).toLocaleString('en-US')}</div>
+      </div>
+      <div class="w-stat-label" style="font-size:18px;">Volunteers Mobilized</div>
+    </div>
+
+    ${del ? `
+    <hr class="w-divider" style="margin:16px 0;">
+    <div class="m-del-top">
+      <div>
+        <div class="m-del-date">${del.fmtDate}</div>
+        <div class="m-del-sub">Next Delivery</div>
+      </div>
+      <div class="m-del-right">
+        <div class="m-del-days">${del.daysLbl}</div>
+        <div class="m-del-sub">${d.next_cycle_title||''}</div>
+      </div>
+    </div>
+    <div class="m-del-bar">
+      <div class="m-del-fill" style="width:${del.pct}%;"></div>
+    </div>` : ''}
+
+    <div class="w-footer">Updated every 5 min · Sihha</div>`;
+
+  if (d.lives_impacted != null) {
+    countUp(document.getElementById('m-lives'), d.lives_impacted, 1800);
+  }
+}
+
+/* ── CHART (desktop only) ─────────────────────────────── */
+function buildChart(d, monthlyNeed) {
+  const dm = (d.donations_by_month || []).filter(m => (m.total || 0) > 0);
+  const histLabels = dm.map(m => mLabel(m.month));
+  const histTotals = dm.map(m => m.total || 0);
+  const avgMonthly   = d.proj_avg_monthly   || 0;
+  const monthlyTrend = d.proj_monthly_trend || 0;
+  const lineLastTotal = histTotals.length ? histTotals[histTotals.length - 1] : 0;
+  const projBase = avgMonthly || lineLastTotal;
+  const maxDrop  = projBase * 0.05;
+  const trendDamp = monthlyTrend >= 0 ? monthlyTrend : Math.max(monthlyTrend, -maxDrop);
+
+  const projLabels = [], projVals = [];
+  if (dm.length) {
+    const lastDate = new Date(dm[dm.length - 1].month + '-01');
+    for (let i = 1; i <= 6; i++) {
+      const date = new Date(lastDate.getFullYear(), lastDate.getMonth() + i, 1);
+      projLabels.push(date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }));
+      projVals.push(Math.max(0, Math.round(projBase + trendDamp * i)));
+    }
+  }
+
+  const allLabels  = [...histLabels, ...projLabels];
+  const actualData = [...histTotals, ...Array(projLabels.length).fill(null)];
+  const projData   = [...Array(histLabels.length - 1).fill(null), lineLastTotal, ...projVals];
+
+  const goalPlugin = {
+    id: 'goalPlugin',
+    afterDraw(ch) {
+      if (!monthlyNeed) return;
+      const { ctx, chartArea: { left, right }, scales: { y } } = ch;
+      const yPos = y.getPixelForValue(monthlyNeed);
+      ctx.save();
+      ctx.beginPath(); ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = '#00bcd4'; ctx.lineWidth = 2; ctx.globalAlpha = 0.8;
+      ctx.moveTo(left, yPos); ctx.lineTo(right, yPos); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      ctx.font = 'bold 10px Arial'; ctx.fillStyle = '#00bcd4';
+      ctx.textAlign = 'left';
+      ctx.fillText('Monthly Goal  ' + fmt(monthlyNeed), left + 6, yPos - 5);
+      ctx.restore();
+    }
+  };
+
+  if (chart) { chart.destroy(); chart = null; }
+  const canvas = document.getElementById('trend-chart');
+  if (!canvas) return;
+
+  chart = new Chart(canvas.getContext('2d'), {
+    type: 'line', plugins: [goalPlugin],
+    data: {
+      labels: allLabels,
+      datasets: [
+        { label: 'Actual', data: actualData, borderColor: '#ffffff', borderWidth: 3.5,
+          backgroundColor: 'transparent', fill: false, tension: 0.35,
+          pointBackgroundColor: '#ffffff', pointRadius: 4, pointHoverRadius: 6, spanGaps: false },
+        { label: 'Projected', data: projData, borderColor: '#ffffff', borderWidth: 2.5,
+          borderDash: [6, 4], backgroundColor: 'transparent', fill: false, tension: 0.25,
+          pointRadius: 3, pointBackgroundColor: '#ffffff', spanGaps: false }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      animation: { duration: 800 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(0,0,0,0.8)', borderColor: 'rgba(255,255,255,0.1)',
+          borderWidth: 1, titleColor: '#aaa', bodyColor: '#fff',
+          callbacks: {
+            label: ctx => ctx.parsed.y == null ? null :
+              ` ${ctx.dataset.label === 'Projected' ? 'Projected' : 'Actual'}: ${fmt(ctx.parsed.y)}`,
+            afterBody: () => [` Monthly Goal: ${fmt(monthlyNeed)}`]
+          }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, border: { display: false },
+             ticks: { color: 'rgba(255,255,255,0.4)', font: { size: 10 } } },
+        y: { grid: { display: false }, border: { display: false }, beginAtZero: true,
+             ticks: { color: 'rgba(255,255,255,0.4)', font: { size: 10 }, callback: v => fmt(v) } }
+      }
+    }
+  });
+}
+
+/* ── MAIN RENDER (detects mobile vs desktop) ──────────── */
+function render(d) {
+  lastData = d;
+  lastMode = isMobile() ? 'mobile' : 'desktop';
+  if (chart && lastMode === 'mobile') { chart.destroy(); chart = null; }
+  isMobile() ? renderMobile(d) : renderDesktop(d);
+  setTimeout(reportHeight, 900);
+}
+
+/* ── FETCH ────────────────────────────────────────────── */
+async function load() {
+  try {
+    const res  = await fetch(API);
+    const data = await res.json();
+    render(data);
+  } catch(e) { console.warn('Widget fetch error', e); }
+  return true;
+}
+
+/* ── HEIGHT REPORTER ──────────────────────────────────── */
+function reportHeight() {
+  window.parent.postMessage({ type: 'sihha-widget-height', height: document.documentElement.scrollHeight }, '*');
+}
+
+/* ── HANDLE ROTATE / RESIZE ───────────────────────────── */
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const nowMode = isMobile() ? 'mobile' : 'desktop';
+    if (nowMode !== lastMode && lastData) render(lastData);
+  }, 200);
+});
+
+load();
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>
