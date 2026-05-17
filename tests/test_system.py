@@ -227,8 +227,8 @@ class TestFoodCatalog:
 def _cycle_payload(**overrides):
     base = {
         'title': f'Test Cycle {uuid.uuid4().hex[:6]}',
-        'delivery_date_start': '2026-05-17',
-        'delivery_date_end':   '2026-05-18',
+        'delivery_date_start': '2026-06-01',
+        'delivery_date_end':   '2026-06-02',
         'request_open_at':     '2026-05-03T00:00:00',
         'request_close_at':    '2026-05-10T14:00:00',
         'status': 'draft'

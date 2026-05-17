@@ -1691,6 +1691,21 @@ async function renderFamilies(filter, search) {
   }
 }
 
+async function deleteFamily(id) {
+  const name = document.getElementById('page-title').textContent;
+  if (!confirm(`Permanently delete "${name}"?\n\nThis removes the family, their login account, all orders, slots, and receipts. This cannot be undone.`)) return;
+  try {
+    const res = await fetch('/api/families/' + id, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.error || `Delete failed (${res.status})`); }
+    renderFamilies(STATE.filter);
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
 async function quickStatusFamily(id, status) {
   const row = document.getElementById('frow-' + id);
   if (row) row.style.opacity = '0.4';
@@ -2005,12 +2020,15 @@ async function viewFamily(id) {
 
     document.getElementById('page-title').textContent = r.name;
 
-    // Add Reset Password button to topbar if family has a user account
+    // Rebuild topbar with all buttons at once (avoids innerHTML += corruption)
+    let topbarBtns = `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>
+     <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>`;
     if (famUser) {
-      document.getElementById('topbar-actions').innerHTML +=
-        ` <button class="btn btn-outline" style="margin-left:8px" onclick="openResetPassword('${famUser.id}','${famUser.username}','${r.name.replace(/'/g,"\\'")}')">🔑 Reset Password</button>
-          <button class="btn btn-outline" style="margin-left:4px" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
+      topbarBtns += ` <button class="btn btn-outline" onclick="openResetPassword('${famUser.id}','${famUser.username}','${r.name.replace(/'/g,"\\'")}')">🔑 Reset Password</button>
+          <button class="btn btn-outline" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
     }
+    topbarBtns += ` <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="deleteFamily('${fid}')">🗑 Delete</button>`;
+    document.getElementById('topbar-actions').innerHTML = topbarBtns;
 
     // ── Field helpers ─────────────────────────────────────────────────────────
     const markDirty = `document.getElementById('fam-save-btn').style.display='inline-flex';`;

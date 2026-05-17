@@ -2645,6 +2645,30 @@ def update_family(fid):
             log.warning(f'update_family: slot pre-creation failed for family {fid}: {_e}')
     return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()))
 
+@app.route('/api/families/<fid>', methods=['DELETE'])
+@require_auth(roles=['admin'])
+def delete_family(fid):
+    db = get_db()
+    row = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    # Cascade delete all related data
+    request_ids = [r['id'] for r in db.execute(
+        "SELECT id FROM food_requests WHERE family_id=?", (fid,)).fetchall()]
+    for rid in request_ids:
+        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (rid,))
+        db.execute("DELETE FROM food_request_items    WHERE request_id=?", (rid,))
+        db.execute("DELETE FROM order_change_requests WHERE request_id=?", (rid,))
+    db.execute("DELETE FROM food_requests   WHERE family_id=?", (fid,))
+    db.execute("DELETE FROM volunteer_slots WHERE family_id=?", (fid,))
+    db.execute("DELETE FROM receipts        WHERE family_id=?", (fid,))
+    db.execute("DELETE FROM assignments     WHERE family_id=?", (fid,))
+    db.execute("DELETE FROM users           WHERE role='family' AND linked_id=?", (fid,))
+    db.execute("DELETE FROM families        WHERE id=?", (fid,))
+    db.commit()
+    log.info(f'delete_family: family {fid} ({row["name"]}) permanently deleted by admin')
+    return jsonify({'ok': True})
+
 # ── Bundle size change request (family self-serve, coordinator must approve) ──
 
 @app.route('/api/families/<fid>/request-bundle-change', methods=['POST'])
@@ -4574,7 +4598,10 @@ def public_volunteer_signup():
 
 @app.route('/')
 def admin_index():
-    return send_from_directory('public', 'index.html')
+    resp = send_from_directory('public', 'index.html')
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 @app.route('/donate-stats')
 def donate_stats_page():
@@ -7583,9 +7610,9 @@ def _release_unconfirmed_slots_job():
     Sends WA to each released volunteer. Idempotent via reminder_log (key: slot_id + 'autorelease').
     """
     from datetime import date as _date, timedelta as _td
-    conn = _bootstrap_conn()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        conn.row_factory = sqlite3.Row
         cutoff_date = (_date.today() + _td(days=3)).isoformat()
         today_str   = _date.today().isoformat()
 

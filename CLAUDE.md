@@ -232,8 +232,16 @@ No migrations.
 | `is_active` | INTEGER DEFAULT 1 | CREATE TABLE (original) |
 | `display_order` | INTEGER DEFAULT 0 | CREATE TABLE (original) |
 | `created_at` | TEXT NOT NULL | CREATE TABLE (original) |
+| `price` | REAL DEFAULT 0 | **ALTER TABLE migration** (priced bundle selection) |
+| `allow_qty` | INTEGER DEFAULT 0 | **ALTER TABLE migration** (priced bundle selection) — 1 = show +/- stepper |
+| `is_default` | INTEGER DEFAULT 0 | **ALTER TABLE migration** (2026-05-15) — pre-checked on order form open |
+| `group_id` | TEXT | **ALTER TABLE migration** (2026-05-15) — mutual-exclusion group key (bread_pasta / beans / fruit) |
+| `group_max` | INTEGER DEFAULT 1 | **ALTER TABLE migration** (2026-05-15) — max items selectable from group |
+| `is_free_text` | INTEGER DEFAULT 0 | **ALTER TABLE migration** (2026-05-15) — show text input alongside checkbox |
 
-No migrations. Seeded with 10 default items (Rice, Pasta, Bread, Eggs, Canned Beans, Whole Chicken, Brown Lentils, Potatoes, Oranges, Bananas) if catalog is empty.
+Active catalog (2026-05-15): Rice, Pasta, Bread (default, bread_pasta), Eggs, Red Kidney Beans (beans), Red Beans Cans (beans), Whole Chicken (default, allow_qty), Red Potato (default), Bananas (default), Red Onion (default), Italian Dressing, Apples (fruit), Grapes (fruit), Other Fruit (fruit, is_free_text), Brown Lentils.
+
+Defaults pre-checked: Chicken, Eggs, Rice, Bread, Bananas, Red Potato, Red Onion.
 
 ---
 
@@ -310,8 +318,8 @@ Seeded with S(1-2), M(3-5), L(6+) if table is empty.
 | `food_item_id` | TEXT NOT NULL → FK food_items | CREATE TABLE (original) |
 | `selected` | INTEGER DEFAULT 0 | CREATE TABLE (original) |
 | UNIQUE(request_id, food_item_id) | constraint | CREATE TABLE (original) |
-
-No migrations.
+| `quantity` | INTEGER DEFAULT 1 | **ALTER TABLE migration** (priced bundle selection) |
+| `custom_value` | TEXT | **ALTER TABLE migration** (2026-05-15) — free-text value for is_free_text items (e.g. "Other Fruit" → "Mangoes") |
 
 ---
 
@@ -414,7 +422,7 @@ No migrations. Table is provisioned but sync goes directly into `donations` tabl
 | `claimed_by` | TEXT → FK volunteers | CREATE TABLE (Phase 3C) |
 | `claimed_at` | TEXT | CREATE TABLE (Phase 3C) |
 | `completed_at` | TEXT | **ALTER TABLE migration** (added before Phase 3C was written, via separate migration) |
-| `status` | TEXT CHECK IN ('open','claimed','complete','cancelled') | CREATE TABLE (Phase 3C) |
+| `status` | TEXT CHECK IN ('open','claimed','confirmed','complete','cancelled') | **Table recreation migration** (2026-05) — 'confirmed' added; open slot model redesigned to pre-create slots; claimed→confirmed when family places order |
 | `notes` | TEXT | CREATE TABLE (Phase 3C) |
 | `created_at` | TEXT NOT NULL | CREATE TABLE (Phase 3C) |
 | `updated_at` | TEXT | CREATE TABLE (Phase 3C) |
@@ -501,6 +509,12 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | 17 | Phase 3C: remove UNIQUE+CHECK on slots | TABLE RECREATION | `volunteer_slots` | Removes UNIQUE(cycle_id,family_id,task_type) and CHECK(task_type IN...) |
 | 18 | 2026-04-29 safety-net batch | ALTER TABLE | `food_requests` | `confirmation_token TEXT`, `confirmed_at TEXT`, `confirmation_sent_at TEXT`, `updated_at TEXT` (idempotent, all in try/except) |
 | 19 | 2026-04-29 order audit trail | CREATE TABLE IF NOT EXISTS + backfill | `food_request_events` | New table + one-time backfill of existing orders |
+| 20 | 2026-05 priced bundle selection | ALTER TABLE | `food_items` | `price REAL DEFAULT 0`, `allow_qty INTEGER DEFAULT 0` |
+| 21 | 2026-05 priced bundle selection | ALTER TABLE | `bundle_size_rules` | `budget REAL DEFAULT 0` |
+| 22 | 2026-05 priced bundle selection | ALTER TABLE | `food_request_items` | `quantity INTEGER DEFAULT 1` |
+| 23 | 2026-05 family email | ALTER TABLE | `families` | `email TEXT` (for sending login credentials) |
+| 24 | 2026-05 users role CHECK | TABLE RECREATION | `users` | Regex-patches CHECK to include all roles: admin, volunteer, finance, treasurer, viewer, family |
+| 25 | Sprint 2 (2026-05-15) paused status removal | TABLE RECREATION | `families` | Removes 'paused' from status CHECK — detected via sqlite_master inspection; existing paused rows migrated to 'inactive' |
 
 **Columns used in route queries that had NO explicit migration (were in CREATE TABLE from the start):**
 - All original columns. These are safe.
@@ -538,12 +552,13 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | Method | Path | Auth | Description | Tables |
 |---|---|---|---|---|
 | GET | `/api/families` | any auth | List families (filter: status, search). Joins volunteer_slots for last delivery info | families, volunteer_slots, volunteers, delivery_cycles |
-| POST | `/api/families` | admin/finance/treasurer | Create family | families |
+| POST | `/api/families` | admin/finance/treasurer | Create family + auto-create linked user account; returns login_username, login_temp_password, email_sent | families, users |
 | GET | `/api/families/<fid>` | any auth | Get single family | families |
 | PUT | `/api/families/<fid>` | admin/finance/treasurer | Update family (all fields incl. bundle_size, wa creds) | families |
 | POST | `/api/families/<fid>/request-bundle-change` | None (public) | Family requests bundle size change | families, users (WA notify admin) |
 | POST | `/api/families/<fid>/approve-bundle-change` | admin | Approve or deny pending bundle change | families |
 | GET | `/api/families/<fid>/history` | any auth | Full order history with items and slots | families, food_requests, delivery_cycles, food_request_items, food_items, food_categories, volunteer_slots, volunteers |
+| POST | `/api/families/<fid>/preview-token` | admin | Mint 2h family session token for admin to open /family as that family | sessions, users |
 
 ### Volunteers (Admin portal)
 | Method | Path | Auth | Description | Tables |
@@ -865,21 +880,23 @@ The `check_food_order_eligibility()` function uses a **family-order-first** appr
 pending_confirmation → confirmed     (family confirmed via WA link or admin override)
 pending_confirmation → skipped       (family did not respond by cutoff, auto-skipped)
 pending_confirmation → skipped       (family opted out via confirm.html)
-confirmed → cancelled                (family cancelled via My Order — FINAL, no re-order allowed)
+confirmed → [hard-deleted]           (family cancelled via My Order — row deleted, family CAN re-order)
+confirmed → [hard-deleted]           (admin cancelled — row deleted, family CAN re-order)
 confirmed → delivered                (volunteer marks delivery slot complete)
 ```
 - `auto_confirmed` status exists in the CHECK but is not currently set anywhere in code
 - `submitted` status (legacy) is set when family submits via `/api/food-order` (the self-serve order form), not the WA confirmation flow
-- `cancelled` (vs `skipped`): family-initiated via My Order cancel button. `skipped` = no response / family opted out.
+- `cancelled` rows no longer persist — both family cancel and admin cancel hard-delete the row (Sprint 3)
+- `skipped`: no response / family opted out — these rows ARE kept (not deleted)
 
-### Order Edit/Cancel Business Rules (2026-04-29)
+### Order Edit/Cancel Business Rules (updated Sprint 3 — 2026-05-15)
 - **Edit window**: ≥2 days (48h) before delivery date, Central time (`America/Chicago`). Blocked if cycle status is `shopping` or `delivered`.
-- **Cancel window**: ≥1 day (24h) before delivery date, Central time. Cancel sets status=`cancelled` (not `skipped`).
-- **Cancel is final**: `UNIQUE(cycle_id, family_id)` constraint prevents re-ordering after cancel.
+- **Cancel window**: ≥1 day (24h) before delivery date, Central time.
+- **Cancel hard-deletes**: Both family cancel and admin cancel hard-delete the food_request row (log event → commit → delete child rows → delete food_request → commit). Family CAN re-order after cancelling.
 - **All cutoffs use Central time** via `_today_central()` helper (zoneinfo, Python 3.9+).
-- **Notifications on cancel**: `_notify_coordinators()` (all admin users with WA) + claimed volunteers for that family/cycle.
+- **Notifications on cancel**: `_notify_coordinators()` + claimed volunteers for that family/cycle (slots released to open before deletion).
 - **Notifications on edit**: `_notify_coordinators()` + claimed shopping volunteers (shopping list may have changed).
-- **Event logging**: Every order state change writes to `food_request_events` via `_log_order_event()`. Never raises — failures logged only.
+- **Event logging**: Cancel event is logged to `food_request_events` BEFORE hard-delete, then that table is also cleaned up in the second delete pass. Net result: no event rows remain after cancel (both actor='family' and actor='admin').
 - **Payload stores item names** (not IDs) so history remains readable after catalog changes.
 
 ### APScheduler in Multi-Worker gunicorn
@@ -926,6 +943,34 @@ Set `APP_URL` env var if the URL changes.
 
 ### No Authentication on `/api/task-types` GET
 The `GET /api/task-types` route has no `@require_auth` decorator — it is publicly accessible. This is intentional (volunteer portal may call it before login) but worth noting.
+
+---
+
+### Architectural Issues — Resolution Status (2026-05-15)
+
+Full details in `SIHAA_Ops_Hub_Architecture_Plan.docx` at workspace root.
+
+| # | Issue | Status | Sprint |
+|---|-------|--------|--------|
+| 1 | Dual order creation paths — scheduler created food_request rows, diverging from portal path | ✅ Fixed | Sprint 2 — scheduler now sends SMS only; all rows created via `/api/food-order` |
+| 2 | `pending_confirmation` semantic overload — set by both scheduler and CR retract | ✅ Fixed | Sprint 2 — scheduler no longer sets this status via row creation |
+| 3 | CR retract bug — FALSE POSITIVE | ✅ N/A | Sprint 1 — retract handler never touched food_requests.status; no fix needed |
+| 4 | Intake families get no login account on approval | ✅ Fixed | Sprint 1 — `update_family()` pending→active auto-creates users row + emails credentials |
+| 5 | Family cancel is permanent (UNIQUE constraint blocks re-order) | ✅ Fixed | Sprint 3 — family cancel now hard-deletes (log → commit → delete) |
+| 6 | Two volunteer claim endpoints | ✅ Fixed | Sprint 2 — `/api/portal/claim` removed; only `/api/portal/signup` remains |
+| 7 | `paused` family status dead weight | ✅ Fixed | Sprint 2 — removed from CHECK constraint via bootstrap migration; index.html updated |
+| 8 | Deliveries module does 3 jobs | ✅ Fixed | commit 1f5e1b7 — "Active Cycle" nav added; auto-loads current open/shopping cycle with advance/revert controls in topbar; Deliveries stays as history list |
+
+### Proposed Target Architecture (approved for planning, not yet implemented)
+
+- **Order statuses**: 7 → 3 (`placed`, `skipped`, `cancelled`; `delivered` stays as lifecycle milestone)
+- **Scheduler role**: notification only — never creates food_request rows
+- **CR workflow**: removed — families edit directly while cycle open; admin edits directly after lock
+- **Volunteer slots**: lazy creation on first claim (not pre-created)
+- **Family portal**: next 2–3 cycles only (not 12-month window)
+- **Admin nav**: Dashboard → Active Cycle → Deliveries → Families → Volunteers → Finance
+- **Active Cycle command center**: 3 panels (Orders / Coverage / Attention), one admin action ("Lock for Shopping")
+- **Auto-triggers**: cycle opens at T-7 (scheduler); cycle delivers when all slots complete
 
 ---
 

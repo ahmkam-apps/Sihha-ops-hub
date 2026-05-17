@@ -921,25 +921,50 @@ function renderPlaceOrderBody(cycle) {
   const itemsHtml = cycle.items_for_selection.map(cat => `
     <div class="item-category">${escHtml(cat.category)}</div>
     ${cat.items.map(item => {
+      const isDefault  = item.is_default ? true : false;
+      const groupId    = item.group_id   || '';
+      const groupMax   = item.group_max  || 1;
+      const isFreeText = item.is_free_text ? true : false;
+      const selClass   = isDefault ? 'selected' : '';
+
       if (item.allow_qty) {
-        // +/- stepper for adjustable-quantity items
+        // +/- stepper for adjustable-quantity items (these are always default-on)
         return `
-          <div class="item-row selected" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
-               data-price="${item.price || 0}" data-allow-qty="1">
+          <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
+               data-price="${item.price || 0}" data-allow-qty="1"
+               data-group="${escHtml(groupId)}" data-group-max="${groupMax}">
             <div class="item-check"></div>
             <div class="item-name">${escHtml(item.name)}</div>
             <div class="item-qty-ctrl" onclick="event.stopPropagation()">
               <button class="qty-btn" onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',-1)">−</button>
-              <span class="qty-val" id="qty-${escHtml(cid)}-${escHtml(item.id)}">1</span>
+              <span class="qty-val" id="qty-${escHtml(cid)}-${escHtml(item.id)}">${isDefault ? 1 : 0}</span>
               <button class="qty-btn" onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',1)">+</button>
               <span class="qty-unit">${escHtml(item.unit || '')}</span>
             </div>
           </div>`;
+      } else if (isFreeText) {
+        // Free-text item: checkbox + text input (visible only when checked)
+        return `
+          <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
+               data-price="${item.price || 0}" data-allow-qty="0"
+               data-group="${escHtml(groupId)}" data-group-max="${groupMax}"
+               data-is-free-text="1" onclick="toggleItem(this,'${escHtml(cid)}')">
+            <div class="item-check"></div>
+            <div class="item-name">${escHtml(item.name)}</div>
+          </div>
+          <div class="free-text-wrap" id="ft-wrap-${escHtml(cid)}-${escHtml(item.id)}" style="display:none;padding:4px 0 8px 32px;">
+            <input type="text" class="free-text-input" id="ft-${escHtml(cid)}-${escHtml(item.id)}"
+              placeholder="${L === 'ar' ? 'اكتب نوع الفاكهة هنا…' : 'Type the fruit you want…'}"
+              style="width:100%;border:1px solid var(--gray-2);padding:8px 10px;font-size:14px;font-family:var(--font-body);"
+              onclick="event.stopPropagation()">
+          </div>`;
       } else {
         // Simple checkbox row
         return `
-          <div class="item-row selected" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
-               data-price="${item.price || 0}" data-allow-qty="0" onclick="toggleItem(this,'${escHtml(cid)}')">
+          <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
+               data-price="${item.price || 0}" data-allow-qty="0"
+               data-group="${escHtml(groupId)}" data-group-max="${groupMax}"
+               onclick="toggleItem(this,'${escHtml(cid)}')">
             <div class="item-check"></div>
             <div class="item-name">${escHtml(item.name)}</div>
             <div class="item-qty">${escHtml(item.unit || '')}</div>
@@ -973,9 +998,9 @@ function renderPlaceOrderBody(cycle) {
       <div class="form-section-title">${L === 'ar' ? 'اختر ما تحتاجه' : 'Select what you need'}</div>
       ${bundleBarHtml}
       <div id="items-${escHtml(cid)}">${itemsHtml}</div>
-      <label class="notes-label" for="notes-${escHtml(cid)}">${L === 'ar' ? 'ملاحظات للمنسق (اختياري)' : 'Notes for coordinator (optional)'}</label>
-      <textarea class="order-notes" id="notes-${escHtml(cid)}" rows="2"
-        placeholder="${L === 'ar' ? 'مثال: لا نحتاج بيض هذه الدورة' : 'e.g. We don\'t need eggs this cycle'}"></textarea>
+      <label class="notes-label" for="notes-${escHtml(cid)}">${L === 'ar' ? 'طلبات خاصة أو ملاحظات (اختياري)' : 'Special requests or notes (optional)'}</label>
+      <textarea class="order-notes" id="notes-${escHtml(cid)}" rows="3"
+        placeholder="${L === 'ar' ? 'مثال: لا نحتاج أرزاً هذه الدورة، نحتاج حفاضات مقاس 3، حساسية من البيض...' : 'e.g. Please no rice this time, need baby formula, allergic to eggs, prefer whole wheat bread — we\'ll do our best!'}"></textarea>
       <div class="form-actions">
         <button class="btn-confirm-order" onclick="placeOrder('${escHtml(cid)}')" id="place-btn-${escHtml(cid)}">
           ${L === 'ar' ? 'تأكيد الطلب' : 'Confirm Order'}
@@ -1028,18 +1053,47 @@ function _updateBundleBar(cid) {
 }
 
 function toggleItem(row, cid) {
+  const isSelecting = !row.classList.contains('selected');
   const budget = _getBudget(cid);
-  if (!row.classList.contains('selected') && budget > 0) {
-    // Check if adding this item would exceed budget
+
+  if (isSelecting && budget > 0) {
+    // Budget check
     const price = parseFloat(row.dataset.price || 0);
     if (_calcTotal(cid) + price > budget) {
-      // Show limit message briefly without toggling
       const msg = document.getElementById(`bundle-limit-msg-${cid}`);
       if (msg) { msg.style.display = 'inline'; setTimeout(() => { if (_calcTotal(cid) < budget) msg.style.display='none'; }, 2500); }
       return;
     }
   }
+
+  // Mutual exclusion: if this item belongs to a group, deselect others in that group
+  const groupId = row.dataset.group;
+  if (isSelecting && groupId) {
+    document.querySelectorAll(`#items-${cid} .item-row[data-group="${groupId}"]`).forEach(other => {
+      if (other !== row && other.classList.contains('selected')) {
+        other.classList.remove('selected');
+        // Hide free-text input for deselected item
+        const otherId = other.dataset.id;
+        const otherWrap = document.getElementById(`ft-wrap-${cid}-${otherId}`);
+        if (otherWrap) otherWrap.style.display = 'none';
+      }
+    });
+  }
+
   row.classList.toggle('selected');
+
+  // Show/hide free-text input for this item
+  if (row.dataset.isFreeText === '1') {
+    const wrap = document.getElementById(`ft-wrap-${cid}-${row.dataset.id}`);
+    if (wrap) {
+      wrap.style.display = row.classList.contains('selected') ? 'block' : 'none';
+      if (row.classList.contains('selected')) {
+        const inp = document.getElementById(`ft-${cid}-${row.dataset.id}`);
+        if (inp) inp.focus();
+      }
+    }
+  }
+
   _updateBundleBar(cid);
 }
 
@@ -1239,7 +1293,19 @@ function renderOrderBody(cid, ord) {
   );
   const eventsHtml = renderEventsSection(cid, ord.events || [], hasChangeHistory);
 
-  return itemsHtml + reviewBannerHtml + volHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
+  // ── Special requests / family notes ──
+  let notesHtml = '';
+  if (ord.family_notes && !isTerminal) {
+    notesHtml = `
+      <div style="margin-bottom:12px;padding:10px 14px;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:6px;font-size:13px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-text);font-weight:700;margin-bottom:4px;">
+          ${L === 'ar' ? 'ملاحظاتك' : 'Your notes'}
+        </div>
+        <div style="color:var(--amber-text);">${escHtml(ord.family_notes)}</div>
+      </div>`;
+  }
+
+  return itemsHtml + reviewBannerHtml + notesHtml + volHtml + actionsHtml + pendingCRHtml + crFormHtml + eventsHtml;
 }
 
 // ── Change request form ────────────────────────────────────────────────────────
@@ -1417,6 +1483,17 @@ async function placeOrder(cid) {
     }
   });
 
+  // Collect custom values for free-text items
+  const item_custom_values = {};
+  selectedRows.forEach(r => {
+    if (r.dataset.isFreeText === '1') {
+      const inp = document.getElementById(`ft-${cid}-${r.dataset.id}`);
+      if (inp && inp.value.trim()) {
+        item_custom_values[r.dataset.id] = inp.value.trim();
+      }
+    }
+  });
+
   btn.disabled    = true;
   btn.textContent = L === 'ar' ? 'جارٍ الإرسال…' : 'Placing order…';
   msg.style.display = 'none';
@@ -1434,6 +1511,7 @@ async function placeOrder(cid) {
         cycle_id:  cid,
         selected_items: selectedIds,
         item_quantities,
+        item_custom_values,
         notes,
       })
     });
