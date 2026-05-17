@@ -2000,8 +2000,7 @@ async function viewFamily(id) {
   document.getElementById('page-title').textContent = 'Loading…';
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>
-     <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>
-     <button class="btn btn-outline" style="color:#c00;border-color:#c00;margin-left:8px" onclick="deleteFamily('${id}')">🗑 Delete</button>`;
+     <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
 
   try {
@@ -2021,12 +2020,15 @@ async function viewFamily(id) {
 
     document.getElementById('page-title').textContent = r.name;
 
-    // Add Reset Password button to topbar if family has a user account
+    // Rebuild topbar with all buttons at once (avoids innerHTML += corruption)
+    let topbarBtns = `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>
+     <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>`;
     if (famUser) {
-      document.getElementById('topbar-actions').innerHTML +=
-        ` <button class="btn btn-outline" style="margin-left:8px" onclick="openResetPassword('${famUser.id}','${famUser.username}','${r.name.replace(/'/g,"\\'")}')">🔑 Reset Password</button>
-          <button class="btn btn-outline" style="margin-left:4px" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
+      topbarBtns += ` <button class="btn btn-outline" onclick="openResetPassword('${famUser.id}','${famUser.username}','${r.name.replace(/'/g,"\\'")}')">🔑 Reset Password</button>
+          <button class="btn btn-outline" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
     }
+    topbarBtns += ` <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="deleteFamily('${fid}')">🗑 Delete</button>`;
+    document.getElementById('topbar-actions').innerHTML = topbarBtns;
 
     // ── Field helpers ─────────────────────────────────────────────────────────
     const markDirty = `document.getElementById('fam-save-btn').style.display='inline-flex';`;
