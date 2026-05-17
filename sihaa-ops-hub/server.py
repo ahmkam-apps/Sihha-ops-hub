@@ -4598,7 +4598,10 @@ def public_volunteer_signup():
 
 @app.route('/')
 def admin_index():
-    return send_from_directory('public', 'index.html')
+    resp = send_from_directory('public', 'index.html')
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
 
 @app.route('/donate-stats')
 def donate_stats_page():
