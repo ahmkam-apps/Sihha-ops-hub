@@ -1328,6 +1328,33 @@ def bootstrap_db():
     except Exception as _e:
         log.warning(f"Migration: families paused-removal skipped ({_e})")
 
+    # Migrate food_request_events: remove FK constraint so audit events persist after order deletion
+    fre_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='food_request_events'"
+    ).fetchone()
+    if fre_sql and 'FOREIGN KEY' in fre_sql[0]:
+        log.info('Migration: removing FK from food_request_events to preserve audit trail')
+        try:
+            conn.execute('PRAGMA foreign_keys=OFF')
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS food_request_events_new (
+                    id          TEXT PRIMARY KEY,
+                    request_id  TEXT NOT NULL,
+                    event_type  TEXT NOT NULL,
+                    actor       TEXT NOT NULL DEFAULT 'system',
+                    payload     TEXT NOT NULL DEFAULT '{}',
+                    created_at  TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO food_request_events_new SELECT * FROM food_request_events;
+                DROP TABLE food_request_events;
+                ALTER TABLE food_request_events_new RENAME TO food_request_events;
+            ''')
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info('Migration: food_request_events FK removed — audit log persists after order deletion')
+        except Exception as _e:
+            conn.execute('PRAGMA foreign_keys=ON')
+            log.info(f'Migration: food_request_events already migrated — skipping ({_e})')
+
     # Ensure users CHECK constraint includes ALL roles (treasurer + family)
     # Runs on every boot — idempotent, bails immediately if already correct
     _ensure_treasurer_role(conn)
@@ -1465,11 +1492,9 @@ def _validate_password(password):
     return True, ''
 
 def _ensure_treasurer_role(conn):
-    """Patch the users table CHECK constraint to include all required roles.
-    Uses PRAGMA writable_schema to update sqlite_master directly — no exclusive
-    lock needed, safe with concurrent gunicorn workers in WAL mode."""
+    """Ensure the users table CHECK constraint includes all required roles.
+    Uses safe table-recreation — no PRAGMA writable_schema."""
     REQUIRED_ROLES = ('admin', 'volunteer', 'finance', 'treasurer', 'viewer', 'family')
-    FULL_CHECK = "CHECK(role IN ('admin','volunteer','finance','treasurer','viewer','family'))"
 
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
@@ -1478,41 +1503,12 @@ def _ensure_treasurer_role(conn):
         return  # table doesn't exist yet
 
     old_sql = row[0]
-    # Check if ALL required roles are already present
+    # Check if ALL required roles are already present — bail early if already correct
     if all(f"'{r}'" in old_sql for r in REQUIRED_ROLES):
-        return  # already fully migrated
-
-    log.info('_ensure_treasurer_role: patching CHECK constraint to include all roles')
-
-    # Try to find and replace any existing CHECK(...role IN...) fragment
-    import re as _re
-    new_sql = _re.sub(
-        r"CHECK\s*\(\s*role\s+IN\s*\([^)]+\)\s*\)",
-        FULL_CHECK,
-        old_sql,
-        flags=_re.IGNORECASE
-    )
-    if new_sql == old_sql:
-        # Regex didn't match — fall back to table recreation
-        log.warning(f'_ensure_treasurer_role: regex patch failed, falling back to recreation\nSQL: {old_sql}')
-        _recreate_users_table(conn)
         return
 
-    try:
-        conn.execute('PRAGMA writable_schema = ON')
-        conn.execute(
-            "UPDATE sqlite_master SET sql=? WHERE type='table' AND name='users'",
-            (new_sql,)
-        )
-        ver = conn.execute('PRAGMA schema_version').fetchone()[0]
-        conn.execute(f'PRAGMA schema_version = {ver + 1}')
-        conn.execute('PRAGMA writable_schema = OFF')
-        conn.commit()
-        log.info('_ensure_treasurer_role: CHECK constraint patched successfully')
-    except Exception as _e:
-        conn.execute('PRAGMA writable_schema = OFF')
-        log.warning(f'_ensure_treasurer_role: writable_schema patch failed ({_e}), trying table recreation')
-        _recreate_users_table(conn)
+    log.info('_ensure_treasurer_role: roles missing from CHECK constraint — recreating users table')
+    _recreate_users_table(conn)
 
 
 def _recreate_users_table(conn):
@@ -1867,11 +1863,11 @@ def list_users():
     return jsonify([dict(r) for r in rows])
 
 def _generate_temp_password():
-    """Generate a readable temp password that meets the rules."""
-    import random, string
+    """Generate a cryptographically secure temp password that meets the rules."""
+    import secrets, string
     chars = string.ascii_letters + string.digits + '!@#$%'
     while True:
-        pw = ''.join(random.choices(chars, k=12))
+        pw = ''.join(secrets.choice(chars) for _ in range(12))
         ok, _ = _validate_password(pw)
         if ok:
             return pw
@@ -2662,8 +2658,11 @@ def delete_family(fid):
 # ── Bundle size change request (family self-serve, coordinator must approve) ──
 
 @app.route('/api/families/<fid>/request-bundle-change', methods=['POST'])
+@require_family_auth()
 def request_bundle_change(fid):
     """Family portal: request a bundle size change. Stored as pending until coordinator approves."""
+    if str(fid) != str(g.fam['family_id']):
+        return jsonify({'error': 'Forbidden'}), 403
     data = request.json or {}
     new_size = (data.get('bundle_size') or '').upper().strip()
     if new_size not in ('S', 'M', 'L'):
@@ -5173,12 +5172,15 @@ def check_food_order_eligibility():
     })
 
 @app.route('/api/food-order', methods=['POST'])
+@require_family_auth()
 def submit_food_order():
     """Place a food order for a family. Accepts optional notes field."""
     data = request.json or {}
     # selected_items can be [] (family deselects all) — check key presence, not truthiness
     if not data.get('family_id') or not data.get('cycle_id') or 'selected_items' not in data:
         return jsonify({'error': 'family_id, cycle_id, and selected_items required'}), 422
+    if str(data['family_id']) != str(g.fam['family_id']):
+        return jsonify({'error': 'Forbidden'}), 403
 
     db = get_db()
     auto_update_cycle_statuses(db)
@@ -5379,6 +5381,7 @@ def submit_food_order():
     }), 201
 
 @app.route('/api/food-order/cancel', methods=['POST'])
+@require_family_auth()
 def cancel_food_order():
     """Family cancels their confirmed order — allowed up to 24 hours before delivery (Central time)."""
     try:
@@ -5387,6 +5390,8 @@ def cancel_food_order():
         request_id = data.get('request_id')
         if not family_id or not request_id:
             return jsonify({'error': 'family_id and request_id required'}), 422
+        if str(family_id) != str(g.fam['family_id']):
+            return jsonify({'error': 'Forbidden'}), 403
 
         db  = get_db()
         req = db.execute(
@@ -5440,7 +5445,7 @@ def cancel_food_order():
         db.commit()
 
         # Hard-delete the order row so the family can place a fresh order (same as admin cancel)
-        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (request_id,))
+        # NOTE: food_request_events are intentionally kept — they form the permanent audit trail
         db.execute("DELETE FROM food_request_items    WHERE request_id=?", (request_id,))
         db.execute("DELETE FROM order_change_requests WHERE request_id=?", (request_id,))
         db.execute("DELETE FROM food_requests         WHERE id=?",         (request_id,))
@@ -5481,6 +5486,7 @@ def cancel_food_order():
 # ── Family Change Requests ────────────────────────────────────────────────────
 
 @app.route('/api/family-request', methods=['POST'])
+@require_family_auth()
 def submit_family_change_request():
     """Family submits a change request for their current order.
     One pending request per order at a time. Cycle must be open/upcoming, not shopping, within 30 days."""
@@ -5494,6 +5500,8 @@ def submit_family_change_request():
 
         if not family_id or not request_id:
             return jsonify({'error': 'family_id and request_id required'}), 422
+        if str(family_id) != str(g.fam['family_id']):
+            return jsonify({'error': 'Forbidden'}), 403
 
         db = get_db()
 
@@ -5584,6 +5592,7 @@ def submit_family_change_request():
 
 
 @app.route('/api/family-request/<cr_id>/retract', methods=['POST'])
+@require_family_auth()
 def retract_family_change_request(cr_id):
     """Family retracts their pending change request."""
     try:
@@ -5591,6 +5600,8 @@ def retract_family_change_request(cr_id):
         family_id = data.get('family_id')
         if not family_id:
             return jsonify({'error': 'family_id required'}), 422
+        if str(family_id) != str(g.fam['family_id']):
+            return jsonify({'error': 'Forbidden'}), 403
 
         db = get_db()
         cr = db.execute(
@@ -5617,7 +5628,7 @@ def retract_family_change_request(cr_id):
 # ── Admin Change Request Routes ───────────────────────────────────────────────
 
 @app.route('/api/admin/change-requests')
-@require_auth()
+@require_auth(roles=['admin', 'volunteer', 'finance', 'treasurer'])
 def list_change_requests():
     """Admin: list change requests. Default: pending only. ?status=all for all."""
     db = get_db()
@@ -5671,7 +5682,7 @@ def list_change_requests():
 
 
 @app.route('/api/admin/change-requests/<cr_id>/approve', methods=['POST'])
-@require_auth()
+@require_auth(roles=['admin'])
 def approve_change_request(cr_id):
     """Admin approves a change request — automatically applies item changes to the order."""
     import json as _json
@@ -5768,7 +5779,7 @@ def approve_change_request(cr_id):
 
 
 @app.route('/api/admin/change-requests/<cr_id>/reject', methods=['POST'])
-@require_auth()
+@require_auth(roles=['admin'])
 def reject_change_request(cr_id):
     """Admin rejects a change request — order stays unchanged."""
     try:
@@ -5816,7 +5827,7 @@ def reject_change_request(cr_id):
 
 
 @app.route('/api/families/<fid>/reset-order', methods=['POST'])
-@require_auth()
+@require_auth(roles=['admin'])
 def reset_family_order(fid):
     """Admin resets a family's order for the most recent active cycle.
     - Cancelled / skipped orders: DELETED entirely so the family can place a fresh order.
@@ -5847,7 +5858,7 @@ def reset_family_order(fid):
             "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE cycle_id=? AND family_id=? AND status IN ('claimed','confirmed')",
             (ts, req['cycle_id'], fid)
         )
-        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (req['id'],))
+        # NOTE: food_request_events are intentionally kept — they form the permanent audit trail
         db.execute("DELETE FROM food_request_items    WHERE request_id=?", (req['id'],))
         db.execute("DELETE FROM order_change_requests WHERE request_id=?", (req['id'],))
         db.execute("DELETE FROM food_requests         WHERE id=?",         (req['id'],))
@@ -5862,7 +5873,7 @@ def reset_family_order(fid):
 
 
 @app.route('/api/families/<fid>/cancel-order', methods=['POST'])
-@require_auth()
+@require_auth(roles=['admin'])
 def admin_cancel_family_order(fid):
     """Admin cancels a family's order for a specific cycle (or most recent non-delivered).
     Logs the cancellation with actor='admin' so the family portal can distinguish it from
@@ -5922,7 +5933,7 @@ def admin_cancel_family_order(fid):
         db.commit()
 
         # Now hard-delete the order row so the family can place a fresh order
-        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (req['id'],))
+        # NOTE: food_request_events are intentionally kept — they form the permanent audit trail
         db.execute("DELETE FROM food_request_items    WHERE request_id=?", (req['id'],))
         db.execute("DELETE FROM order_change_requests WHERE request_id=?", (req['id'],))
         db.execute("DELETE FROM food_requests         WHERE id=?",         (req['id'],))
@@ -5949,33 +5960,23 @@ def admin_cancel_family_order(fid):
 
 
 @app.route('/api/food-order/items', methods=['PUT'])
+@require_family_auth()
 def edit_food_order_items():
     """Family edits their item selections — allowed up to 48 hours before delivery (Central time).
     Cycle must still be open or upcoming (not shopping/delivered).
     Cancel is final — cancelled orders cannot be edited."""
     import json as _json
     data       = request.json or {}
-    phone      = _normalize_phone(data.get('phone') or '')
     request_id = data.get('request_id')
     selected_ids = set(data.get('selected_item_ids') or [])
 
-    if not phone or not request_id:
-        return jsonify({'error': 'phone and request_id required'}), 422
+    if not request_id:
+        return jsonify({'error': 'request_id required'}), 422
 
     db = get_db()
+    family_id = g.fam['family_id']
 
-    # Phone lookup
-    family = db.execute("SELECT * FROM families WHERE phone=? AND status='active'", (phone,)).fetchone()
-    if not family:
-        # fuzzy fallback
-        for f in db.execute("SELECT * FROM families WHERE status='active'").fetchall():
-            if (f['phone'] or '').endswith(phone[-10:]) or phone.endswith((f['phone'] or '')[-10:]):
-                family = f
-                break
-    if not family:
-        return jsonify({'error': 'Phone number not found'}), 404
-
-    # Load request and its cycle
+    # Load request and its cycle — scoped to session's family
     req = db.execute(
         '''SELECT fr.*, dc.delivery_date_start, dc.status as cycle_status, dc.title as cycle_title,
                   f.name as family_name, f.family_code
@@ -5983,7 +5984,7 @@ def edit_food_order_items():
            JOIN delivery_cycles dc ON fr.cycle_id=dc.id
            JOIN families f ON fr.family_id=f.id
            WHERE fr.id=? AND fr.family_id=?''',
-        (request_id, family['id'])
+        (request_id, family_id)
     ).fetchone()
     if not req:
         return jsonify({'error': 'Order not found'}), 404

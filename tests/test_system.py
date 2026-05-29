@@ -355,6 +355,7 @@ class TestFoodOrders:
             if len(item_ids) >= 3:
                 break
         res = client.post('/api/food-order',
+                          headers=self.family_headers,
                           json={'family_id': self.family_id,
                                 'cycle_id':  self.cycle_id,
                                 'selected_items': item_ids})
@@ -364,10 +365,12 @@ class TestFoodOrders:
     def test_one_order_per_family_per_cycle(self, client):
         # Submit once (may already be submitted from another test in session scope)
         client.post('/api/food-order',
+                    headers=self.family_headers,
                     json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
                           'selected_items': []})
         # Try to submit again → must fail
         res = client.post('/api/food-order',
+                          headers=self.family_headers,
                           json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
                                 'selected_items': []})
         assert res.status_code == 409
@@ -380,6 +383,7 @@ class TestFoodOrders:
         # Submit if not already done
         if open_cycle.get('order') is None:
             client.post('/api/food-order',
+                        headers=self.family_headers,
                         json={'family_id': check1['family_id'],
                               'cycle_id':  open_cycle['id'],
                               'selected_items': []})
@@ -415,6 +419,7 @@ class TestFoodOrders:
         """Family cancel hard-deletes the row → family can place a fresh order in same cycle."""
         # Submit initial order
         client.post('/api/food-order',
+                    headers=self.family_headers,
                     json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
                           'selected_items': []})
         check = client.get('/api/food-order/check', headers=self.family_headers).get_json()
@@ -426,11 +431,13 @@ class TestFoodOrders:
 
         # Cancel it
         res = client.post('/api/food-order/cancel',
+                          headers=self.family_headers,
                           json={'family_id': self.family_id, 'request_id': request_id})
         assert res.status_code == 200, f'Cancel failed: {res.get_json()}'
 
         # Row must be gone — family can place a fresh order (no UNIQUE violation)
         res2 = client.post('/api/food-order',
+                           headers=self.family_headers,
                            json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
                                  'selected_items': []})
         assert res2.status_code == 201, \
@@ -463,7 +470,9 @@ class TestVolunteerPortal:
                           json={'name': 'Portal Family', 'phone': phone_family,
                                 'address': '123 Elm St', 'city': 'Rochester',
                                 'family_size': 4, 'status': 'active'})
-        self.family_id = res.get_json()['id']
+        fam_data = res.get_json()
+        self.family_id = fam_data['id']
+        self.family_headers = {'Authorization': f'Bearer {_get_family_token(client, fam_data)}'}
 
         # Create an open cycle
         res = client.post('/api/delivery-cycles', headers=auth,
@@ -477,6 +486,7 @@ class TestVolunteerPortal:
 
         # Submit a food order for the family (idempotent — 409 if already submitted is fine)
         client.post('/api/food-order',
+                    headers=self.family_headers,
                     json={'family_id': self.family_id,
                           'cycle_id':  self.cycle_id,
                           'selected_items': []})
@@ -732,9 +742,11 @@ class TestGenerateSlots:
     def test_generate_slots_creates_shopping_and_delivery(self, client, auth):
         # Create a family and order
         phone = f'585500{uuid.uuid4().hex[:4]}'
-        fam = client.post('/api/families', headers=auth,
+        fam_data = client.post('/api/families', headers=auth,
                           json={'name': 'Slot Family', 'phone': phone,
                                 'family_size': 3, 'status': 'active'}).get_json()
+        fam = fam_data
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam_data)}'}
         cycle = client.post('/api/delivery-cycles', headers=auth,
                             json=_cycle_payload(
                                 request_open_at='2020-01-01T00:00:00',
@@ -744,6 +756,7 @@ class TestGenerateSlots:
         cid = cycle['id']
 
         client.post('/api/food-order',
+                    headers=fam_headers,
                     json={'family_id': fam['id'], 'cycle_id': cid, 'selected_items': []})
 
         res = client.post(f'/api/delivery-cycles/{cid}/generate-slots', headers=auth)
@@ -755,9 +768,11 @@ class TestGenerateSlots:
 
     def test_generate_slots_is_idempotent(self, client, auth):
         phone = f'585501{uuid.uuid4().hex[:4]}'
-        fam = client.post('/api/families', headers=auth,
+        fam_data = client.post('/api/families', headers=auth,
                           json={'name': 'Idempotent Family', 'phone': phone,
                                 'family_size': 2, 'status': 'active'}).get_json()
+        fam = fam_data
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam_data)}'}
         cycle = client.post('/api/delivery-cycles', headers=auth,
                             json=_cycle_payload(
                                 request_open_at='2020-01-01T00:00:00',
@@ -766,6 +781,7 @@ class TestGenerateSlots:
                             )).get_json()
         cid = cycle['id']
         client.post('/api/food-order',
+                    headers=fam_headers,
                     json={'family_id': fam['id'], 'cycle_id': cid, 'selected_items': []})
 
         # Run twice
@@ -779,9 +795,11 @@ class TestGenerateSlots:
 
     def test_slot_board_admin_view(self, client, auth):
         phone = f'585502{uuid.uuid4().hex[:4]}'
-        fam = client.post('/api/families', headers=auth,
+        fam_data = client.post('/api/families', headers=auth,
                           json={'name': 'Board Family', 'phone': phone,
                                 'family_size': 5, 'status': 'active'}).get_json()
+        fam = fam_data
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam_data)}'}
         cycle = client.post('/api/delivery-cycles', headers=auth,
                             json=_cycle_payload(
                                 request_open_at='2020-01-01T00:00:00',
@@ -790,6 +808,7 @@ class TestGenerateSlots:
                             )).get_json()
         cid = cycle['id']
         client.post('/api/food-order',
+                    headers=fam_headers,
                     json={'family_id': fam['id'], 'cycle_id': cid, 'selected_items': []})
         client.post(f'/api/delivery-cycles/{cid}/generate-slots', headers=auth)
 
@@ -953,11 +972,13 @@ class TestOrderPage:
                     break
             if len(item_ids) >= 4:
                 break
-        res = client.post('/api/food-order', json={
-            'family_id': self.family_id,
-            'cycle_id':  self.cycle_id,
-            'selected_items': item_ids
-        })
+        res = client.post('/api/food-order',
+                          headers=self.family_headers,
+                          json={
+                              'family_id': self.family_id,
+                              'cycle_id':  self.cycle_id,
+                              'selected_items': item_ids
+                          })
         assert res.status_code == 201
         assert res.get_json()['ok'] is True
 
@@ -965,29 +986,36 @@ class TestOrderPage:
         """Family can submit with no items selected — empty list must not fail validation."""
         # Must use a fresh family not yet submitted for this cycle
         phone2 = f'585601{uuid.uuid4().hex[:4]}'
-        fam2 = client.post('/api/families', headers=self.auth,
+        fam2_data = client.post('/api/families', headers=self.auth,
                            json={'name': 'Empty Items Family', 'phone': phone2,
                                  'family_size': 2, 'status': 'active'}).get_json()
-        res = client.post('/api/food-order', json={
-            'family_id': fam2['id'],
-            'cycle_id':  self.cycle_id,
-            'selected_items': []
-        })
+        fam2_headers = {'Authorization': f'Bearer {_get_family_token(client, fam2_data)}'}
+        res = client.post('/api/food-order',
+                          headers=fam2_headers,
+                          json={
+                              'family_id': fam2_data['id'],
+                              'cycle_id':  self.cycle_id,
+                              'selected_items': []
+                          })
         assert res.status_code == 201
 
     def test_duplicate_order_returns_409(self, client):
         # First submit
-        client.post('/api/food-order', json={
-            'family_id': self.family_id,
-            'cycle_id':  self.cycle_id,
-            'selected_items': []
-        })
+        client.post('/api/food-order',
+                    headers=self.family_headers,
+                    json={
+                        'family_id': self.family_id,
+                        'cycle_id':  self.cycle_id,
+                        'selected_items': []
+                    })
         # Second submit → 409
-        res = client.post('/api/food-order', json={
-            'family_id': self.family_id,
-            'cycle_id':  self.cycle_id,
-            'selected_items': []
-        })
+        res = client.post('/api/food-order',
+                          headers=self.family_headers,
+                          json={
+                              'family_id': self.family_id,
+                              'cycle_id':  self.cycle_id,
+                              'selected_items': []
+                          })
         assert res.status_code == 409
 
     def test_already_submitted_flag_after_order(self, client):
@@ -995,11 +1023,13 @@ class TestOrderPage:
         open_cycle = next((c for c in check1.get('cycles', []) if c.get('can_place_order')), None)
         if not open_cycle:
             pytest.skip('No open cycle available')
-        client.post('/api/food-order', json={
-            'family_id': check1['family_id'],
-            'cycle_id':  open_cycle['id'],
-            'selected_items': []
-        })
+        client.post('/api/food-order',
+                    headers=self.family_headers,
+                    json={
+                        'family_id': check1['family_id'],
+                        'cycle_id':  open_cycle['id'],
+                        'selected_items': []
+                    })
         check2 = client.get('/api/food-order/check', headers=self.family_headers).get_json()
         submitted = next((c for c in check2['cycles'] if c['id'] == open_cycle['id']), None)
         assert submitted is not None
