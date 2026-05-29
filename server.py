@@ -3088,22 +3088,6 @@ def create_donation():
     data = request.json or {}
     did = str(uuid.uuid4())
     db = get_db()
-    # ensure donor_email column exists
-    try:
-        db.execute("ALTER TABLE donations ADD COLUMN donor_email TEXT")
-        db.commit()
-    except Exception:
-        pass
-    try:
-        db.execute("ALTER TABLE donations ADD COLUMN type TEXT")
-        db.commit()
-    except Exception:
-        pass
-    try:
-        db.execute("ALTER TABLE donations ADD COLUMN reference_id TEXT")
-        db.commit()
-    except Exception:
-        pass
     db.execute(
         '''INSERT INTO donations (id,donor_name,donor_email,amount,type,date,source,reference_id,notes,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
@@ -3162,13 +3146,6 @@ def sync_wix_donations():
             return jsonify({'error': 'WIX_API_KEY not configured in environment variables'}), 400
 
         db = get_db()
-        # ensure columns exist
-        for col_name, col_type in [('donor_email','TEXT'), ('type','TEXT'), ('reference_id','TEXT'), ('frequency','TEXT')]:
-            try:
-                db.execute(f'ALTER TABLE donations ADD COLUMN {col_name} {col_type}')
-                db.commit()
-            except Exception:
-                pass
 
         # Anonymize any previously synced full names (one-time cleanup)
         # Detects unabbreviated names: no period, source='wix', more than one word
@@ -3411,13 +3388,6 @@ def create_food_item():
 @require_auth(roles=['admin'])
 def update_food_item(iid):
     db = get_db()
-    # Ensure price/allow_qty columns exist (safety net in case migration was missed)
-    for _col, _def in [('price', 'REAL NOT NULL DEFAULT 0'), ('allow_qty', 'INTEGER NOT NULL DEFAULT 0')]:
-        try:
-            db.execute(f'ALTER TABLE food_items ADD COLUMN {_col} {_def}')
-            db.commit()
-        except Exception:
-            pass
     row = db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
@@ -3430,14 +3400,6 @@ def update_food_item(iid):
         group_id_v    = d.get('group_id',     row['group_id']    if 'group_id'    in rk else None)
         group_max_v   = int(d.get('group_max', row['group_max']  if 'group_max'   in rk else 1) or 1)
         is_free_text_v= (1 if d['is_free_text'] else 0) if 'is_free_text' in d else int(row['is_free_text'] if 'is_free_text' in rk else 0)
-        # Ensure new columns exist before writing (safety net)
-        for _c, _def in [('is_default','INTEGER NOT NULL DEFAULT 0'),('group_id','TEXT'),
-                          ('group_max','INTEGER NOT NULL DEFAULT 1'),('is_free_text','INTEGER NOT NULL DEFAULT 0')]:
-            try:
-                db.execute(f'ALTER TABLE food_items ADD COLUMN {_c} {_def}')
-                db.commit()
-            except Exception:
-                pass
         db.execute(
             "UPDATE food_items SET name=?, unit=?, is_active=?, display_order=?, category_id=?, "
             "price=?, allow_qty=?, is_default=?, group_id=?, group_max=?, is_free_text=? WHERE id=?",
@@ -4859,20 +4821,6 @@ def check_food_order_eligibility():
     from datetime import timedelta, date as _date
 
     db = get_db()
-
-    # Column safety guards
-    for _col, _def in [('bundle_size','TEXT'), ('pending_bundle_size','TEXT'),
-                       ('wa_phone','TEXT'), ('wa_apikey','TEXT'), ('updated_at','TEXT'),
-                       ('family_notes','TEXT')]:
-        try:
-            db.execute(f'ALTER TABLE families ADD COLUMN {_col} {_def}')
-        except Exception:
-            pass
-    try:
-        db.execute('ALTER TABLE food_requests ADD COLUMN family_notes TEXT')
-    except Exception:
-        pass
-
     family = None
 
     # --- Session-based auth (new) ---
@@ -6066,59 +6014,6 @@ def edit_food_order_items():
     log.info(f'Family {family["id"]} edited items for order {request_id}: +{added} -{removed}')
     return jsonify({'ok': True, 'added': added, 'removed': removed,
                     'message': 'Your order has been updated.'})
-
-
-@app.route('/api/food-requests/<rid>/items', methods=['PUT'])
-@require_auth(roles=['admin'])
-def admin_edit_food_request_items(rid):
-    """Admin edits item selections for a family's order on their behalf."""
-    import json as _json
-    data         = request.json or {}
-    selected_ids = set(data.get('selected_item_ids') or [])
-
-    db  = get_db()
-    req = db.execute(
-        '''SELECT fr.*, f.name as family_name, f.family_code, dc.title as cycle_title
-           FROM food_requests fr
-           JOIN families f ON fr.family_id=f.id
-           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
-           WHERE fr.id=?''',
-        (rid,)
-    ).fetchone()
-    if not req:
-        return jsonify({'error': 'Order not found'}), 404
-
-    # Capture previous selections
-    prev_rows = db.execute(
-        "SELECT fi.id, fi.name, fri.selected FROM food_request_items fri JOIN food_items fi ON fri.food_item_id=fi.id WHERE fri.request_id=?",
-        (rid,)
-    ).fetchall()
-    prev_by_id = {r['id']: (r['name'], r['selected']) for r in prev_rows}
-
-    all_items = db.execute("SELECT id, name FROM food_items WHERE is_active=1").fetchall()
-    for item in all_items:
-        is_sel = 1 if item['id'] in selected_ids else 0
-        db.execute(
-            '''INSERT INTO food_request_items (id, request_id, food_item_id, selected)
-               VALUES (?,?,?,?)
-               ON CONFLICT(request_id, food_item_id) DO UPDATE SET selected=?''',
-            (str(uuid.uuid4()), rid, item['id'], is_sel, is_sel)
-        )
-
-    try:
-        db.execute("UPDATE food_requests SET updated_at=? WHERE id=?", (now(), rid))
-    except Exception:
-        pass
-
-    added   = [it['name'] for it in all_items if it['id'] in selected_ids and prev_by_id.get(it['id'], ('', 0))[1] == 0]
-    removed = [name for iid, (name, sel) in prev_by_id.items() if sel == 1 and iid not in selected_ids]
-
-    _log_order_event(db, rid, 'admin_override', actor='admin',
-                     payload={'action': 'items_edited', 'added': added, 'removed': removed})
-    db.commit()
-
-    log.info(f'Admin edited items for order {rid}: +{added} -{removed}')
-    return jsonify({'ok': True, 'added': added, 'removed': removed})
 
 
 @app.route('/uploads/<path:filename>')
