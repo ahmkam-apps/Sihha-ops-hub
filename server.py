@@ -410,6 +410,29 @@ def bootstrap_db():
         );
     ''')
 
+    # ── Performance indexes ───────────────────────────────────────────────────
+    for _idx_sql in [
+        # volunteer_slots: used in almost every delivery/portal operation
+        "CREATE INDEX IF NOT EXISTS idx_vs_cycle_family   ON volunteer_slots(cycle_id, family_id)",
+        "CREATE INDEX IF NOT EXISTS idx_vs_cycle_status   ON volunteer_slots(cycle_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_vs_claimed_by     ON volunteer_slots(claimed_by)",
+        # food_request_items: N+1 guard — fetched per-order in many list endpoints
+        "CREATE INDEX IF NOT EXISTS idx_fri_request_id    ON food_request_items(request_id)",
+        # food_requests: core lookup by family or cycle
+        "CREATE INDEX IF NOT EXISTS idx_fr_family_id      ON food_requests(family_id)",
+        "CREATE INDEX IF NOT EXISTS idx_fr_cycle_id       ON food_requests(cycle_id)",
+        # food_request_events: audit log lookup by request
+        "CREATE INDEX IF NOT EXISTS idx_fre_request_id    ON food_request_events(request_id)",
+        # donations: date-range filters used in all finance views
+        "CREATE INDEX IF NOT EXISTS idx_donations_date    ON donations(date)",
+        # sessions: looked up by token (PK) + occasionally by user_id
+        "CREATE INDEX IF NOT EXISTS idx_sessions_user_id  ON sessions(user_id)",
+    ]:
+        try:
+            conn.execute(_idx_sql)
+        except Exception as _e:
+            log.warning(f'Index creation skipped: {_e}')
+
     # Seed default admin — INSERT OR IGNORE is atomic, safe under concurrent gunicorn workers.
     # Password is read from ADMIN_PASSWORD env var (set in Railway dashboard).
     # Falls back to 'admin123' only if env var is not set (dev/local only).
@@ -6018,7 +6041,22 @@ def edit_food_order_items():
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
-    # Files use UUID-based names — not guessable without the URL
+    """Serve uploaded receipt photos. Requires any valid session (admin, volunteer, or family)."""
+    auth = request.headers.get('Authorization', '')
+    token = auth[7:] if auth.startswith('Bearer ') else None
+    if not token:
+        return jsonify({'error': 'Unauthorized'}), 401
+    db = get_db()
+    # Accept admin/staff sessions, family sessions, or portal sessions
+    session = db.execute(
+        "SELECT id FROM sessions WHERE token=? AND expires_at > ?", (token, now())
+    ).fetchone()
+    if not session:
+        session = db.execute(
+            "SELECT id FROM portal_sessions WHERE token=? AND expires_at > ?", (token, now())
+        ).fetchone()
+    if not session:
+        return jsonify({'error': 'Unauthorized'}), 401
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 # ── Public Volunteer Portal ───────────────────────────────────────────────────
