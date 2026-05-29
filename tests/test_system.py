@@ -24,6 +24,25 @@ def _get_family_token(client, family_data, new_password='FamPass1!'):
         return sp.get('token')
     return login.get('token')
 
+
+def _get_volunteer_token(client, vol_id, auth_headers, new_password='VolPass1!'):
+    """Create a user account for a volunteer and return a portal session token."""
+    username = f'vol_{vol_id[:8]}'
+    user_res = client.post('/api/users', headers=auth_headers,
+                           json={'username': username, 'role': 'volunteer',
+                                 'linked_id': vol_id, 'linked_type': 'volunteer'}).get_json()
+    temp_pass = user_res.get('temp_password')
+    if not temp_pass:
+        return None
+    login = client.post('/api/auth/login',
+                        json={'username': username, 'password': temp_pass}).get_json()
+    if login.get('must_change_password'):
+        sp = client.post('/api/auth/set-password',
+                         json={'temp_token': login['temp_token'],
+                               'password': new_password}).get_json()
+        return sp.get('token')
+    return login.get('token')
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — AUTH
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -503,6 +522,7 @@ class TestVolunteerPortal:
                                 'role': 'shopper', 'status': 'active'})
         self.shopper_phone = vol_phone_1
         self.shopper_id    = res.get_json()['id']
+        self.shopper_token = _get_volunteer_token(client, self.shopper_id, auth)
 
         res = client.post('/api/volunteers', headers=auth,
                           json={'name': 'Delivery Vol', 'phone': vol_phone_2,
@@ -510,39 +530,37 @@ class TestVolunteerPortal:
                                 'role': 'delivery', 'status': 'active'})
         self.delivery_phone = vol_phone_2
         self.delivery_id    = res.get_json()['id']
+        self.delivery_token = _get_volunteer_token(client, self.delivery_id, auth)
 
     # ── Login ──────────────────────────────────────────────────────────────────
 
     def test_portal_login_valid(self, client):
+        # Legacy phone-only login is removed — returns 410 Gone
         res = client.post('/api/portal/login', json={'phone': self.shopper_phone})
-        assert res.status_code == 200
-        data = res.get_json()
-        assert 'token' in data
-        assert data['volunteer']['name'] == 'Shopper Vol'
+        assert res.status_code == 410
 
     def test_portal_login_phone_not_found(self, client):
+        # Legacy endpoint returns 410 regardless of phone
         res = client.post('/api/portal/login', json={'phone': '0000000000'})
-        assert res.status_code == 404
+        assert res.status_code == 410
 
     def test_portal_login_inactive_volunteer(self, client, auth):
-        # Create inactive volunteer — digit-only phone
+        # Legacy endpoint returns 410 regardless
         phone = f'5854{uuid.uuid4().int % 1000000:06d}'
-        client.post('/api/volunteers', headers=auth,
-                    json={'name': 'Inactive', 'phone': phone,
-                          'status': 'inactive', 'role': 'shopper'})
         res = client.post('/api/portal/login', json={'phone': phone})
-        assert res.status_code == 404
+        assert res.status_code == 410
 
     def test_portal_login_missing_phone(self, client):
         res = client.post('/api/portal/login', json={})
-        assert res.status_code == 400
-
-    def _login(self, phone):
-        res = self.client.post('/api/portal/login', json={'phone': phone})
-        return res.get_json()['token']
+        assert res.status_code == 410
 
     def _portal_headers(self, phone):
-        return {'Authorization': f'Bearer {self._login(phone)}'}
+        """Return auth headers for a volunteer identified by phone."""
+        if phone == self.shopper_phone:
+            return {'Authorization': f'Bearer {self.shopper_token}'}
+        if phone == self.delivery_phone:
+            return {'Authorization': f'Bearer {self.delivery_token}'}
+        raise ValueError(f'Unknown volunteer phone: {phone}')
 
     # ── Cycles + Slots ─────────────────────────────────────────────────────────
 

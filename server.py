@@ -2415,9 +2415,10 @@ def dashboard_stats():
 # ── Families ──────────────────────────────────────────────────────────────────
 
 @app.route('/api/families', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_families():
     db = get_db()
+    role = g.user['role']
     status = request.args.get('status')
     search = (request.args.get('search') or '').strip()
     q = """
@@ -2464,7 +2465,16 @@ def list_families():
     if search:
         q += " AND (f.name LIKE ? OR f.phone LIKE ? OR f.address LIKE ?)"; params += [f'%{search}%']*3
     q += " ORDER BY f.created_at DESC"
-    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
+    rows = [dict(r) for r in db.execute(q, params).fetchall()]
+
+    # Restrict PII fields for viewer role — full data only for admin/finance/treasurer
+    if role == 'viewer':
+        SAFE_FIELDS = {'id', 'name', 'family_code', 'bundle_size', 'family_size',
+                       'city', 'status', 'created_at', 'last_delivery_volunteer',
+                       'last_shopping_volunteer', 'last_delivery_date', 'last_shopping_date'}
+        rows = [{k: v for k, v in r.items() if k in SAFE_FIELDS} for r in rows]
+
+    return jsonify(rows)
 
 @app.route('/api/families', methods=['POST'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
@@ -6078,30 +6088,8 @@ def otp_verify():
 
 @app.route('/api/portal/login', methods=['POST'])
 def portal_login():
-    data = request.json or {}
-    phone = _normalize_phone(data.get('phone') or '')
-    if not phone:
-        return jsonify({'error': 'Phone number required'}), 400
-    db = get_db()
-    vol = db.execute(
-        "SELECT * FROM volunteers WHERE phone=? AND status='active'", (phone,)
-    ).fetchone()
-    if not vol:
-        return jsonify({'error': 'No active volunteer found with this phone number. '
-                                 'Make sure you use the same number you signed up with, '
-                                 'or contact a coordinator for help.'}), 404
-    token = str(uuid.uuid4())
-    expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
-    db.execute(
-        "INSERT INTO portal_sessions (token, volunteer_id, expires_at, created_at) VALUES (?,?,?,?)",
-        (token, vol['id'], expires_at, now())
-    )
-    db.commit()
-    return jsonify({
-        'token': token,
-        'volunteer': {'id': vol['id'], 'name': vol['name'],
-                      'phone': vol['phone'], 'role': vol['role']}
-    })
+    """Legacy phone-only portal login — removed. Use /api/login with username + password."""
+    return jsonify({'error': 'This login method is no longer supported. Please use the main login page.'}), 410
 
 @app.route('/api/portal/cycles')
 @require_portal_auth()
