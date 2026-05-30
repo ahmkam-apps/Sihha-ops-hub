@@ -1068,19 +1068,7 @@ function toggleItem(row, cid) {
     }
   }
 
-  // Mutual exclusion: if this item belongs to a group, deselect others in that group
-  const groupId = row.dataset.group;
-  if (isSelecting && groupId) {
-    document.querySelectorAll(`#items-${cid} .item-row[data-group="${groupId}"]`).forEach(other => {
-      if (other !== row && other.classList.contains('selected')) {
-        other.classList.remove('selected');
-        // Hide free-text input for deselected item
-        const otherId = other.dataset.id;
-        const otherWrap = document.getElementById(`ft-wrap-${cid}-${otherId}`);
-        if (otherWrap) otherWrap.style.display = 'none';
-      }
-    });
-  }
+  // No mutual exclusion — families can select any items within their budget
 
   row.classList.toggle('selected');
 

@@ -5326,21 +5326,7 @@ def submit_food_order():
             if total_cost > bundle_budget:
                 return jsonify({'error': 'Your selection exceeds your bundle limit. Please remove some items.'}), 422
 
-        # Group constraint validation (at most group_max items per group)
-        if selected_ids:
-            group_rows = db.execute(
-                "SELECT id, group_id, COALESCE(group_max,1) as group_max FROM food_items WHERE is_active=1 AND group_id IS NOT NULL"
-            ).fetchall()
-            group_counts = {}
-            group_maxes  = {}
-            for gr in group_rows:
-                if gr['id'] in selected_ids:
-                    gid = gr['group_id']
-                    group_counts[gid] = group_counts.get(gid, 0) + 1
-                    group_maxes[gid]  = gr['group_max']
-            for gid, cnt in group_counts.items():
-                if cnt > group_maxes.get(gid, 1):
-                    return jsonify({'error': f'You can only select one item from the {gid.replace("_"," ")} group.'}), 422
+        # No group constraint — families can select any items within their budget
 
     # Save item selections with quantities and custom values
     all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
