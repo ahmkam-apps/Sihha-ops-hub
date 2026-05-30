@@ -405,7 +405,7 @@
     <div class="success-icon">✓</div>
     <h2 class="success-title">Request Received</h2>
     <p class="success-text">Thank you for reaching out. Your request has been submitted and we will contact you within 48 hours. All information is kept strictly confidential.</p>
-    <p class="success-text" style="margin-top:12px;">Once approved, a coordinator will send you a WhatsApp message before each delivery cycle. No further action is needed — just reply to confirm or skip when you receive it.</p>
+    <p class="success-text" style="margin-top:12px;">Once approved, you will receive an email with your login details. You can then log in at <a href="/login" style="color:inherit;text-decoration:underline;">sihha.org/login</a> to manage your deliveries. No further action is needed right now.</p>
     <a class="success-link" href="https://www.sihha.org" style="background:transparent;color:#111;border:1.5px solid #111;">Return to sihha.org</a>
   </div>
 
@@ -488,6 +488,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name, phone,
+          email: (document.getElementById('email').value || '').trim() || null,
           address: address + (city ? ', ' + city : ''),
           city,
           family_size: parseInt(family_size),

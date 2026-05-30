@@ -4515,10 +4515,10 @@ def public_intake():
     family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
     db.execute(
         '''INSERT INTO families
-           (id,name,phone,address,city,family_size,children_count,
+           (id,name,phone,email,address,city,family_size,children_count,
             dietary_notes,frequency,income_range,status,source,family_code,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (fid, data['name'], phone, data.get('address'), data.get('city'),
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (fid, data['name'], phone, data.get('email'), data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
          'pending', 'intake_form', family_code, now())

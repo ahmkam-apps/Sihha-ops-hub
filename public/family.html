@@ -548,7 +548,8 @@ function applyLang() {
   document.querySelectorAll('[data-en]').forEach(el => {
     el.textContent = el.getAttribute('data-' + currentLang) || el.getAttribute('data-en');
   });
-  document.getElementById('phone-input').placeholder =
+  const phoneInput = document.getElementById('phone-input');
+  if (phoneInput) phoneInput.placeholder =
     currentLang === 'ar' ? 'مثال: 5551234567' : 'e.g. 5551234567';
   if (STATE.familyId) renderAll();
 }
