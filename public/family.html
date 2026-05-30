@@ -929,11 +929,12 @@ function renderPlaceOrderBody(cycle) {
       const selClass   = isDefault ? 'selected' : '';
 
       if (item.allow_qty) {
-        // +/- stepper for adjustable-quantity items (these are always default-on)
+        // +/- stepper for adjustable-quantity items
         return `
           <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
                data-price="${item.price || 0}" data-allow-qty="1"
-               data-group="${escHtml(groupId)}" data-group-max="${groupMax}">
+               data-group="${escHtml(groupId)}" data-group-max="${groupMax}"
+               onclick="toggleItem(this,'${escHtml(cid)}')">
             <div class="item-check"></div>
             <div class="item-name">${escHtml(item.name)}</div>
             <div class="item-qty-ctrl" onclick="event.stopPropagation()">
@@ -953,7 +954,7 @@ function renderPlaceOrderBody(cycle) {
             <div class="item-check"></div>
             <div class="item-name">${escHtml(item.name)}</div>
           </div>
-          <div class="free-text-wrap" id="ft-wrap-${escHtml(cid)}-${escHtml(item.id)}" style="display:none;padding:4px 0 8px 32px;">
+          <div class="free-text-wrap" id="ft-wrap-${escHtml(cid)}-${escHtml(item.id)}" style="display:${isDefault ? 'block' : 'none'};padding:4px 0 8px 32px;">
             <input type="text" class="free-text-input" id="ft-${escHtml(cid)}-${escHtml(item.id)}"
               placeholder="${L === 'ar' ? 'اكتب نوع الفاكهة هنا…' : 'Type the fruit you want…'}"
               style="width:100%;border:1px solid var(--gray-2);padding:8px 10px;font-size:14px;font-family:var(--font-body);"
@@ -1101,7 +1102,7 @@ function toggleItem(row, cid) {
 function changeQty(cid, itemId, delta) {
   const el     = document.getElementById(`qty-${cid}-${itemId}`);
   if (!el) return;
-  const cur    = parseInt(el.textContent) || 1;
+  const cur    = parseInt(el.textContent) || 0;
   const newQty = Math.max(0, cur + delta);
   const budget = _getBudget(cid);
   const row    = document.querySelector(`#items-${cid} .item-row[data-id="${itemId}"]`);
