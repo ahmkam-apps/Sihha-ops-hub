@@ -5024,14 +5024,22 @@ def check_food_order_eligibility():
         ).fetchall()
         cats = {}
         for r in rows:
+            # Use bundle_quantities as the per-size default.
+            # If bq.quantity > 0, the item is pre-selected for this bundle size.
+            # Fall back to global is_default only when no bundle quantity is configured.
+            bq_qty = int(r['quantity']) if str(r['quantity']).isdigit() else 0
+            has_bq = bq_qty > 0
+            is_default = has_bq or (not r['quantity'] and r['is_default'])
+            default_qty = bq_qty if has_bq else (1 if r['is_default'] else 0)
             cats.setdefault(r['category'], []).append({
                 'id':          r['id'],
                 'name':        r['name'],
                 'unit':        r['unit'],
                 'quantity':    r['quantity'],
+                'default_qty': default_qty,      # pre-filled qty from bundle_quantities
                 'price':       r['price'],       # budget math only — never shown to family
                 'allow_qty':   r['allow_qty'],   # 1 = +/- stepper; 0 = checkbox
-                'is_default':  r['is_default'],  # pre-checked on form open
+                'is_default':  1 if is_default else 0,
                 'group_id':    r['group_id'],    # mutual-exclusion group key
                 'group_max':   r['group_max'],   # max items selectable from this group
                 'is_free_text':r['is_free_text'],# show text input when checked

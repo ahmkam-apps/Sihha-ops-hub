@@ -939,7 +939,7 @@ function renderPlaceOrderBody(cycle) {
             <div class="item-name">${escHtml(item.name)}</div>
             <div class="item-qty-ctrl" onclick="event.stopPropagation()">
               <button class="qty-btn" onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',-1)">−</button>
-              <span class="qty-val" id="qty-${escHtml(cid)}-${escHtml(item.id)}">${isDefault ? 1 : 0}</span>
+              <span class="qty-val" id="qty-${escHtml(cid)}-${escHtml(item.id)}">${item.default_qty || (isDefault ? 1 : 0)}</span>
               <button class="qty-btn" onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',1)">+</button>
               <span class="qty-unit">${escHtml(item.unit || '')}</span>
             </div>
