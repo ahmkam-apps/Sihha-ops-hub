@@ -2810,6 +2810,8 @@ def update_volunteer(vid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+    prev_status = row['status']
+    new_status  = d.get('status', row['status'])
     db.execute(
         '''UPDATE volunteers SET name=?,phone=?,email=?,role=?,availability=?,
            service_area=?,wa_phone=?,wa_apikey=?,status=?,notes=?,updated_at=? WHERE id=?''',
@@ -2817,9 +2819,60 @@ def update_volunteer(vid):
          d.get('email', row['email']), d.get('role', row['role']),
          d.get('availability', row['availability']), d.get('service_area', row['service_area']),
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
-         d.get('status', row['status']), d.get('notes', row['notes']), now(), vid)
+         new_status, d.get('notes', row['notes']), now(), vid)
     )
     db.commit()
+
+    # When a volunteer is activated for the first time — create account + email credentials
+    if new_status == 'active' and prev_status != 'active':
+        vol_email = (d.get('email') or row['email'] or '').strip() or None
+        vol_name  = d.get('name', row['name'])
+        try:
+            existing_user = db.execute(
+                "SELECT id FROM users WHERE linked_id=? AND role='volunteer'", (vid,)
+            ).fetchone()
+            if not existing_user:
+                name_parts    = (vol_name or 'volunteer').lower().split()
+                base_username = '.'.join(name_parts[:2]) if len(name_parts) >= 2 else name_parts[0]
+                username      = base_username
+                suffix        = 1
+                while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+                    username = f'{base_username}{suffix}'
+                    suffix  += 1
+                temp_pw = _generate_temp_password()
+                uid     = str(uuid.uuid4())
+                db.execute(
+                    '''INSERT INTO users (id, username, password_hash, name, role,
+                       linked_id, linked_type, must_change_password, created_at)
+                       VALUES (?,?,?,?,?,?,?,1,?)''',
+                    (uid, username, generate_password_hash(temp_pw),
+                     vol_name, 'volunteer', vid, 'volunteer', now())
+                )
+                db.commit()
+                log.info(f'update_volunteer: auto-created account "{username}" for newly active volunteer {vid}')
+                if vol_email:
+                    _email_send(vol_email, 'You\'re approved — welcome to the Sihha volunteer team!',
+                        f"Assalamu Alaikum {vol_name},\n\n"
+                        f"Your volunteer account has been approved. You can now log in to the Sihha volunteer portal "
+                        f"to sign up for delivery and shopping slots.\n\n"
+                        f"  Login URL:  https://ops.sihha.org/login\n"
+                        f"  Username:   {username}\n"
+                        f"  Password:   {temp_pw}\n\n"
+                        f"You will be asked to set a new password after your first login.\n\n"
+                        f"JazakAllah Khair for volunteering!\n\n"
+                        f"— Sihha Food Program"
+                    )
+            elif vol_email:
+                # Account already exists — just notify them they've been reactivated
+                _email_send(vol_email, 'Your Sihha volunteer account is active',
+                    f"Assalamu Alaikum {vol_name},\n\n"
+                    f"Your Sihha volunteer account has been reactivated. "
+                    f"You can log in at https://ops.sihha.org/login to sign up for slots.\n\n"
+                    f"JazakAllah Khair!\n\n— Sihha Food Program"
+                )
+        except Exception as _e:
+            log.warning(f'update_volunteer: account/email failed for volunteer {vid}: {_e}')
+
     return jsonify(dict(db.execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone()))
 
 # ── Assignments ───────────────────────────────────────────────────────────────
@@ -4536,6 +4589,20 @@ def public_intake():
         )
     except Exception as _e:
         log.warning(f'Intake notify failed: {_e}')
+    # Send confirmation email to family if email provided
+    fam_email = (data.get('email') or '').strip()
+    if fam_email:
+        try:
+            _email_send(fam_email, 'We received your Sihha application',
+                f"Assalamu Alaikum {data['name']},\n\n"
+                f"Thank you for applying to the Sihha Food Program.\n\n"
+                f"We have received your application and will review it within 48 hours. "
+                f"Once approved, you will receive a separate email with your login credentials.\n\n"
+                f"If you have any questions, please contact your coordinator.\n\n"
+                f"— Sihha Food Program"
+            )
+        except Exception as _e:
+            log.warning(f'Intake confirmation email failed: {_e}')
     return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
 
 @app.route('/api/volunteer-signup', methods=['POST'])
@@ -4578,6 +4645,21 @@ def public_volunteer_signup():
         )
     except Exception as _e:
         log.warning(f'Volunteer signup notify failed: {_e}')
+    # Send confirmation email to volunteer if email provided
+    vol_email = (data.get('email') or '').strip()
+    if vol_email:
+        try:
+            _email_send(vol_email, 'Thank you for signing up to volunteer with Sihha',
+                f"Assalamu Alaikum {data['name']},\n\n"
+                f"Thank you for signing up to volunteer with the Sihha Food Program!\n\n"
+                f"We have received your application and will review it shortly. "
+                f"Once approved, you will receive a separate email with your login credentials "
+                f"for the volunteer portal.\n\n"
+                f"JazakAllah Khair for your generosity!\n\n"
+                f"— Sihha Food Program"
+            )
+        except Exception as _e:
+            log.warning(f'Volunteer signup confirmation email failed: {_e}')
     return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
 
 # ── Static Pages ──────────────────────────────────────────────────────────────
