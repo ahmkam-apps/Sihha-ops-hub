@@ -316,7 +316,15 @@
   .bundle-bar-fill {
     height: 100%; background: var(--green);
     border-radius: 4px; transition: width 0.3s ease;
+    display: flex; align-items: center; justify-content: flex-end;
+    overflow: hidden;
   }
+  .bundle-bar-pct {
+    font-size: 10px; font-weight: 700; color: #fff;
+    padding-right: 6px; white-space: nowrap; opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  .bundle-bar-pct.visible { opacity: 1; }
 
   .notes-label {
     display: block; font-size: 11px; font-weight: 700;
@@ -985,7 +993,9 @@ function renderPlaceOrderBody(cycle) {
         </span>
       </div>
       <div class="bundle-bar-track">
-        <div class="bundle-bar-fill" id="bundle-bar-fill-${escHtml(cid)}" style="width:0%"></div>
+        <div class="bundle-bar-fill" id="bundle-bar-fill-${escHtml(cid)}" style="width:0%">
+          <span class="bundle-bar-pct" id="bundle-bar-pct-${escHtml(cid)}"></span>
+        </div>
       </div>
     </div>` : '';
 
@@ -1048,8 +1058,14 @@ function _updateBundleBar(cid) {
   const total  = _calcTotal(cid);
   const pct    = Math.min(100, Math.round(total / budget * 100));
   const fill   = document.getElementById(`bundle-bar-fill-${cid}`);
+  const pctEl  = document.getElementById(`bundle-bar-pct-${cid}`);
   const msg    = document.getElementById(`bundle-limit-msg-${cid}`);
   if (fill) fill.style.width = pct + '%';
+  if (pctEl) {
+    pctEl.textContent = pct + '%';
+    // Show label only when bar is wide enough to display it (>15%)
+    pctEl.classList.toggle('visible', pct > 15);
+  }
   // Only HIDE the message here — it is shown exclusively when an add is blocked
   if (msg && pct < 100) msg.style.display = 'none';
 }
