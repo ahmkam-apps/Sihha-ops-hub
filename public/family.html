@@ -1035,7 +1035,7 @@ function _calcTotal(cid) {
     const price = parseFloat(row.dataset.price || 0);
     const allowQty = row.dataset.allowQty === '1';
     const qty = allowQty
-      ? parseInt(document.getElementById(`qty-${cid}-${row.dataset.id}`)?.textContent || 1)
+      ? (parseInt(document.getElementById(`qty-${cid}-${row.dataset.id}`)?.textContent) || 0)
       : 1;
     total += price * qty;
   });
@@ -1069,6 +1069,18 @@ function toggleItem(row, cid) {
   }
 
   // No mutual exclusion — families can select any items within their budget
+
+  // For allow_qty items: sync qty with selection state
+  if (row.dataset.allowQty === '1') {
+    const qtyEl = document.getElementById(`qty-${cid}-${row.dataset.id}`);
+    if (isSelecting) {
+      // Re-selecting: ensure qty is at least 1
+      if (qtyEl && (parseInt(qtyEl.textContent) || 0) === 0) qtyEl.textContent = 1;
+    } else {
+      // Deselecting: reset qty to 0
+      if (qtyEl) qtyEl.textContent = 0;
+    }
+  }
 
   row.classList.toggle('selected');
 
