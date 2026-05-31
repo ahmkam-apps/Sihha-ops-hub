@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sihha — Sign In</title>
 <style>
+  @font-face { font-family:'AreaExtrabold'; src:url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2'); font-weight:800; }
+  @font-face { font-family:'AreaNormal'; src:url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2'); font-weight:400; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #111;
-    color: #fff;
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
+    background: #ffffff;
+    color: #111111;
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -17,66 +19,75 @@
     padding: 24px;
   }
   .card {
-    background: #1a1a1a;
-    border: 1px solid #2a2a2a;
+    background: #ffffff;
+    border: 1px solid #e8e8e8;
     width: 100%;
     max-width: 400px;
     padding: 40px 36px 36px;
   }
   .logo {
-    font-size: 22px;
-    font-weight: 700;
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 24px;
+    font-weight: 800;
     letter-spacing: 0.5px;
-    margin-bottom: 6px;
-    color: #fff;
+    margin-bottom: 4px;
+    color: #111111;
   }
   .tagline {
     font-size: 13px;
-    color: #666;
+    color: #888888;
     margin-bottom: 36px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
   .screen { display: none; }
   .screen.active { display: block; }
 
   label {
     display: block;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    color: #999;
+    color: #888888;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.6px;
     margin-bottom: 6px;
   }
   input[type=text], input[type=password] {
     width: 100%;
-    background: #111;
-    border: 1px solid #333;
-    color: #fff;
+    background: #ffffff;
+    border: 1px solid #cccccc;
+    color: #111111;
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
     font-size: 15px;
     padding: 11px 14px;
     outline: none;
     margin-bottom: 18px;
     -webkit-appearance: none;
+    border-radius: 0;
   }
-  input:focus { border-color: #555; }
-  input::placeholder { color: #444; }
+  input:focus { border-color: #111111; }
+  input::placeholder { color: #cccccc; }
   button[type=submit], .btn-primary {
     width: 100%;
-    background: #fff;
-    color: #111;
+    background: #111111;
+    color: #ffffff;
     border: none;
+    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
     font-size: 14px;
     font-weight: 700;
-    padding: 13px;
+    padding: 14px;
     cursor: pointer;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
     margin-top: 4px;
+    border-radius: 0;
   }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button[type=submit]:hover { background: #333333; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
   .error-msg {
-    background: #2a0000;
-    border: 1px solid #600;
-    color: #ff8080;
+    background: #fff5f5;
+    border: 1px solid #ffcccc;
+    color: #cc0000;
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 18px;
@@ -84,9 +95,9 @@
   }
   .error-msg.visible { display: block; }
   .success-msg {
-    background: #001a00;
-    border: 1px solid #060;
-    color: #80ff80;
+    background: #f5fff5;
+    border: 1px solid #ccffcc;
+    color: #006600;
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 18px;
@@ -95,23 +106,24 @@
   .success-msg.visible { display: block; }
   .password-hint {
     font-size: 12px;
-    color: #555;
+    color: #888888;
     margin-top: -12px;
     margin-bottom: 18px;
     line-height: 1.5;
   }
   .rule { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
-  .rule .dot { width: 6px; height: 6px; border-radius: 50%; background: #444; flex-shrink: 0; }
-  .rule.ok .dot { background: #4caf50; }
-  .rule.ok span { color: #aaa; }
+  .rule .dot { width: 6px; height: 6px; border-radius: 50%; background: #cccccc; flex-shrink: 0; }
+  .rule.ok .dot { background: #1a7a3c; }
+  .rule.ok span { color: #888888; }
   .screen-title {
-    font-size: 17px;
-    font-weight: 700;
+    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
+    font-size: 18px;
+    font-weight: 800;
     margin-bottom: 6px;
   }
   .screen-sub {
     font-size: 13px;
-    color: #666;
+    color: #888888;
     margin-bottom: 28px;
     line-height: 1.5;
   }
