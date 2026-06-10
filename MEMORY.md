@@ -1,6 +1,6 @@
 # SIHAA Food Charity — Operations Hub Memory
 
-_Last updated: 2026-06-09 — Active Backlog replaced with full code-audit remediation plan. ⚠️ Other sections date from 2026-05-02 and are partially stale (Twilio/OTP removed → SendGrid email only; slot lifecycle now auto-confirm with no 'claimed' state; portal login is username/password). CLAUDE.md is the authoritative current reference._
+_Last updated: 2026-06-10 — Audit Phases 0.1 + 1 + 2 implemented and DEPLOYED to prod (commits `252d986`, `c8db8d2`). Done: daily DB backup job, ADMIN_PASSWORD startup guard, atomic slot claim, 16MB upload cap, 5 shadowed tests recovered, Python 3.11 pin, XSS escaping (229 sites), login rate limiting, CORS restriction, users-table migration fix, make_conn() for scheduler jobs, guard-before-send in reminders. Next: Phase 0.2–0.4 (off-site backup, staging, heartbeat) then Phase 3. Note: `origin/staging` branch exists on GitHub — check if wired to a Railway service (relevant to 0.3). CI 3.10→3.11 bump pending (PAT lacks workflow scope — edit `.github/workflows/test.yml` in GitHub UI). ⚠️ Sections below the backlog date from 2026-05-02 and are partially stale (Twilio/OTP removed → SendGrid email only; slot lifecycle now auto-confirm with no 'claimed' state; portal login is username/password). CLAUDE.md is the authoritative current reference._
 
 ---
 
@@ -391,12 +391,12 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 | # | Item | Where | Status |
 |---|------|-------|--------|
-| 2.1 | Stored XSS: add `escapeHtml()` helper and apply to every `${userValue}` in innerHTML (105 sinks in index.html, 0 escape helpers; portal.html same). Public intake/volunteer forms feed these | public/index.html, portal.html | 🔲 |
-| 2.2 | Rate limiting + lockout on `/api/auth/login` (currently unlimited guessing) | server.py:1709 | 🔲 |
-| 2.3 | Restrict CORS to known origins (currently `CORS(app)` wide open) | server.py:16 | 🔲 |
-| 2.4 | `_recreate_users_table` copies only original columns — if it fires, resets `linked_id`, `must_change_password` (force-resets everyone), `last_login_at`. Copy column intersection instead | server.py:1567 | 🔲 |
-| 2.5 | Shared `make_conn()` factory: scheduler jobs use raw `sqlite3.connect` without `foreign_keys=ON`/`busy_timeout` (4 sites: 7049, 7355, 7412, 7487) | server.py | 🔲 |
-| 2.6 | Reminder jobs: insert reminder_log guard row BEFORE sending email (TOCTOU — 2 workers can double-send) | server.py:7393, 7518 | 🔲 |
+| 2.1 | Stored XSS | ✅ DONE 2026-06-10 — `esc()` + `escJs()` helpers added; 229 interpolation sites wrapped (index.html 204, portal.html 25); ad-hoc partial escapes normalized; node --check passed | ✅ |
+| 2.2 | Login rate limiting | ✅ DONE 2026-06-10 — in-memory throttle on `/api/auth/login`: 5 fails per (IP, username) per 15 min → 429; functionally verified | ✅ |
+| 2.3 | CORS | ✅ DONE 2026-06-10 — restricted to railway URL + sihha.org domains; override via `CORS_ORIGINS` env var | ✅ |
+| 2.4 | `_recreate_users_table` data loss | ✅ DONE 2026-06-10 — copies PRAGMA table_info column intersection; late-added columns survive rebuilds | ✅ |
+| 2.5 | `make_conn()` factory | ✅ DONE 2026-06-10 — all 4 scheduler jobs + get_db share one factory (WAL, FK ON, busy_timeout 5s); bootstrap conn got busy_timeout | ✅ |
+| 2.6 | Guard-before-send in reminder jobs | ✅ DONE 2026-06-10 — opt-in job reserves reminder_log row first (rowcount-gated, guard released on send failure); auto-release job email gated on guard rowcount | ✅ |
 
 ### 🟡 Phase 3 — Medium — week 2–3
 

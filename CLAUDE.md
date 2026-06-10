@@ -2,7 +2,9 @@
 
 **Read this file at the start of every dev session before touching server.py or any DB/route code.**
 
-> **Code audit 2026-06-09:** full security/architecture audit completed. Prioritized remediation backlog (Phase 0 operational → Phase 4 structural) lives in `MEMORY.md → Active Backlog`. Check it before starting work — Phase 0 (DB backups, staging, monitoring) outranks feature work.
+> **Code audit 2026-06-09:** full security/architecture audit completed. Prioritized remediation backlog (Phase 0 operational → Phase 4 structural) lives in `MEMORY.md → Active Backlog`. Check it before starting work.
+>
+> **Remediation status (2026-06-10):** Phases 0.1, 1, and 2 are DONE and deployed (commits `252d986`, `c8db8d2`): daily DB backup (07:30 UTC + on deploy, `data/backups/`, 14-day rotation), ADMIN_PASSWORD startup guard (boot FAILS on Railway if env var missing), atomic slot claim, 16MB `MAX_CONTENT_LENGTH`, XSS escaping via `esc()`/`escJs()` in index.html + portal.html (use them for ALL new user-data interpolations), login throttle (5 fails/15 min → 429), CORS allowlist (`CORS_ORIGINS` env), `make_conn()` factory (use it for any new background-job DB access — never raw `sqlite3.connect`), guard-before-send in reminder jobs. Still open: Phase 0.2–0.4 (off-site backup, staging, heartbeat), Phase 3, Phase 4.
 
 ---
 
@@ -883,7 +885,7 @@ Every push to `origin/master` (which triggers Railway deploy) must include:
 
 ### `_ensure_treasurer_role()` — safe table recreation (writable_schema hack REMOVED)
 - Now uses safe table recreation only (see docstring at server.py ~1526: "no PRAGMA writable_schema")
-- ⚠️ Audit 2026-06-09: `_recreate_users_table` copies only the original column set — if it fires it resets `linked_id`, `linked_type`, `must_change_password` (→1, force-resets everyone), `password_changed_at`, `last_login_at`. Fix queued in MEMORY.md backlog Phase 2.4
+- ✅ Fixed 2026-06-10 (audit 2.4): `_recreate_users_table` now copies the PRAGMA table_info column INTERSECTION — late-added columns (`linked_id`, `must_change_password`, `password_changed_at`, `last_login_at`) survive rebuilds
 
 ### Volunteer Portal Auth vs Admin Auth
 - Admin auth: UUID session tokens stored in `sessions` table, `Authorization: Bearer <token>` header
