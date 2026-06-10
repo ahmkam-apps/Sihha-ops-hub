@@ -636,11 +636,11 @@ function buildFamilyCard(fam, task_types, cycle) {
       const isConfirmed = myStatus === 'confirmed';
       const btnBg    = isConfirmed ? 'var(--green)' : '#f0a500';
       const btnLabel = isConfirmed
-        ? `✓ ${tt.label} — confirmed`
-        : `⏳ ${tt.label} — waiting for order`;
+        ? `✓ ${tt.label} — claimed`
+        : `⏳ ${tt.label} — pending`;
       const btnTitle = isConfirmed
-        ? 'Family has placed their order — this is confirmed!'
-        : 'You are signed up — waiting for family to place their order';
+        ? 'You are confirmed for this slot'
+        : 'Slot claimed — pending confirmation';
       return `<button
         style="background:${btnBg};color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
         title="${btnTitle}"
