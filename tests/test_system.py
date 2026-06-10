@@ -262,12 +262,17 @@ class TestFoodCatalog:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _cycle_payload(**overrides):
+    """Build a cycle payload with delivery dates always 30 days out so they
+    never fall into the past and disappear from the 12-month visibility window."""
+    from datetime import datetime, timedelta
+    d_start = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+    d_end   = (datetime.now() + timedelta(days=31)).strftime('%Y-%m-%d')
     base = {
         'title': f'Test Cycle {uuid.uuid4().hex[:6]}',
-        'delivery_date_start': '2026-06-01',
-        'delivery_date_end':   '2026-06-02',
-        'request_open_at':     '2026-05-03T00:00:00',
-        'request_close_at':    '2026-05-10T14:00:00',
+        'delivery_date_start': d_start,
+        'delivery_date_end':   d_end,
+        'request_open_at':     '2020-01-01T00:00:00',  # always in the past → window open
+        'request_close_at':    '2099-12-31T23:59:00',  # far future → window never closes
         'status': 'draft'
     }
     base.update(overrides)

@@ -20,7 +20,7 @@
 - **Backend:** Python 3, Flask 3.0.3, Flask-CORS 4.0.1
 - **Database:** SQLite with WAL mode, stored at `data/sihaa.db` (Railway Volume mounted at `/data`)
 - **Server:** gunicorn 22.0.0, 2 workers, port from `$PORT` env var
-- **Notifications:** CallMeBot WhatsApp API (free), SendGrid email (optional)
+- **Notifications:** SendGrid email — sole notification channel (`_email_send(to, subject, body)`); Twilio/WhatsApp fully removed
 - **Scheduler:** APScheduler 3.10.4 (background, runs inside each gunicorn worker)
 - **Excel export:** openpyxl 3.1.5
 - **Hosting:** Railway (production), GitHub remote: `ahmkam-apps/Sihha-ops-hub`
@@ -62,6 +62,11 @@
 | `email` | TEXT | **ALTER TABLE migration** (Phase 4A) |
 | `wa_phone` | TEXT | **ALTER TABLE migration** (Phase 4A) |
 | `wa_apikey` | TEXT | **ALTER TABLE migration** (Phase 4A) |
+| `linked_id` | TEXT | **ALTER TABLE migration** — FK to families.id or volunteers.id |
+| `linked_type` | TEXT | **ALTER TABLE migration** — 'family' or 'volunteer' |
+| `must_change_password` | INTEGER DEFAULT 1 | **ALTER TABLE migration** — 1 = force password set on next login |
+| `password_changed_at` | TEXT | **ALTER TABLE migration** — ISO timestamp; drives 60-day expiry check |
+| `last_login_at` | TEXT | **ALTER TABLE migration** — updated on every successful login |
 
 **Note:** The `treasurer` CHECK value required a full table recreation via `executescript` in `bootstrap_db()` and a fallback `_ensure_treasurer_role()` / `_recreate_users_table()` helper. There is also `/api/admin/fix-schema` to trigger the repair manually.
 
@@ -307,6 +312,7 @@ Seeded with S(1-2), M(3-5), L(6+) if table is empty.
 | `confirmed_at` | TEXT | **ALTER TABLE migration** (Phase 5) |
 | `confirmation_sent_at` | TEXT | **ALTER TABLE migration** (Phase 5) |
 | `updated_at` | TEXT | **ALTER TABLE migration** (safety-net batch in `init_db()`, 2026-04-29) |
+| `family_notes` | TEXT | **ALTER TABLE migration** — optional notes submitted by family with order |
 
 ---
 
@@ -441,7 +447,9 @@ No migrations. Table is provisioned but sync goes directly into `donations` tabl
 | `display_order` | INTEGER DEFAULT 0 | CREATE TABLE (Phase 3C) |
 | `is_active` | INTEGER DEFAULT 1 | CREATE TABLE (Phase 3C) |
 
-Seeded with: shopping, delivery, stock. No migrations.
+| `is_family_slot` | INTEGER DEFAULT 0 | **ALTER TABLE migration** — if 1, pre-create one slot per family per cycle (shopping + delivery = 1) |
+
+Seeded with: shopping (is_family_slot=1), delivery (is_family_slot=1), stock (is_family_slot=0). No schema migrations beyond is_family_slot.
 
 ---
 
@@ -468,6 +476,25 @@ No migrations. Portal sessions expire in 48 hours (different from admin sessions
 | `created_at` | TEXT NOT NULL | CREATE TABLE (Phase order-audit) |
 
 **Note:** Created in Phase order-audit (2026-04-29). Migration #19 in `bootstrap_db()` includes a one-time backfill of synthetic events for all existing orders using `confirmed_at`/`updated_at` timestamps. Backfilled rows have `payload={"note":"backfilled"}` and are filtered out of UI display. Item names (not IDs) are stored in payload so history remains readable after catalog changes.
+
+---
+
+### Table: `order_change_requests`
+| Column | Type | Source |
+|---|---|---|
+| `id` | TEXT PK | CREATE TABLE |
+| `request_id` | TEXT NOT NULL → FK food_requests | CREATE TABLE |
+| `family_id` | TEXT NOT NULL → FK families | CREATE TABLE |
+| `cycle_id` | TEXT NOT NULL → FK delivery_cycles | CREATE TABLE |
+| `status` | TEXT CHECK IN ('pending','approved','rejected','retracted') | CREATE TABLE |
+| `family_notes` | TEXT | CREATE TABLE — family's free-text reason |
+| `payload` | TEXT NOT NULL DEFAULT '{}' | CREATE TABLE — JSON: `{selected_item_ids: [...]}` |
+| `admin_notes` | TEXT | CREATE TABLE — admin's response message |
+| `reviewed_by` | TEXT → FK users | CREATE TABLE |
+| `created_at` | TEXT NOT NULL | CREATE TABLE |
+| `updated_at` | TEXT | CREATE TABLE |
+
+One active pending CR per order at a time (enforced server-side). Change requests blocked once cycle moves to `shopping`.
 
 ---
 
@@ -530,7 +557,9 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 ### Authentication
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/auth/login` | None | Username + password login, returns session token |
+| POST | `/api/auth/login` | None | Username + password login; returns `must_change_password+temp_token` on first login, else full `token` |
+| POST | `/api/auth/set-password` | temp_token | Complete first-login or forced-reset; issues full session token |
+| POST | `/api/auth/change-password` | Bearer (any) | Change own password |
 | POST | `/api/auth/logout` | Bearer token (any) | Deletes session |
 | GET | `/api/auth/me` | Bearer token (any) | Returns current user info |
 
@@ -555,6 +584,7 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | POST | `/api/families` | admin/finance/treasurer | Create family + auto-create linked user account; returns login_username, login_temp_password, email_sent | families, users |
 | GET | `/api/families/<fid>` | any auth | Get single family | families |
 | PUT | `/api/families/<fid>` | admin/finance/treasurer | Update family (all fields incl. bundle_size, wa creds) | families |
+| DELETE | `/api/families/<fid>` | admin | Cascade-delete family + all related rows (food_request_events, food_request_items, order_change_requests, food_requests, volunteer_slots, receipts, assignments, linked user account) | families + all related tables |
 | POST | `/api/families/<fid>/request-bundle-change` | None (public) | Family requests bundle size change | families, users (WA notify admin) |
 | POST | `/api/families/<fid>/approve-bundle-change` | admin | Approve or deny pending bundle change | families |
 | GET | `/api/families/<fid>/history` | any auth | Full order history with items and slots | families, food_requests, delivery_cycles, food_request_items, food_items, food_categories, volunteer_slots, volunteers |
@@ -657,13 +687,13 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | POST | `/api/task-types` | admin | Create task type | volunteer_task_types |
 | PUT | `/api/task-types/<slug>` | admin | Update task type | volunteer_task_types |
 
-### Public Family Portal (no auth / phone-based)
+### Public Family Portal (session-based auth)
 | Method | Path | Auth | Description | Tables |
 |---|---|---|---|---|
 | POST | `/api/intake` | None | Public family intake form submission | families |
-| GET | `/api/food-order/check` | None | Check if phone is registered + open/shopping cycle; returns bundle_categories always | families, delivery_cycles, food_requests, food_items, bundle_size_rules, food_categories |
+| GET | `/api/food-order/check` | Bearer (family session) | Returns family info + all cycles (12mo); legacy ?phone= param removed | families, delivery_cycles, food_requests, food_items, bundle_size_rules, food_categories |
 | POST | `/api/food-order` | None | Submit a food order for open cycle | food_requests, food_request_items, delivery_cycles, families, bundle_size_rules |
-| POST | `/api/food-order/cancel` | None (phone-based) | Cancel confirmed order if ≥1 day before delivery (Central time); releases slots; notifies coordinators + claimed volunteers via WA; logs `cancelled` event; cancel is FINAL — no re-order | food_requests, volunteer_slots, food_request_events, delivery_cycles, users, volunteers |
+| POST | `/api/food-order/cancel` | None (family_id + request_id) | Cancel confirmed order if ≥1 day before delivery (Central time); releases slots; notifies coordinators + claimed volunteers via email; logs `cancelled` event; hard-delete — family can re-order after cancel | food_requests, volunteer_slots, food_request_events, delivery_cycles, users, volunteers |
 | PUT | `/api/food-order/items` | None (phone-based) | Edit item selections if ≥2 days before delivery (Central time) AND cycle not shopping; logs `items_edited` event with diff; notifies coordinators + claimed shopping volunteers | food_requests, food_request_items, food_request_events, delivery_cycles, users, volunteers |
 | PUT | `/api/food-requests/<rid>/items` | admin | Admin edits item selections for a family's order; logs `admin_override` event | food_requests, food_request_items, food_request_events |
 | GET | `/api/family/confirm/<token>` | None (token-based) | Get order details for confirmation page | food_requests, families, delivery_cycles, food_items, food_categories, bundle_quantities, food_request_items |
@@ -677,11 +707,11 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | POST | `/api/portal/login` | None | Login by phone number → returns portal token (48hr) | volunteers, portal_sessions |
 | GET | `/api/portal/cycles` | portal token | Upcoming/shopping cycles in next 6 months | delivery_cycles |
 | GET | `/api/portal/slots/<cycle_id>` | portal token | Slots for a cycle (volunteer sees all; addresses only for own claimed delivery slots) | volunteer_slots, families, volunteers, delivery_cycles |
-| POST | `/api/portal/claim` | portal token | Claim an open slot (WA confirmation sent) | volunteer_slots, volunteers, families, delivery_cycles, bundle_quantities |
+| POST | `/api/portal/claim` | portal token | **REMOVED** — superseded by `/api/portal/signup` | — |
 | GET | `/api/portal/my-tasks` | portal token | Volunteer's claimed/complete tasks | volunteer_slots, families, delivery_cycles |
 | POST | `/api/portal/complete/<slot_id>` | portal token | Mark slot complete; auto-marks food_request delivered if delivery type | volunteer_slots, food_requests |
 | GET | `/api/portal/families/<cycle_id>` | portal token | Families enrolled in cycle + volunteer signup status | food_requests, families, volunteer_slots, volunteer_task_types |
-| POST | `/api/portal/signup` | portal token | Claim an open slot for a family+task (UPDATE existing open row; 409 if already taken by another) | volunteer_slots, families, delivery_cycles, volunteers |
+| POST | `/api/portal/signup` | portal token | Claim an open slot for a family+task (UPDATE existing open row; 409 if already taken by another); emails confirmation to volunteer | volunteer_slots, families, delivery_cycles, volunteers |
 | DELETE | `/api/portal/cancel/<slot_id>` | portal token | Release own claimed slot back to open (UPDATE status→open, NULL claimed_by) | volunteer_slots |
 | POST | `/api/portal/receipts/upload` | portal token | Upload receipt file | filesystem |
 | POST | `/api/portal/receipts` | portal token | Submit receipt + auto-create reimbursement + mark slot complete + notify treasurers | receipts, reimbursements, volunteer_slots, volunteers, users |

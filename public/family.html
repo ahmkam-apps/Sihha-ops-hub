@@ -578,6 +578,11 @@ const BUNDLE_LABELS = {
   ar: { S: 'طرد صغير',     M: 'طرد متوسط',    L: 'طرد كبير' }
 };
 
+// Tracks which items were pre-selected when each order form first opened.
+// Used to allow re-selecting a default that was deselected, without hitting
+// a false budget-limit error (the default was already counted in the initial total).
+const _initialSelections = {};
+
 const STATUS_LABELS_EN = {
   delivered: 'Delivered', confirmed: 'Confirmed', auto_confirmed: 'Confirmed',
   submitted: 'Confirmed', skipped: 'Skipped', cancelled: 'Cancelled',
@@ -1029,7 +1034,16 @@ function toggleOrderForm(cid) {
   const panel = document.getElementById(`form-${cid}`);
   if (panel) {
     panel.classList.toggle('open');
-    if (panel.classList.contains('open')) _updateBundleBar(cid);
+    if (panel.classList.contains('open')) {
+      _updateBundleBar(cid);
+      // Capture which items were pre-selected on first open (used by toggleItem
+      // to allow re-selecting a deselected default without a false budget error).
+      if (!_initialSelections[cid]) {
+        const sel = new Set();
+        document.querySelectorAll(`#items-${cid} .item-row.selected`).forEach(r => sel.add(r.dataset.id));
+        _initialSelections[cid] = sel;
+      }
+    }
   }
 }
 
@@ -1075,9 +1089,12 @@ function toggleItem(row, cid) {
   const budget = _getBudget(cid);
 
   if (isSelecting && budget > 0) {
-    // Budget check
+    // Budget check — but skip for items that were pre-selected when the form opened.
+    // Those items were already counted in the initial total; blocking them when
+    // re-selected after a deselect creates a false "bundle limit" error.
     const price = parseFloat(row.dataset.price || 0);
-    if (_calcTotal(cid) + price > budget) {
+    const wasPreSelected = (_initialSelections[cid] || new Set()).has(row.dataset.id);
+    if (!wasPreSelected && _calcTotal(cid) + price > budget) {
       const msg = document.getElementById(`bundle-limit-msg-${cid}`);
       if (msg) { msg.style.display = 'inline'; setTimeout(() => { if (_calcTotal(cid) < budget) msg.style.display='none'; }, 2500); }
       return;
