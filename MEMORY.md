@@ -373,9 +373,9 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 | # | Item | Notes | Status |
 |---|------|-------|--------|
 | 0.1 | **Daily DB backup job** | ✅ DONE 2026-06-09 — `_daily_backup_job()` in server.py: SQLite online-backup API → `data/backups/sihaa-YYYYMMDD.db`, keeps 14, runs 07:30 UTC + once on deploy, idempotent across workers. Uploads folder NOT yet included (covered by 0.2) | ✅ |
-| 0.2 | **Off-site backup copy** | Local rotation doesn't survive volume loss. Push daily backup off-Railway (email attachment to admin, GitHub private repo, or S3/B2). Needs a decision on destination | 🔲 |
-| 0.3 | **Staging environment** | Every push to master deploys straight to PROD. Add a second Railway service (dev branch) like Spicetopia's DEV, or at minimum adopt a pre-deploy checklist (run tests locally → verify tree → push) | 🔲 |
-| 0.4 | **Heartbeat / monitoring** | Nobody watches logs. Daily SendGrid digest to admin: "scheduler ran, N opt-ins sent, M skips, backup OK (size)". Catches silent scheduler/email failures before families notice | 🔲 |
+| 0.2 | **Off-site backup copy** | ✅ BUILT 2026-06-10 — daily gzipped snapshot emailed after backup; **⚠️ ACTIVATION REQUIRED: set `BACKUP_EMAIL` env var in Railway** (recipient inbox). Auto-warns if DB outgrows the 10MB email cap → then move to S3/B2 | ⚠️ env |
+| 0.3 | **Staging environment** | Every push to master deploys straight to PROD. `origin/staging` branch exists on GitHub — check if wired to a Railway service. Otherwise add one, or adopt pre-deploy checklist | 🔲 |
+| 0.4 | **Heartbeat / monitoring** | ✅ DONE 2026-06-10 — `_daily_heartbeat_job()` 11:00 UTC: emails active admins backup status/freshness, active cycle + orders + open slots, 24h notification count, pending queues. Requires admin users to have email addresses set | ✅ |
 
 ### 🔴 Phase 1 — Critical fixes from code audit (2026-06-09) — ~2h total
 
@@ -403,10 +403,10 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 | # | Item | Notes | Status |
 |---|------|-------|--------|
 | 3.1 | Tests for finance domain | Receipts, reimbursement auto-creation, donations, Wix sync, finance summary — currently ZERO tests on money paths (~31% route coverage overall) | 🔲 |
-| 3.2 | Add ~6 missing indexes | `families(phone)`, `volunteer_slots(family_id)`, `receipts(slot_id/volunteer_id/cycle_id)`, `sessions(expires_at)` | 🔲 |
+| 3.2 | Add ~6 missing indexes | ✅ DONE 2026-06-10 — 8 added: `families(phone)`, `volunteer_slots(family_id)`, `receipts(slot_id/volunteer_id/cycle_id)`, `sessions(expires_at)`, `donations(cycle_id)`, `reminder_log(slot_id,sent_to)` | ✅ |
 | 3.3 | Batch N+1 queries | `get_orders` (per-row items query), `list_families` (4 subqueries/row), eligibility check | 🔲 |
 | 3.4 | Delete dead code | `/api/assignments` + `/api/cycle-assignments` routes (0 frontend callers), `assignments`/`cycle_assignments`/`stripe_transactions`/`wix_donations` tables, volunteer.html + order.html files | 🔲 |
-| 3.5 | gunicorn `--preload` | bootstrap_db currently runs in both workers — migration race on table recreations | 🔲 |
+| 3.5 | gunicorn `--preload` | ✅ DONE 2026-06-10 — Procfile + railway.json. bootstrap_db + APScheduler now run ONCE in the gunicorn master (verified: single "APScheduler started" log line). Migration races and double-job execution eliminated; reminder_log guards remain as defense | ✅ |
 | 3.6 | Session hygiene | Purge expired sessions (grows unbounded); slide expiry only when >1h elapsed (currently a write+commit on every request) | 🔲 |
 | 3.7 | Transaction discipline | 0 rollbacks, 81 scattered commits; wrap multi-step mutations (cancel flow) in single transaction | 🔲 |
 

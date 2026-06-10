@@ -446,6 +446,22 @@ def bootstrap_db():
         "CREATE INDEX IF NOT EXISTS idx_donations_date    ON donations(date)",
         # sessions: looked up by token (PK) + occasionally by user_id
         "CREATE INDEX IF NOT EXISTS idx_sessions_user_id  ON sessions(user_id)",
+        # ── audit 3.2 additions (2026-06-10) ──
+        # families: phone lookup is the family login/fuzzy-match hot path
+        "CREATE INDEX IF NOT EXISTS idx_families_phone    ON families(phone)",
+        # volunteer_slots by family alone: list_families runs per-family subqueries
+        # (idx_vs_cycle_family leads on cycle_id so it can't serve these)
+        "CREATE INDEX IF NOT EXISTS idx_vs_family_id      ON volunteer_slots(family_id)",
+        # receipts: joined/filtered by slot, volunteer, and cycle in finance views
+        "CREATE INDEX IF NOT EXISTS idx_receipts_slot     ON receipts(slot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_receipts_vol      ON receipts(volunteer_id)",
+        "CREATE INDEX IF NOT EXISTS idx_receipts_cycle    ON receipts(cycle_id)",
+        # sessions: expiry sweeps
+        "CREATE INDEX IF NOT EXISTS idx_sessions_expires  ON sessions(expires_at)",
+        # donations: per-cycle finance summary
+        "CREATE INDEX IF NOT EXISTS idx_donations_cycle   ON donations(cycle_id)",
+        # reminder_log: idempotency guards query by (slot_id, sent_to)
+        "CREATE INDEX IF NOT EXISTS idx_rl_slot_sent      ON reminder_log(slot_id, sent_to)",
     ]:
         try:
             conn.execute(_idx_sql)
@@ -1688,20 +1704,31 @@ def _notify_coordinators(db, message):
     except Exception as _e:
         log.warning(f'_notify_coordinators failed: {_e}')
 
-def _email_send(to_email, subject, text_body):
+def _email_send(to_email, subject, text_body, attachment=None):
     """Send an email via SendGrid Web API v3 (no SDK — pure urllib).
     Requires SENDGRID_API_KEY env var. Falls back silently if not configured.
-    Returns True on success, False on failure (never raises)."""
+    Returns True on success, False on failure (never raises).
+    attachment: optional (filename, bytes) tuple — used by the off-site backup job."""
     import urllib.request, urllib.parse, json as _json
     if not SENDGRID_API_KEY:
         log.warning('Email not sent — SENDGRID_API_KEY not configured')
         return False
-    payload = _json.dumps({
+    msg = {
         'personalizations': [{'to': [{'email': to_email}]}],
         'from': {'email': NOTIFY_FROM_EMAIL, 'name': 'Sihha Ops Hub'},
         'subject': subject,
         'content': [{'type': 'text/plain', 'value': text_body}]
-    }).encode('utf-8')
+    }
+    if attachment:
+        import base64 as _b64
+        fname, fbytes = attachment
+        msg['attachments'] = [{
+            'content': _b64.b64encode(fbytes).decode('ascii'),
+            'filename': fname,
+            'type': 'application/gzip',
+            'disposition': 'attachment'
+        }]
+    payload = _json.dumps(msg).encode('utf-8')
     req = urllib.request.Request(
         'https://api.sendgrid.com/v3/mail/send',
         data=payload,
@@ -1712,7 +1739,7 @@ def _email_send(to_email, subject, text_body):
         method='POST'
     )
     try:
-        urllib.request.urlopen(req, timeout=10)
+        urllib.request.urlopen(req, timeout=(30 if attachment else 10))
         log.info(f'Email sent to {to_email}: {subject}')
         return True
     except Exception as e:
@@ -7646,6 +7673,33 @@ def _release_unconfirmed_slots_job():
 BACKUP_DIR  = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH) or '.', 'backups'))
 BACKUP_KEEP = int(os.environ.get('BACKUP_KEEP', 14))
 
+def _offsite_backup(dest):
+    """Phase 0.2: email the gzipped daily snapshot off-Railway.
+    Opt-in via BACKUP_EMAIL env var (recipient inbox). Skips silently if unset.
+    A volume failure then costs at most one day of data instead of everything."""
+    recipient = os.environ.get('BACKUP_EMAIL', '').strip()
+    if not recipient:
+        return
+    try:
+        import gzip
+        with open(dest, 'rb') as f:
+            gz = gzip.compress(f.read(), compresslevel=9)
+        stamp = os.path.basename(dest)
+        if len(gz) > 10 * 1024 * 1024:  # SendGrid hard limit ~30MB total; stay well under
+            _email_send(recipient, f'Sihha backup TOO LARGE to email — {stamp}',
+                        f'Compressed DB snapshot is {len(gz)//1024//1024} MB (>10 MB email cap). '
+                        f'Time to move off-site backups to object storage (S3/B2) — see MEMORY.md backlog 0.2.')
+            log.warning(f'Off-site backup skipped — gz size {len(gz)} bytes exceeds email cap')
+            return
+        ok = _email_send(recipient, f'Sihha daily DB backup — {stamp}',
+                         f'Attached: gzipped SQLite snapshot {stamp} ({len(gz)//1024} KB compressed). '
+                         f'Restore: gunzip, then replace data/sihaa.db on the Railway volume.',
+                         attachment=(f'{stamp}.gz', gz))
+        log.info(f'Off-site backup email: {"sent" if ok else "FAILED"} ({len(gz)//1024} KB)')
+    except Exception as e:
+        log.error(f'Off-site backup FAILED: {e}')
+
+
 def _daily_backup_job():
     try:
         os.makedirs(BACKUP_DIR, exist_ok=True)
@@ -7674,8 +7728,77 @@ def _daily_backup_job():
                 pass
         log.info(f'Daily DB backup OK: {dest} ({os.path.getsize(dest)//1024} KB), '
                  f'{min(len(snaps), BACKUP_KEEP)} snapshots retained')
+        _offsite_backup(dest)  # Phase 0.2 — no-op unless BACKUP_EMAIL env var set
     except Exception as e:
         log.error(f'Daily DB backup FAILED: {e}')
+
+
+def _daily_heartbeat_job():
+    """Phase 0.4: daily ops digest to active admin users. Its arrival proves the
+    scheduler and app are alive; its content surfaces silent failures (missing
+    backup, stuck cycle, growing pending queues) before families notice."""
+    conn = make_conn()
+    try:
+        today = datetime.utcnow().strftime('%Y-%m-%d')
+        try:
+            snaps = sorted(f for f in os.listdir(BACKUP_DIR)
+                           if f.startswith('sihaa-') and f.endswith('.db'))
+            if snaps:
+                latest = snaps[-1]
+                size_kb = os.path.getsize(os.path.join(BACKUP_DIR, latest)) // 1024
+                fresh = latest == f'sihaa-{datetime.utcnow().strftime("%Y%m%d")}.db'
+                backup_line = f'Backup: {latest} ({size_kb} KB)' + ('' if fresh else ' — ⚠️ NOT from today')
+            else:
+                backup_line = '⚠️ NO BACKUPS FOUND on volume'
+        except Exception:
+            backup_line = '⚠️ Backup directory unreadable'
+
+        cyc = conn.execute(
+            "SELECT * FROM delivery_cycles WHERE status IN ('open','shopping','upcoming') "
+            "ORDER BY delivery_date_start LIMIT 1").fetchone()
+        if cyc:
+            orders = conn.execute(
+                "SELECT COUNT(*) FROM food_requests WHERE cycle_id=? AND status IN ('confirmed','submitted')",
+                (cyc['id'],)).fetchone()[0]
+            open_slots = conn.execute(
+                "SELECT COUNT(*) FROM volunteer_slots WHERE cycle_id=? AND status='open'",
+                (cyc['id'],)).fetchone()[0]
+            cycle_line = (f"Active cycle: {cyc['title']} [{cyc['status']}] — "
+                          f"{orders} orders, {open_slots} open volunteer slots")
+        else:
+            cycle_line = 'No active cycle'
+
+        emails_24h = conn.execute(
+            "SELECT COUNT(*) FROM reminder_log WHERE sent_at >= ?",
+            ((datetime.utcnow() - timedelta(days=1)).isoformat(),)).fetchone()[0]
+        pend_fam = conn.execute("SELECT COUNT(*) FROM families   WHERE status='pending'").fetchone()[0]
+        pend_vol = conn.execute("SELECT COUNT(*) FROM volunteers WHERE status='pending'").fetchone()[0]
+        pend_rec = conn.execute("SELECT COUNT(*) FROM receipts   WHERE status='pending'").fetchone()[0]
+
+        body = (f"Sihha Ops Hub — daily heartbeat {today} (UTC)\n\n"
+                f"{backup_line}\n"
+                f"{cycle_line}\n"
+                f"Notification emails sent (24h): {emails_24h}\n"
+                f"Pending review: {pend_fam} families · {pend_vol} volunteers · {pend_rec} receipts\n\n"
+                f"If this email stops arriving, the app or its scheduler is down — check Railway.")
+
+        # One heartbeat per day across both workers (same guard pattern as reminders)
+        guard = conn.execute(
+            "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
+            (str(uuid.uuid4()), f'heartbeat_{today}', 'admins', datetime.utcnow().isoformat()))
+        conn.commit()
+        if guard.rowcount == 0:
+            return
+        admins = conn.execute(
+            "SELECT email FROM users WHERE role='admin' AND active=1 "
+            "AND email IS NOT NULL AND TRIM(email)!=''").fetchall()
+        sent = sum(1 for a in admins
+                   if _email_send(a['email'], f'Sihha daily heartbeat — {today}', body))
+        log.info(f'Heartbeat digest sent to {sent}/{len(admins)} admins')
+    except Exception as e:
+        log.error(f'Heartbeat job FAILED: {e}')
+    finally:
+        conn.close()
 
 
 # ── Bootstrap on startup (runs under both gunicorn and direct execution) ──────
@@ -7697,8 +7820,10 @@ try:
                        id='auto_release_unconfirmed_slots', replace_existing=True)
     _scheduler.add_job(_daily_backup_job, 'cron', hour=7, minute=30,
                        id='daily_db_backup', replace_existing=True)
+    _scheduler.add_job(_daily_heartbeat_job, 'cron', hour=11, minute=0,
+                       id='daily_heartbeat', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — DB backup 07:30, email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00 UTC')
+    log.info('APScheduler started — DB backup 07:30, email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00, heartbeat 11:00 UTC')
     # Take a backup immediately on deploy too (idempotent — skips if today's exists)
     _daily_backup_job()
 except ImportError:
