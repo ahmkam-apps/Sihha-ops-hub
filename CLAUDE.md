@@ -435,7 +435,7 @@ No migrations. Table is provisioned but sync goes directly into `donations` tabl
 
 **Note:** An earlier version of this table had `UNIQUE(cycle_id, family_id, task_type)` and a `CHECK(task_type IN ...)` constraint. Both were removed via a table-rebuild migration to allow multiple volunteers per task. The migration detects the old schema by checking for those strings in `sqlite_master`.
 
-**Current slot model (2026-04-29):** `_ensure_volunteer_slots()` creates ONE open slot per task type (shopping + delivery) when an order is confirmed. Volunteers claim a slot by UPDATEing that row to `status='claimed'`; they don't INSERT new rows. Cancelling a slot UPDATEs back to `status='open'` (not DELETE), so another volunteer can claim it. Attempting to claim a slot already claimed by someone else returns HTTP 409 with the other volunteer's name.
+**Current slot model (updated 2026-06-09):** Pre-created open slots exist for all families + task types. Volunteers claim a slot by UPDATEing that row to `status='confirmed'` directly — **no intermediate `claimed` state** (auto-confirm, no coordinator approval step). Cancelling a slot UPDATEs back to `status='open'`, so another volunteer can claim it. Attempting to claim a slot already confirmed by someone else returns HTTP 409 with their name. Confirmation email fires immediately on claim.
 
 ---
 
@@ -782,11 +782,13 @@ All HTML files live in `/public/`. They are single-page apps with inline JS maki
 
 ### `portal.html` — Volunteer Portal SPA
 - Served at `/portal`
-- Phone-authenticated (POST `/api/portal/login`)
+- Username/password authenticated (POST `/api/portal/login` → unified `/login` page)
 - PWA-enabled (manifest-volunteer.json)
-- Features: view upcoming cycles, browse families, sign up for tasks, mark tasks complete, submit receipts, view own history
-- Calls all `/api/portal/*` endpoints
-- Delivery volunteers see family address only for their own claimed slots (enforced both server-side and client-side)
+- **3-tab layout (rebuilt 2026-06-09):** My Work (assignments + receipt button) | Sign Up (claim board) | History (stats)
+- My Work: full-width task cards, prominent green "Submit Receipt" button for shopping slots, "Mark as Done" for delivery
+- Sign Up: family rows with order badge + task claim buttons; upcoming cycles accordion
+- Auto-confirm on claim — no intermediate pending state
+- Delivery volunteers see family address only for their own confirmed delivery slots (enforced server-side)
 
 ### `volunteer.html` — Legacy Volunteer Portal (redirects or standalone)
 - Served at `/volunteer`

@@ -568,6 +568,9 @@
       </div>
 
       <div class="nav-section">Finance</div>
+      <div class="nav-item" onclick="nav('summary')" id="nav-summary">
+        <span class="icon">≡</span> Summary
+      </div>
       <div class="nav-item" onclick="nav('payments')" id="nav-payments">
         <span class="icon">◫</span> Payments
       </div>
@@ -735,6 +738,7 @@ function nav(page) {
   if (navEl) navEl.classList.add('active');
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
+    summary: 'Finance Summary',
     payments: 'Payments', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
     catalog: 'Food Catalog', pricing: 'Pricing Table',
@@ -746,6 +750,7 @@ function nav(page) {
   const renders = {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
+    summary: renderFinanceSummary,
     payments: renderPayments, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, 'active-cycle': renderActiveCycle,
     catalog: renderCatalog, pricing: renderPricingTable, orders: renderOrders,
@@ -2950,7 +2955,8 @@ async function saveAssignment() {
 async function renderReceipts(filter) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
-  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-green" onclick="openAddReceiptDrawer()">+ Add Receipt</button>`;
 
   let url = '/receipts';
   if (filter !== 'all') url += '?status=' + filter;
@@ -2971,7 +2977,7 @@ async function renderReceipts(filter) {
         </div>
         <table>
           <thead><tr>
-            <th>Volunteer</th><th>Family</th><th>Store</th>
+            <th>Volunteer</th><th>Family</th><th>Cycle</th><th>Store</th>
             <th>Date</th><th>Amount</th><th>Photo</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
@@ -2979,6 +2985,7 @@ async function renderReceipts(filter) {
               <tr id="rrow-${r.id}">
                 <td><strong>${r.volunteer_name||'—'}</strong></td>
                 <td>${r.family_name||'—'}</td>
+                <td style="font-size:12px;color:var(--gray-4)">${r.cycle_title||'—'}</td>
                 <td>${r.store||'—'}</td>
                 <td style="white-space:nowrap">${fmtDate(r.purchase_date)}</td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
@@ -2994,12 +3001,123 @@ async function renderReceipts(filter) {
                     : r.status==='rejected' ? `<span style="color:#c00;font-size:12px">✗ Rejected</span>` : ''}
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="8">No receipts found</td></tr>'}
+              '<tr class="empty-row"><td colspan="9">No receipts found</td></tr>'}
           </tbody>
         </table>
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
+}
+
+async function openAddReceiptDrawer() {
+  // Fetch volunteers and cycles in parallel
+  const [vols, cycles] = await Promise.all([
+    GET('/volunteers'),
+    GET('/delivery-cycles')
+  ]);
+  const activeVols = vols.filter(v => v.active);
+  const cycleOpts = cycles.map(c =>
+    `<option value="${c.id}">${c.title}</option>`
+  ).join('');
+  const volOpts = activeVols.map(v =>
+    `<option value="${v.id}">${v.name}</option>`
+  ).join('');
+
+  const body = `
+    <div class="form-group">
+      <label>Volunteer <span style="color:#c00">*</span></label>
+      <select id="ar-volunteer" class="form-control">
+        <option value="">— select volunteer —</option>
+        ${volOpts}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Delivery Cycle</label>
+      <select id="ar-cycle" class="form-control">
+        <option value="">— select cycle (optional) —</option>
+        ${cycleOpts}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Store <span style="color:#c00">*</span></label>
+      <input type="text" id="ar-store" class="form-control" placeholder="e.g. Sam's Club">
+    </div>
+    <div class="form-group">
+      <label>Purchase Date <span style="color:#c00">*</span></label>
+      <input type="date" id="ar-date" class="form-control" value="${new Date().toISOString().slice(0,10)}">
+    </div>
+    <div class="form-group">
+      <label>Amount ($) <span style="color:#c00">*</span></label>
+      <input type="number" id="ar-amount" class="form-control" placeholder="0.00" step="0.01" min="0">
+    </div>
+    <div class="form-group">
+      <label>Receipt Photo</label>
+      <input type="file" id="ar-photo" class="form-control" accept="image/*,application/pdf">
+      <div id="ar-upload-status" style="font-size:12px;color:var(--gray-4);margin-top:4px"></div>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="ar-notes" class="form-control" rows="2" placeholder="Optional notes"></textarea>
+    </div>
+    <div id="ar-err" style="color:#c00;font-size:13px;margin-top:4px"></div>`;
+
+  openDrawer('Add Receipt', body,
+    `<button class="btn btn-green" onclick="saveNewReceipt()">Save Receipt</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+}
+
+async function saveNewReceipt() {
+  const vid    = document.getElementById('ar-volunteer').value;
+  const cid    = document.getElementById('ar-cycle').value;
+  const store  = document.getElementById('ar-store').value.trim();
+  const date   = document.getElementById('ar-date').value;
+  const amount = parseFloat(document.getElementById('ar-amount').value);
+  const notes  = document.getElementById('ar-notes').value.trim();
+  const errEl  = document.getElementById('ar-err');
+
+  if (!vid)        { errEl.textContent = 'Please select a volunteer.'; return; }
+  if (!store)      { errEl.textContent = 'Store name is required.'; return; }
+  if (!date)       { errEl.textContent = 'Purchase date is required.'; return; }
+  if (!amount || amount <= 0) { errEl.textContent = 'Enter a valid amount.'; return; }
+
+  errEl.textContent = '';
+  let file_url = null;
+  const photoInput = document.getElementById('ar-photo');
+  if (photoInput.files && photoInput.files[0]) {
+    const statusEl = document.getElementById('ar-upload-status');
+    statusEl.textContent = 'Uploading…';
+    try {
+      const fd = new FormData();
+      fd.append('file', photoInput.files[0]);
+      const res = await fetch('/api/receipts/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + STATE.token },
+        body: fd
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || 'Upload failed');
+      file_url = j.file_url;
+      statusEl.textContent = '✓ Uploaded';
+    } catch(e) {
+      errEl.textContent = 'Photo upload failed: ' + e.message;
+      return;
+    }
+  }
+
+  try {
+    await POST('/receipts', {
+      volunteer_id:  vid,
+      cycle_id:      cid || null,
+      store, amount,
+      purchase_date: date,
+      file_url,
+      notes: notes || null
+    });
+    closeDrawer();
+    renderReceipts(STATE.filter);
+  } catch(e) {
+    errEl.textContent = e.message;
   }
 }
 
@@ -3023,6 +3141,75 @@ async function rejectReceipt(id) {
     const row = document.getElementById('rrow-' + id);
     if (row) { const badge = row.querySelector('.badge'); if (badge) badge.outerHTML = '<span class="badge badge-rejected">rejected</span>'; }
   } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
+}
+
+// ── Finance Summary ───────────────────────────────────────────────────────────
+async function renderFinanceSummary() {
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const data = await GET('/finance/summary');
+    const t = data.totals;
+    const cycles = data.cycles;
+
+    const hasCycleData = cycles.some(c => c.receipt_count > 0);
+
+    document.getElementById('content').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:20px">
+
+        <!-- Overall stats -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+          <div class="stat-card" style="border-left:4px solid #1a8754">
+            <div class="stat-label">Total Raised</div>
+            <div class="stat-value" style="color:#1a8754">${fmtMoney(t.donations)}</div>
+          </div>
+          <div class="stat-card" style="border-left:4px solid #c0392b">
+            <div class="stat-label">Total Spent</div>
+            <div class="stat-value" style="color:#c0392b">${fmtMoney(t.reimbursed)}</div>
+          </div>
+          <div class="stat-card" style="border-left:4px solid #2980b9">
+            <div class="stat-label">Balance</div>
+            <div class="stat-value" style="color:#2980b9">${fmtMoney(t.balance)}</div>
+          </div>
+          <div class="stat-card" style="border-left:4px solid #e67e22">
+            <div class="stat-label">Pending Reimbursement</div>
+            <div class="stat-value" style="color:#e67e22">${fmtMoney(t.pending)}</div>
+          </div>
+          <div class="stat-card" style="border-left:4px solid var(--gray-3)">
+            <div class="stat-label">Receipts Submitted</div>
+            <div class="stat-value">${fmtMoney(t.receipts_submitted)}</div>
+          </div>
+        </div>
+
+        <!-- Per-cycle breakdown -->
+        <div class="table-card">
+          <div class="table-header">
+            <span class="table-title">Per-Cycle Breakdown</span>
+          </div>
+          <table>
+            <thead><tr>
+              <th>Cycle</th><th>Date</th><th>Receipts</th>
+              <th>Submitted</th><th>Reimbursed</th><th>Pending</th>
+            </tr></thead>
+            <tbody>
+              ${hasCycleData ? cycles.filter(c => c.receipt_count > 0 || true).map(c => `
+                <tr style="${c.receipt_count===0?'opacity:0.45':''}">
+                  <td><strong>${c.title}</strong></td>
+                  <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)}</td>
+                  <td style="text-align:center">${c.receipt_count||0}</td>
+                  <td><strong>${fmtMoney(c.receipts_total)}</strong></td>
+                  <td style="color:#1a8754">${fmtMoney(c.reimbursed_total)}</td>
+                  <td style="color:${c.pending_total>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(c.pending_total)}</td>
+                </tr>`).join('')
+              : '<tr class="empty-row"><td colspan="6">No receipts recorded yet</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+  }
 }
 
 // ── Payments (unified receipts + reimbursements) ───────────────────────────────

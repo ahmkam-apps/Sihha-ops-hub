@@ -1378,6 +1378,13 @@ def bootstrap_db():
             conn.execute('PRAGMA foreign_keys=ON')
             log.info(f'Migration: food_request_events already migrated — skipping ({_e})')
 
+    # ── Migration: add cycle_id to receipts (admin historical entry) ────────────
+    try:
+        conn.execute('ALTER TABLE receipts ADD COLUMN cycle_id TEXT')
+        log.info('Migration: added cycle_id to receipts')
+    except Exception:
+        pass
+
     # Ensure users CHECK constraint includes ALL roles (treasurer + family)
     # Runs on every boot — idempotent, bails immediately if already correct
     _ensure_treasurer_role(conn)
@@ -2942,10 +2949,14 @@ def update_assignment(aid):
 def list_receipts():
     db = get_db()
     status = request.args.get('status')
-    q = '''SELECT r.*, f.name as family_name, v.name as volunteer_name
+    q = '''SELECT r.*, f.name as family_name, v.name as volunteer_name,
+              dc.title as cycle_title,
+              COALESCE(r.cycle_id, vs.cycle_id) as resolved_cycle_id
            FROM receipts r
            LEFT JOIN families f ON r.family_id = f.id
            LEFT JOIN volunteers v ON r.volunteer_id = v.id
+           LEFT JOIN volunteer_slots vs ON r.slot_id = vs.id
+           LEFT JOIN delivery_cycles dc ON COALESCE(r.cycle_id, vs.cycle_id) = dc.id
            WHERE 1=1'''
     params = []
     if status:
@@ -2961,11 +2972,11 @@ def create_receipt():
     db = get_db()
     db.execute(
         '''INSERT INTO receipts
-           (id,assignment_id,volunteer_id,family_id,store,purchase_date,amount,file_url,slot_id,status,notes,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+           (id,assignment_id,volunteer_id,family_id,store,purchase_date,amount,file_url,slot_id,cycle_id,status,notes,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (rid, data.get('assignment_id'), data.get('volunteer_id'), data.get('family_id'),
          data.get('store'), data.get('purchase_date'), data.get('amount'),
-         data.get('file_url'), data.get('slot_id'), 'pending', data.get('notes'), now())
+         data.get('file_url'), data.get('slot_id'), data.get('cycle_id'), 'pending', data.get('notes'), now())
     )
     db.commit()
     # Notify treasurers of new receipt submission
@@ -3022,6 +3033,56 @@ def upload_receipt():
     filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1]
     f.save(os.path.join(UPLOAD_FOLDER, filename))
     return jsonify({'file_url': f'/uploads/{filename}'}), 201
+
+# ── Finance Summary ───────────────────────────────────────────────────────────
+
+@app.route('/api/finance/summary', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def finance_summary():
+    db = get_db()
+
+    total_donations = db.execute(
+        "SELECT COALESCE(SUM(amount),0) as t FROM donations"
+    ).fetchone()['t']
+    total_receipts_submitted = db.execute(
+        "SELECT COALESCE(SUM(amount),0) as t FROM receipts WHERE status!='rejected'"
+    ).fetchone()['t']
+    total_reimbursed = db.execute(
+        "SELECT COALESCE(SUM(amount),0) as t FROM reimbursements WHERE status='paid'"
+    ).fetchone()['t']
+    total_pending = db.execute(
+        "SELECT COALESCE(SUM(amount),0) as t FROM reimbursements WHERE status='pending'"
+    ).fetchone()['t']
+
+    cycles = db.execute('''
+        SELECT
+            dc.id, dc.title, dc.delivery_date_start, dc.status as cycle_status,
+            COUNT(DISTINCT r.id) as receipt_count,
+            COALESCE(SUM(CASE WHEN r.id IS NOT NULL THEN r.amount ELSE 0 END),0) as receipts_total,
+            COALESCE(SUM(CASE WHEN reimb.status='paid'    THEN reimb.amount ELSE 0 END),0) as reimbursed_total,
+            COALESCE(SUM(CASE WHEN reimb.status='pending' THEN reimb.amount ELSE 0 END),0) as pending_total
+        FROM delivery_cycles dc
+        LEFT JOIN receipts r ON (
+            (r.cycle_id = dc.id AND r.status != 'rejected')
+            OR (r.cycle_id IS NULL AND r.slot_id IS NOT NULL AND r.status != 'rejected'
+                AND EXISTS(SELECT 1 FROM volunteer_slots vs
+                           WHERE vs.id = r.slot_id AND vs.cycle_id = dc.id))
+        )
+        LEFT JOIN reimbursements reimb ON reimb.receipt_id = r.id
+        GROUP BY dc.id
+        ORDER BY dc.delivery_date_start
+    ''').fetchall()
+
+    return jsonify({
+        'totals': {
+            'donations':            round(total_donations, 2),
+            'receipts_submitted':   round(total_receipts_submitted, 2),
+            'reimbursed':           round(total_reimbursed, 2),
+            'pending':              round(total_pending, 2),
+            'balance':              round(total_donations - total_reimbursed, 2)
+        },
+        'cycles': [dict(c) for c in cycles]
+    })
 
 # ── Reimbursements ────────────────────────────────────────────────────────────
 
