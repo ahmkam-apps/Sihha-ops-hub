@@ -1,6 +1,6 @@
 # SIHAA Food Charity — Operations Hub Memory
 
-_Last updated: 2026-05-02 (latest commit: a120244 — rename /my-order → /family, volunteer activity report, coverage view)_
+_Last updated: 2026-06-09 — Active Backlog replaced with full code-audit remediation plan. ⚠️ Other sections date from 2026-05-02 and are partially stale (Twilio/OTP removed → SendGrid email only; slot lifecycle now auto-confirm with no 'claimed' state; portal login is username/password). CLAUDE.md is the authoritative current reference._
 
 ---
 
@@ -368,51 +368,70 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 ## Active Backlog
 
-### 🟡 Important
+### 🚨 Phase 0 — Operational robustness (jumps the queue — bigger risk than any code bug)
 
-| Item | Notes |
-|------|-------|
-| Phase 4D: Financial reconciliation | Stripe + bank CSV import, donation matching — needs Stripe MCP plugin |
+| # | Item | Notes | Status |
+|---|------|-------|--------|
+| 0.1 | **Daily DB backup job** | ✅ DONE 2026-06-09 — `_daily_backup_job()` in server.py: SQLite online-backup API → `data/backups/sihaa-YYYYMMDD.db`, keeps 14, runs 07:30 UTC + once on deploy, idempotent across workers. Uploads folder NOT yet included (covered by 0.2) | ✅ |
+| 0.2 | **Off-site backup copy** | Local rotation doesn't survive volume loss. Push daily backup off-Railway (email attachment to admin, GitHub private repo, or S3/B2). Needs a decision on destination | 🔲 |
+| 0.3 | **Staging environment** | Every push to master deploys straight to PROD. Add a second Railway service (dev branch) like Spicetopia's DEV, or at minimum adopt a pre-deploy checklist (run tests locally → verify tree → push) | 🔲 |
+| 0.4 | **Heartbeat / monitoring** | Nobody watches logs. Daily SendGrid digest to admin: "scheduler ran, N opt-ins sent, M skips, backup OK (size)". Catches silent scheduler/email failures before families notice | 🔲 |
 
-### 🔐 Auth — SMS OTP (LIVE ✅)
+### 🔴 Phase 1 — Critical fixes from code audit (2026-06-09) — ~2h total
 
-SMS OTP login is live on both portals. Phone number → 6-digit PIN via Twilio → 48hr session.
+| # | Item | Where | Status |
+|---|------|-------|--------|
+| 1.1 | Startup guard: refuse to boot in prod if `ADMIN_PASSWORD` env var unset | ✅ DONE 2026-06-09 — raises RuntimeError when RAILWAY_* env detected and var missing; local dev still falls back | ✅ |
+| 1.2 | Atomic slot claim | ✅ DONE 2026-06-09 — `AND status='open'` + rowcount check in portal_signup, 409 with holder name on race; preserves all-or-nothing semantics (no commit before return) | ✅ |
+| 1.3 | Upload size limit | ✅ DONE 2026-06-09 — `MAX_CONTENT_LENGTH` = 16 MB | ✅ |
+| 1.4 | Duplicate test class | ✅ DONE 2026-06-09 — second class renamed `TestFoodItemPricing`; all 5 shadowed tests recovered and passing (suite: 114 passed, 2 skipped) | ✅ |
+| 1.5 | Python version pin | ✅ DONE 2026-06-09 — `.python-version` (3.11) un-gitignored (nixpacks reads it natively); CI bumped 3.10→3.11; nixpacks.toml stays ignored (previously broke Railway builds) | ✅ |
 
-**Current status:**
-- `OTP_DEV_MODE=true` set in Railway — server always returns PIN in JSON response so it auto-fills on screen (bypasses Twilio delivery)
-- Twilio accepts SMS but US carriers silently block it — **10DLC registration required** for real SMS delivery
-- Once 10DLC is approved: remove `OTP_DEV_MODE=true` from Railway variables
+### 🟠 Phase 2 — High priority — ~1 day
 
-**Railway env vars (all set):**
-- TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, OTP_DEV_MODE
+| # | Item | Where | Status |
+|---|------|-------|--------|
+| 2.1 | Stored XSS: add `escapeHtml()` helper and apply to every `${userValue}` in innerHTML (105 sinks in index.html, 0 escape helpers; portal.html same). Public intake/volunteer forms feed these | public/index.html, portal.html | 🔲 |
+| 2.2 | Rate limiting + lockout on `/api/auth/login` (currently unlimited guessing) | server.py:1709 | 🔲 |
+| 2.3 | Restrict CORS to known origins (currently `CORS(app)` wide open) | server.py:16 | 🔲 |
+| 2.4 | `_recreate_users_table` copies only original columns — if it fires, resets `linked_id`, `must_change_password` (force-resets everyone), `last_login_at`. Copy column intersection instead | server.py:1567 | 🔲 |
+| 2.5 | Shared `make_conn()` factory: scheduler jobs use raw `sqlite3.connect` without `foreign_keys=ON`/`busy_timeout` (4 sites: 7049, 7355, 7412, 7487) | server.py | 🔲 |
+| 2.6 | Reminder jobs: insert reminder_log guard row BEFORE sending email (TOCTOU — 2 workers can double-send) | server.py:7393, 7518 | 🔲 |
 
-| Item | Notes |
-|------|-------|
-| SMS OTP login — families + volunteers | ✅ LIVE — dev mode auto-fill active |
-| 10DLC A2P registration | 🔲 Pending — complete in Twilio console, then remove OTP_DEV_MODE |
-| Rename /my-order → /family | ✅ DONE — /my-order kept as 301 redirect |
+### 🟡 Phase 3 — Medium — week 2–3
 
-### 📲 SMS Notifications (backlog — grouped)
+| # | Item | Notes | Status |
+|---|------|-------|--------|
+| 3.1 | Tests for finance domain | Receipts, reimbursement auto-creation, donations, Wix sync, finance summary — currently ZERO tests on money paths (~31% route coverage overall) | 🔲 |
+| 3.2 | Add ~6 missing indexes | `families(phone)`, `volunteer_slots(family_id)`, `receipts(slot_id/volunteer_id/cycle_id)`, `sessions(expires_at)` | 🔲 |
+| 3.3 | Batch N+1 queries | `get_orders` (per-row items query), `list_families` (4 subqueries/row), eligibility check | 🔲 |
+| 3.4 | Delete dead code | `/api/assignments` + `/api/cycle-assignments` routes (0 frontend callers), `assignments`/`cycle_assignments`/`stripe_transactions`/`wix_donations` tables, volunteer.html + order.html files | 🔲 |
+| 3.5 | gunicorn `--preload` | bootstrap_db currently runs in both workers — migration race on table recreations | 🔲 |
+| 3.6 | Session hygiene | Purge expired sessions (grows unbounded); slide expiry only when >1h elapsed (currently a write+commit on every request) | 🔲 |
+| 3.7 | Transaction discipline | 0 rollbacks, 81 scattered commits; wrap multi-step mutations (cancel flow) in single transaction | 🔲 |
 
-WA is fully stripped from the system. All notifications will go via Twilio SMS once 10DLC is approved.
+### ⚪ Phase 4 — Ongoing / structural
 
-| Trigger | Who gets it | Message |
-|---------|------------|---------|
-| Family submits intake form | Family | "We received your application, we'll be in touch within 48 hrs" |
-| Admin activates family | Family | "You're registered with SIHAA. Visit [link] to manage your deliveries" |
-| Admin activates volunteer | Volunteer | "You're approved! Visit /portal to log in and sign up for deliveries" |
-| Volunteer signs up (registration form) | Volunteer | "Thanks for signing up, we'll review and be in touch soon" |
-| T-5 cutoff — family skipped | Family | "Sorry, the ordering window for [cycle] has closed. We'll reach out next cycle" |
-| Volunteer marks delivery complete | Family | "Your delivery from SIHAA is on its way — JazakAllah Khair" |
+| Item | Notes | Status |
+|------|-------|--------|
+| Split bootstrap_db (1,300 lines) into schema / versioned migrations / seeds + `schema_version` table | | 🔲 |
+| Extract shared `public/js/api.js` + `base.css` (api() wrapper duplicated verbatim; font/CSS block in 11/15 files; family.html ↔ my-order.html share 888 identical lines) | No build step needed | 🔲 |
+| Status string constants (`'confirmed'` ×62 inline; inconsistent `status IN (...)` lists are latent bugs) | | 🔲 |
+| Log every silent `except: pass` (25 sites); standardize error envelope on `{'error': ...}`; stop echoing exception text (cancel route) | | 🔲 |
+| Remove/strip `/api/admin/db-debug` traceback leak; `secrets.token_urlsafe` for session tokens; reject temp_tokens in require_auth | | 🔲 |
+| Consolidate start command (currently in Procfile + railway.json + nixpacks.toml); delete repo cruft (`master`, root `sihaa.db`, pytest cache dirs) | | 🔲 |
+| Update stale docs: CLAUDE.md (writable_schema hack removed; portal login is 410; volunteer.html/order.html are dead redirects) | | 🔲 |
 
-### Back Burner
+### 🟡 Pre-existing backlog (carried forward)
 
-| Item | Notes |
-|------|-------|
-| ops.sihaa.org DNS → Railway | Custom subdomain |
-| Wix buttons | "Get Help" → /intake, "Volunteer" → /volunteer |
-| Donate-stats widget on Wix | iframe embed |
-| Revoke old GitHub token | (stored separately — do not commit token strings) |
+| Item | Notes | Status |
+|------|-------|--------|
+| Phase 4D: Financial reconciliation | Stripe + bank CSV import, donation matching | 🔲 |
+| Revoke old GitHub token | Stored separately — do not commit token strings | 🔲 |
+| ops.sihaa.org DNS → Railway | Custom subdomain | 🔲 |
+| Wix buttons | "Get Help" → /intake, "Volunteer" → /volunteer | 🔲 |
+| Donate-stats widget on Wix | iframe embed | 🔲 |
+| Notification triggers (now via SendGrid email — Twilio/SMS fully removed) | Intake received, family activated, volunteer approved, T-5 skipped, delivery on its way | 🔲 |
 
 ---
 

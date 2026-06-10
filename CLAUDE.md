@@ -2,6 +2,8 @@
 
 **Read this file at the start of every dev session before touching server.py or any DB/route code.**
 
+> **Code audit 2026-06-09:** full security/architecture audit completed. Prioritized remediation backlog (Phase 0 operational → Phase 4 structural) lives in `MEMORY.md → Active Backlog`. Check it before starting work — Phase 0 (DB backups, staging, monitoring) outranks feature work.
+
 ---
 
 ## 1. App Overview
@@ -171,6 +173,7 @@ No migrations. Legacy table — mostly superseded by `volunteer_slots` in Phase 
 | `created_at` | TEXT NOT NULL | CREATE TABLE (original) |
 | `updated_at` | TEXT | CREATE TABLE (original) |
 | `slot_id` | TEXT | **ALTER TABLE migration** (Phase 4A) — links receipt to a volunteer_slot |
+| `cycle_id` | TEXT | **ALTER TABLE migration** (2026-06-09) — direct cycle association for admin-entered historical receipts; nullable; takes precedence over slot→cycle derivation in `list_receipts` |
 
 ---
 
@@ -542,6 +545,7 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | 23 | 2026-05 family email | ALTER TABLE | `families` | `email TEXT` (for sending login credentials) |
 | 24 | 2026-05 users role CHECK | TABLE RECREATION | `users` | Regex-patches CHECK to include all roles: admin, volunteer, finance, treasurer, viewer, family |
 | 25 | Sprint 2 (2026-05-15) paused status removal | TABLE RECREATION | `families` | Removes 'paused' from status CHECK — detected via sqlite_master inspection; existing paused rows migrated to 'inactive' |
+| 26 | 2026-06-09 cycle_id on receipts | ALTER TABLE | `receipts` | `cycle_id TEXT` — direct cycle association for admin-entered historical receipts (nullable) |
 
 **Columns used in route queries that had NO explicit migration (were in CREATE TABLE from the start):**
 - All original columns. These are safe.
@@ -609,10 +613,11 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 ### Receipts
 | Method | Path | Auth | Description | Tables |
 |---|---|---|---|---|
-| GET | `/api/receipts` | any auth | List receipts (with family/volunteer names) | receipts, families, volunteers |
-| POST | `/api/receipts` | admin/volunteer | Create receipt + notify treasurers | receipts, volunteers, users |
+| GET | `/api/receipts` | any auth | List receipts (with family/volunteer names, cycle_title via JOIN) | receipts, families, volunteers, volunteer_slots, delivery_cycles |
+| POST | `/api/receipts` | admin/volunteer | Create receipt (accepts cycle_id) + notify treasurers | receipts, volunteers, users |
 | PUT | `/api/receipts/<rid>` | admin/finance/treasurer | Update receipt status; auto-creates reimbursement on approval | receipts, reimbursements |
 | POST | `/api/receipts/upload` | admin/volunteer | Upload receipt file (multipart) → returns file_url | filesystem |
+| GET | `/api/finance/summary` | admin/finance/treasurer | Overall totals (donations/reimbursed/balance/pending/submitted) + per-cycle breakdown | delivery_cycles, receipts, reimbursements, donations |
 
 ### Reimbursements
 | Method | Path | Auth | Description | Tables |
@@ -701,10 +706,10 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | POST | `/api/families/<fid>/request-bundle-change` | None | Request bundle size change | families, users (WA) |
 | POST | `/api/families/<fid>/manual-confirm` | admin | Manually confirm a family for the active cycle; creates confirmed food_request + items + open volunteer slots | food_requests, food_request_items, families, delivery_cycles, volunteer_slots |
 
-### Volunteer Portal (phone-authenticated)
+### Volunteer Portal (username/password via unified `/login` page)
 | Method | Path | Auth | Description | Tables |
 |---|---|---|---|---|
-| POST | `/api/portal/login` | None | Login by phone number → returns portal token (48hr) | volunteers, portal_sessions |
+| POST | `/api/portal/login` | None | **410 GONE** — legacy phone-only login removed; use main login. (`/api/otp/request` + `/api/otp/verify` also 410) | — |
 | GET | `/api/portal/cycles` | portal token | Upcoming/shopping cycles in next 6 months | delivery_cycles |
 | GET | `/api/portal/slots/<cycle_id>` | portal token | Slots for a cycle (volunteer sees all; addresses only for own claimed delivery slots) | volunteer_slots, families, volunteers, delivery_cycles |
 | POST | `/api/portal/claim` | portal token | **REMOVED** — superseded by `/api/portal/signup` | — |
@@ -733,10 +738,10 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 |---|---|
 | `GET /` | `public/index.html` (admin SPA) |
 | `GET /intake` | `public/intake.html` |
-| `GET /order` | `public/order.html` |
+| `GET /order` | 301 redirect → `/intake` (order.html is dead, file still in repo) |
 | `GET /confirm/<token>` | `public/confirm.html` |
 | `GET /portal` | `public/portal.html` |
-| `GET /volunteer` | `public/volunteer.html` |
+| `GET /volunteer` | 301 redirect → `/portal` (volunteer.html is dead, file still in repo) |
 | `GET /volunteer-signup` | `public/volunteer-signup.html` |
 | `GET /donate-stats` | `public/donate-stats.html` |
 | `GET /my-order` | `public/my-order.html` |
@@ -766,12 +771,9 @@ All HTML files live in `/public/`. They are single-page apps with inline JS maki
 - Submits to `POST /api/intake`
 - PWA-enabled (manifest-family.json, ios/android meta tags)
 
-### `order.html` — Family Food Order Form
-- Served at `/order`
-- Public (no auth), phone-based lookup
-- Calls `GET /api/food-order/check?phone=...` to verify registration and get open cycle
-- Lets family select/deselect items from the catalog
-- Submits to `POST /api/food-order`
+### `order.html` — RETIRED (dead file)
+- `/order` is a 301 redirect to `/intake`; the file is never served
+- Safe to delete from repo (backlog Phase 3.4)
 
 ### `confirm.html` — Bundle Confirmation (WhatsApp link)
 - Served at `/confirm/<token>`
@@ -790,10 +792,9 @@ All HTML files live in `/public/`. They are single-page apps with inline JS maki
 - Auto-confirm on claim — no intermediate pending state
 - Delivery volunteers see family address only for their own confirmed delivery slots (enforced server-side)
 
-### `volunteer.html` — Legacy Volunteer Portal (redirects or standalone)
-- Served at `/volunteer`
-- Older volunteer-facing page — may overlap with portal.html
-- PWA-enabled
+### `volunteer.html` — RETIRED (dead file)
+- `/volunteer` is a 301 redirect to `/portal`; the file is never served
+- Safe to delete from repo (backlog Phase 3.4)
 
 ### `volunteer-signup.html` — Volunteer Sign-Up Form
 - Served at `/volunteer-signup`
@@ -861,13 +862,14 @@ Every push to `origin/master` (which triggers Railway deploy) must include:
 - `railway.json`
 - `public/index.html`
 - `public/intake.html`
-- `public/order.html`
 - `public/confirm.html`
 - `public/portal.html`
-- `public/volunteer.html`
+- `public/family.html`
 - `public/volunteer-signup.html`
 - `public/donate-stats.html`
 - `public/my-order.html`
+
+(`order.html` and `volunteer.html` are retired dead files — their routes are 301 redirects; they need not be in the tree once deleted from the repo.)
 
 ---
 
@@ -879,10 +881,9 @@ Every push to `origin/master` (which triggers Railway deploy) must include:
 - This is done in-process at startup, with try/except to handle concurrent gunicorn workers
 - **Risk:** If two gunicorn workers run `bootstrap_db()` simultaneously (both detect the migration is needed and race), the second worker's table-recreation may fail with "table already exists" — this is caught and logged, not re-raised
 
-### `_ensure_treasurer_role()` — writable_schema hack
-- Uses `PRAGMA writable_schema = ON` to patch sqlite_master directly
-- This is fragile; if the CHECK constraint text doesn't exactly match the expected string, it falls back to `_recreate_users_table()`
-- Keep as-is unless you have a controlled migration window
+### `_ensure_treasurer_role()` — safe table recreation (writable_schema hack REMOVED)
+- Now uses safe table recreation only (see docstring at server.py ~1526: "no PRAGMA writable_schema")
+- ⚠️ Audit 2026-06-09: `_recreate_users_table` copies only the original column set — if it fires it resets `linked_id`, `linked_type`, `must_change_password` (→1, force-resets everyone), `password_changed_at`, `last_login_at`. Fix queued in MEMORY.md backlog Phase 2.4
 
 ### Volunteer Portal Auth vs Admin Auth
 - Admin auth: UUID session tokens stored in `sessions` table, `Authorization: Bearer <token>` header

@@ -1421,7 +1421,7 @@ class TestFamilySessionAuth:
 # SECTION 12 — FOOD CATALOG (price + allow_qty)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestFoodCatalog:
+class TestFoodItemPricing:  # renamed from TestFoodCatalog — duplicate name shadowed the Section 4 class, silently disabling 5 tests
     """Tests that price and allow_qty fields round-trip correctly through create + update."""
 
     @pytest.fixture(autouse=True)

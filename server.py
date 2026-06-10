@@ -14,6 +14,9 @@ from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__, static_folder='public')
 CORS(app)
+# Cap request body size (receipt photos incl. HEIC) — prevents disk-fill DoS on the
+# Railway volume that also holds the DB. Flask returns 413 automatically when exceeded.
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
 
 DB_PATH         = os.environ.get('DB_PATH', 'data/sihaa.db')
 UPLOAD_FOLDER   = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
@@ -435,8 +438,16 @@ def bootstrap_db():
 
     # Seed default admin — INSERT OR IGNORE is atomic, safe under concurrent gunicorn workers.
     # Password is read from ADMIN_PASSWORD env var (set in Railway dashboard).
-    # Falls back to 'admin123' only if env var is not set (dev/local only).
-    admin_pw = os.environ.get('ADMIN_PASSWORD', 'admin123')
+    # In production (Railway) a missing ADMIN_PASSWORD is a fatal misconfiguration —
+    # refuse to start rather than silently seeding the well-known 'admin123'.
+    admin_pw = os.environ.get('ADMIN_PASSWORD')
+    if not admin_pw:
+        if os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID'):
+            raise RuntimeError(
+                'ADMIN_PASSWORD env var is not set — refusing to start in production. '
+                'Set it in the Railway dashboard (Variables) and redeploy.'
+            )
+        admin_pw = 'admin123'  # dev/local/test fallback only
     conn.execute(
         "INSERT OR IGNORE INTO users (id, username, password_hash, name, role, created_at) VALUES (?,?,?,?,?,?)",
         (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
@@ -6985,10 +6996,22 @@ def portal_signup():
         ).fetchone()
 
         if open_slot:
-            db.execute(
-                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='confirmed', updated_at=? WHERE id=?",
+            # Atomic claim: AND status='open' guard + rowcount check closes the race
+            # where two volunteers pass the "taken?" check simultaneously — without
+            # this, both got 201 + confirmation emails and the last write silently won.
+            cur = db.execute(
+                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='confirmed', updated_at=? WHERE id=? AND status='open'",
                 (vol_id, ts, ts, open_slot['id'])
             )
+            if cur.rowcount == 0:
+                # Returning without commit rolls back any earlier task_type claims
+                # in this request — preserves the original all-or-nothing behavior.
+                holder = db.execute(
+                    "SELECT v.name FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id WHERE vs.id=?",
+                    (open_slot['id'],)
+                ).fetchone()
+                who = holder['name'] if holder else 'another volunteer'
+                return jsonify({'error': f'{task_type.capitalize()} was just claimed by {who}'}), 409
         else:
             # Safety fallback: no pre-created slot (old cycle or edge case) — insert one
             db.execute(
@@ -7555,6 +7578,48 @@ def _release_unconfirmed_slots_job():
         conn.close()
 
 
+# ── Daily DB backup (Phase 0.1 — audit 2026-06-09) ───────────────────────────
+# The entire dataset is one SQLite file on one Railway volume. This job writes a
+# date-stamped snapshot to data/backups/ via the SQLite online-backup API (safe
+# under WAL while the app is serving traffic) and rotates old copies.
+# Idempotent across the 2 gunicorn workers: skips if today's backup exists.
+# NOTE: still on the same volume — off-site copy is backlog item 0.2.
+
+BACKUP_DIR  = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH) or '.', 'backups'))
+BACKUP_KEEP = int(os.environ.get('BACKUP_KEEP', 14))
+
+def _daily_backup_job():
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        stamp = datetime.utcnow().strftime('%Y%m%d')
+        dest = os.path.join(BACKUP_DIR, f'sihaa-{stamp}.db')
+        if os.path.exists(dest):
+            return
+        tmp = f'{dest}.tmp{os.getpid()}'
+        src = sqlite3.connect(DB_PATH)
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        os.replace(tmp, dest)  # atomic; worker race just overwrites identical snapshot
+        # Rotate: keep newest BACKUP_KEEP daily snapshots
+        snaps = sorted(f for f in os.listdir(BACKUP_DIR)
+                       if f.startswith('sihaa-') and f.endswith('.db'))
+        for old in snaps[:-BACKUP_KEEP]:
+            try:
+                os.remove(os.path.join(BACKUP_DIR, old))
+            except OSError:
+                pass
+        log.info(f'Daily DB backup OK: {dest} ({os.path.getsize(dest)//1024} KB), '
+                 f'{min(len(snaps), BACKUP_KEEP)} snapshots retained')
+    except Exception as e:
+        log.error(f'Daily DB backup FAILED: {e}')
+
+
 # ── Bootstrap on startup (runs under both gunicorn and direct execution) ──────
 
 bootstrap_db()
@@ -7572,8 +7637,12 @@ try:
                        id='family_cutoff_skip', replace_existing=True)
     _scheduler.add_job(_release_unconfirmed_slots_job, 'cron', hour=10, minute=0,
                        id='auto_release_unconfirmed_slots', replace_existing=True)
+    _scheduler.add_job(_daily_backup_job, 'cron', hour=7, minute=30,
+                       id='daily_db_backup', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00 UTC')
+    log.info('APScheduler started — DB backup 07:30, email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00 UTC')
+    # Take a backup immediately on deploy too (idempotent — skips if today's exists)
+    _daily_backup_job()
 except ImportError:
     log.warning('APScheduler not installed. Run: pip install apscheduler')
 except Exception as _e:

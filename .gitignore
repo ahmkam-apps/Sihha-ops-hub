@@ -10,5 +10,7 @@ __pycache__/
 venv/
 .venv/
 
+# nixpacks.toml stays ignored — committing it previously caused "No module named pip"
+# build failures on Railway. Python version is pinned via .python-version instead
+# (nixpacks reads it natively).
 nixpacks.toml
-.python-version
