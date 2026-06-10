@@ -13,7 +13,15 @@ from werkzeug.exceptions import HTTPException
 # ── Config ────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__, static_folder='public')
-CORS(app)
+# CORS restricted to known origins (audit 2.3) — override with CORS_ORIGINS env var
+# (comma-separated) if domains change. Same-origin SPA/iframe traffic is unaffected
+# by CORS; this only blocks third-party sites from scripting the API.
+_CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    'CORS_ORIGINS',
+    'https://sihha-ops-hub-production.up.railway.app,https://ops.sihha.org,'
+    'https://sihha.org,https://www.sihha.org'
+).split(',') if o.strip()]
+CORS(app, origins=_CORS_ORIGINS)
 # Cap request body size (receipt photos incl. HEIC) — prevents disk-fill DoS on the
 # Railway volume that also holds the DB. Flask returns 413 automatically when exceeded.
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
@@ -39,13 +47,20 @@ log = logging.getLogger(__name__)
 
 # ── DB Helpers ────────────────────────────────────────────────────────────────
 
+def make_conn():
+    """Connection factory for non-request contexts (scheduler jobs, scripts).
+    Applies the same pragmas as get_db() — without this, background jobs ran
+    with foreign_keys OFF and no busy_timeout (audit 2.5)."""
+    conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA busy_timeout=5000')
+    return conn
+
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute('PRAGMA journal_mode=WAL')
-        g.db.execute('PRAGMA foreign_keys=ON')
-        g.db.execute('PRAGMA busy_timeout=5000')  # wait up to 5s on lock before erroring
+        g.db = make_conn()
     return g.db
 
 @app.teardown_appcontext
@@ -115,6 +130,7 @@ def bootstrap_db():
     conn = sqlite3.connect(abs_db)
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA busy_timeout=5000')  # 2 workers bootstrap concurrently
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
@@ -1575,10 +1591,16 @@ def _recreate_users_table(conn):
                 last_login_at        TEXT,
                 created_at           TEXT NOT NULL
             );
-            INSERT OR IGNORE INTO users_new
-                (id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at)
-            SELECT id, username, password_hash, name, role, email, wa_phone, wa_apikey, active, created_at
-            FROM users;
+        ''')
+        # Copy the INTERSECTION of columns present in both tables (audit 2.4).
+        # The previous hardcoded column list silently RESET late-added columns
+        # (linked_id, linked_type, must_change_password→1 forcing a password
+        # reset for every user, password_changed_at, last_login_at).
+        old_cols = {r[1] for r in conn.execute('PRAGMA table_info(users)').fetchall()}
+        new_cols = [r[1] for r in conn.execute('PRAGMA table_info(users_new)').fetchall()]
+        cols = ', '.join(c for c in new_cols if c in old_cols)  # identifiers from PRAGMA, not user input
+        conn.execute(f'INSERT OR IGNORE INTO users_new ({cols}) SELECT {cols} FROM users')
+        conn.executescript('''
             DROP TABLE IF EXISTS users;
             ALTER TABLE users_new RENAME TO users;
         ''')
@@ -1717,6 +1739,31 @@ def health():
 
 # ── Auth Routes ───────────────────────────────────────────────────────────────
 
+# Failed-login throttle (audit 2.2). In-memory per worker — with 2 workers the
+# effective cap is ~2x the threshold, still a hard stop for online guessing.
+_LOGIN_FAILS = {}            # (ip, username) -> [utc datetimes of recent failures]
+LOGIN_MAX_FAILS  = 5
+LOGIN_WINDOW_MIN = 15
+
+def _client_ip():
+    # Railway sits behind a proxy — first hop of X-Forwarded-For is the client
+    fwd = request.headers.get('X-Forwarded-For', '')
+    return (fwd.split(',')[0].strip() if fwd else request.remote_addr) or '?'
+
+def _login_blocked(key):
+    cutoff = datetime.utcnow() - timedelta(minutes=LOGIN_WINDOW_MIN)
+    recent = [t for t in _LOGIN_FAILS.get(key, []) if t > cutoff]
+    if recent:
+        _LOGIN_FAILS[key] = recent
+    else:
+        _LOGIN_FAILS.pop(key, None)
+    return len(recent) >= LOGIN_MAX_FAILS
+
+def _login_failed(key):
+    if len(_LOGIN_FAILS) > 10000:   # bound memory under abuse
+        _LOGIN_FAILS.clear()
+    _LOGIN_FAILS.setdefault(key, []).append(datetime.utcnow())
+
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.json or {}
@@ -1725,12 +1772,19 @@ def login():
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
 
+    throttle_key = (_client_ip(), username.lower())
+    if _login_blocked(throttle_key):
+        log.warning(f'Login throttled: {username} from {throttle_key[0]}')
+        return jsonify({'error': 'Too many failed attempts. Try again in 15 minutes.'}), 429
+
     db = get_db()
     user = db.execute(
         "SELECT * FROM users WHERE username=? AND active=1", (username,)
     ).fetchone()
     if not user or not check_password_hash(user['password_hash'], password):
+        _login_failed(throttle_key)
         return jsonify({'error': 'Invalid credentials'}), 401
+    _LOGIN_FAILS.pop(throttle_key, None)  # success — reset the counter
 
     # Update last login timestamp
     db.execute("UPDATE users SET last_login_at=? WHERE id=?", (now(), user['id']))
@@ -7069,8 +7123,7 @@ def _send_reminders_job():
     Uses a direct DB connection (no Flask request context needed).
     DB-idempotent: reminder_log UNIQUE(slot_id, sent_to) prevents double-sends
     even when both gunicorn workers run the job simultaneously."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = make_conn()  # FK enforcement + busy_timeout (audit 2.5)
     try:
         target_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
         slots = conn.execute(
@@ -7375,8 +7428,7 @@ def _send_family_confirmation_reminders():
     """7 days before delivery: email all active families with a link to /family portal.
     Does NOT create food_request rows — families place orders via the portal (single creation path).
     Idempotent via reminder_log (slot_id='opt_in_{cycle_id}', sent_to=family_id)."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = make_conn()  # FK enforcement + busy_timeout (audit 2.5)
     try:
         target      = (datetime.utcnow() + timedelta(days=7)).strftime('%Y-%m-%d')
         base_url    = os.environ.get('APP_URL', 'https://sihha-ops-hub-production.up.railway.app')
@@ -7400,13 +7452,17 @@ def _send_family_confirmation_reminders():
                 fam_email = (fam['email'] or '').strip()
                 if not fam_email:
                     continue
-                # Idempotency: skip if already notified for this family+cycle
-                already = conn.execute(
-                    "SELECT id FROM reminder_log WHERE slot_id=? AND sent_to=?",
-                    (log_key, fam['id'])
-                ).fetchone()
-                if already:
-                    continue
+                # Reserve the guard row BEFORE sending (audit 2.6). UNIQUE(slot_id,
+                # sent_to) makes the INSERT the atomic arbiter across both workers —
+                # previously the send happened first, so two workers firing at 09:00
+                # could both pass the check and double-email the family.
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
+                    (str(uuid.uuid4()), log_key, fam['id'], datetime.utcnow().isoformat())
+                )
+                if cur.rowcount == 0:
+                    continue  # other worker or earlier run already handled this family
+                conn.commit()  # publish the claim before the slow network call
                 body = (
                     f"Assalamu Alaikum {fam['name']},\n\n"
                     f"Sihha has a food delivery on {cycle['delivery_date_start']}.\n"
@@ -7414,11 +7470,12 @@ def _send_family_confirmation_reminders():
                     f"JazakAllah Khair!\n\n— Sihha Food Program"
                 )
                 if _email_send(fam_email, f'Sihha Food Delivery — {cycle["delivery_date_start"]}', body):
-                    conn.execute(
-                        "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
-                        (str(uuid.uuid4()), log_key, fam['id'], datetime.utcnow().isoformat())
-                    )
                     sent += 1
+                else:
+                    # Send failed — release the guard so tomorrow's run retries
+                    conn.execute("DELETE FROM reminder_log WHERE slot_id=? AND sent_to=?",
+                                 (log_key, fam['id']))
+                    conn.commit()
             conn.commit()
 
         log.info(f'Family opt-in notifications: {sent} emails sent for delivery {target}')
@@ -7432,8 +7489,7 @@ def _skip_nonresponding_families():
     1. Legacy pending_confirmation rows (created by old scheduler) — UPDATE to skipped.
     2. Active families with NO food_request for this cycle — INSERT a skipped row (tracking only)."""
     import json as _json
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = make_conn()  # FK enforcement + busy_timeout (audit 2.5)
     try:
         target  = (datetime.utcnow() + timedelta(days=5)).strftime('%Y-%m-%d')
         ts_skip = datetime.utcnow().isoformat()
@@ -7507,8 +7563,7 @@ def _release_unconfirmed_slots_job():
     Sends WA to each released volunteer. Idempotent via reminder_log (key: slot_id + 'autorelease').
     """
     from datetime import date as _date, timedelta as _td
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = make_conn()  # FK enforcement + busy_timeout (audit 2.5)
     try:
         cutoff_date = (_date.today() + _td(days=3)).isoformat()
         today_str   = _date.today().isoformat()
@@ -7551,12 +7606,15 @@ def _release_unconfirmed_slots_job():
                 "claimed_at=NULL, status='open', updated_at=? WHERE id=?",
                 (datetime.utcnow().isoformat(), slot['id'])
             )
-            # Log idempotency guard
-            conn.execute(
+            # Log idempotency guard — rowcount gates the email below (audit 2.6):
+            # if the other worker's INSERT landed first, it owns the notification.
+            guard = conn.execute(
                 "INSERT OR IGNORE INTO reminder_log (id, slot_id, sent_to, sent_at) VALUES (?,?,?,?)",
                 (str(uuid.uuid4()), slot['id'], 'autorelease', datetime.utcnow().isoformat())
             )
             conn.commit()
+            if guard.rowcount == 0:
+                continue  # other worker already released + notified for this slot
             released += 1
 
             # Email volunteer

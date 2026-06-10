@@ -342,6 +342,7 @@
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 const BASE = '';
+function esc(s){return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 let TOKEN = localStorage.getItem('portalToken') || localStorage.getItem('portal_token');
 let VOL   = JSON.parse(localStorage.getItem('portalVolunteer') || localStorage.getItem('portal_vol') || 'null');
 
@@ -428,7 +429,7 @@ async function refreshWork() {
     renderMyWork(tasks, receipts);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
-    document.getElementById('my-work-content').innerHTML = `<div class="empty">${e.message}</div>`;
+    document.getElementById('my-work-content').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
 
@@ -467,14 +468,14 @@ function renderMyWork(tasks, receipts) {
     const addressBlock = isDelivery && t.address
       ? `<div class="work-card-address">
            <div class="work-card-address-label">📍 Delivery Address</div>
-           ${t.address}, ${t.city || ''}
+           ${esc(t.address)}, ${esc(t.city || '')}
          </div>` : '';
 
     // Shopping list — shopping only
     const itemsBlock = isShopping && t.shopping_items && t.shopping_items.length
       ? `<div class="work-card-items">
            <div class="work-card-items-label">Shopping List</div>
-           ${t.shopping_items.map(i => `${i.name} <strong>×${i.qty}</strong>`).join('<br>')}
+           ${t.shopping_items.map(i => `${esc(i.name)} <strong>×${esc(i.qty)}</strong>`).join('<br>')}
          </div>` : '';
 
     // Action buttons
@@ -501,8 +502,8 @@ function renderMyWork(tasks, receipts) {
           ${statusChip}
         </div>
         <div class="work-card-body">
-          <div class="work-card-family">${t.family_code || t.family_name || '—'}</div>
-          <div class="work-card-meta">${t.cycle_title} · ${fmtDate(t.delivery_date_end)}</div>
+          <div class="work-card-family">${esc(t.family_code || t.family_name || '—')}</div>
+          <div class="work-card-meta">${esc(t.cycle_title)} · ${fmtDate(t.delivery_date_end)}</div>
           ${itemsBlock}
           ${addressBlock}
         </div>
@@ -525,7 +526,7 @@ async function refreshSignup() {
     renderUpcoming(cyclesData);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
-    document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
+    document.getElementById('slots-content').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
 
@@ -547,7 +548,7 @@ async function renderAvailable(cycles, myTasks) {
     renderFamilySlots(results);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
-    document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
+    document.getElementById('slots-content').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
 
@@ -568,7 +569,7 @@ function renderFamilySlots(results) {
 
     if (multiCycle) {
       html += `<div style="margin:${idx > 0 ? '20px' : '0'} 0 8px;padding:8px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;">
-        ${cycle.title} · ${fmtDate(cycle.delivery_date_start)}
+        ${esc(cycle.title)} · ${fmtDate(cycle.delivery_date_start)}
       </div>`;
     }
     html += families.map(fam => buildFamilyRow(fam, task_types, cycle)).join('');
@@ -593,15 +594,15 @@ function buildFamilyRow(fam, task_types, cycle) {
       return `<button class="slot-btn slot-btn-mine" style="background:${bg};"
         onclick="cancelSignup('${mySlotId}','${fam.id}')"
         title="Click to cancel">
-        ✓ ${tt.label} ×
+        ✓ ${esc(tt.label)} ×
       </button>`;
     }
     if (takenBy) {
-      return `<span class="slot-btn slot-btn-taken">${tt.label}: ${takenBy}</span>`;
+      return `<span class="slot-btn slot-btn-taken">${esc(tt.label)}: ${esc(takenBy)}</span>`;
     }
     return `<button class="slot-btn slot-btn-open"
       onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
-      ${tt.label}
+      ${esc(tt.label)}
     </button>`;
   }).join('');
 
@@ -609,7 +610,7 @@ function buildFamilyRow(fam, task_types, cycle) {
     <div class="signup-card">
       <div class="signup-card-left">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span class="signup-family-code">${fam.family_code || '—'}</span>
+          <span class="signup-family-code">${esc(fam.family_code || '—')}</span>
           ${orderChip}
         </div>
         <div class="signup-family-meta">Size: ${fam.family_size || '?'}</div>
@@ -633,7 +634,7 @@ function renderUpcoming(cycles) {
     <div style="margin-bottom:8px;" id="upcoming-row-${c.id}">
       <div class="cycle-header" onclick="toggleUpcoming('${c.id}')">
         <div>
-          <div class="cycle-header-title">${c.title}</div>
+          <div class="cycle-header-title">${esc(c.title)}</div>
           <div class="cycle-header-meta">${fmtDate(c.delivery_date_start)} · ${c.open_slots ?? '—'} open slots</div>
         </div>
         <span class="cycle-toggle" id="upcoming-icon-${c.id}">+</span>
@@ -666,7 +667,7 @@ async function toggleUpcoming(cycleId) {
     _upcomingCache[cycleId] = data;
     renderUpcomingFamilies(cycleId, data);
   } catch(e) {
-    familiesEl.innerHTML = `<div class="empty" style="padding:16px;">${e.message}</div>`;
+    familiesEl.innerHTML = `<div class="empty" style="padding:16px;">${esc(e.message)}</div>`;
   }
 }
 
@@ -684,19 +685,19 @@ function renderUpcomingFamilies(cycleId, data) {
       const myStatus = fam.my_status?.[tt.slug];
       if (mySlotId) {
         return `<button class="slot-btn slot-btn-mine" style="background:var(--green);"
-          onclick="cancelSignup('${mySlotId}','${fam.id}')">✓ ${tt.label} ×</button>`;
+          onclick="cancelSignup('${mySlotId}','${fam.id}')">✓ ${esc(tt.label)} ×</button>`;
       }
       if (takenBy) {
-        return `<span class="slot-btn slot-btn-taken">${tt.label}: ${takenBy}</span>`;
+        return `<span class="slot-btn slot-btn-taken">${esc(tt.label)}: ${esc(takenBy)}</span>`;
       }
       return `<button class="slot-btn slot-btn-open"
-        onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">${tt.label}</button>`;
+        onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">${esc(tt.label)}</button>`;
     }).join('');
 
     return `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--gray-2);flex-wrap:wrap;gap:6px;">
         <div>
-          <span style="font-family:monospace;font-size:14px;font-weight:700;">${fam.family_code || '—'}</span>
+          <span style="font-family:monospace;font-size:14px;font-weight:700;">${esc(fam.family_code || '—')}</span>
           <span style="font-size:11px;color:var(--gray-4);margin-left:8px;">Size: ${fam.family_size || '?'}</span>
         </div>
         <div style="display:flex;gap:5px;flex-wrap:wrap;">${taskBtns}</div>
@@ -847,7 +848,7 @@ async function loadHistory() {
     const tasksHtml = data.tasks.map(t => `
       <div class="history-row">
         <div class="history-row-left">
-          <div><span class="badge badge-${t.task_type}">${t.task_type}</span> &nbsp;<strong>${t.cycle_title}</strong></div>
+          <div><span class="badge badge-${t.task_type}">${esc(t.task_type)}</span> &nbsp;<strong>${esc(t.cycle_title)}</strong></div>
           <div class="history-row-meta">
             Family ${t.family_id.slice(0,8)}… · Size: ${t.family_size || '?'}
             ${t.completed_at ? ' · ' + fmtDate(t.completed_at) : ''}
@@ -861,7 +862,7 @@ async function loadHistory() {
        <div class="section-divider" style="margin-bottom:16px;">Completed Tasks</div>${tasksHtml}`;
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
-    document.getElementById('history-content').innerHTML = `<div class="empty">${e.message}</div>`;
+    document.getElementById('history-content').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
 

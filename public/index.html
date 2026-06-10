@@ -633,6 +633,11 @@
 </div>
 
 <script>
+// ── Escaping helpers (XSS) ────────────────────────────────────────────────────
+function esc(s){return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+// For values placed inside single-quoted JS string args within onclick="" attributes
+function escJs(s){return esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let STATE = { token: null, user: null, page: 'dashboard', filter: 'all', editId: null };
 
@@ -860,7 +865,7 @@ async function renderDashboard() {
           <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;">
             <div style="flex:1;min-width:200px;">
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:3px;">Active Delivery</div>
-              <div style="font-size:16px;font-weight:700;color:#111;">${activeCycle.title}</div>
+              <div style="font-size:16px;font-weight:700;color:#111;">${esc(activeCycle.title)}</div>
               <div style="font-size:12px;color:#666;margin-top:3px;">
                 ${fmtDateShort(activeCycle.delivery_date_start)} – ${fmtDateShort(activeCycle.delivery_date_end)}
                 &nbsp;·&nbsp;
@@ -914,12 +919,12 @@ async function renderDashboard() {
       qaItems.push(`
         <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fff;border:1px solid #e0e0e0;border-left:3px solid #e07b00;border-radius:4px;gap:10px;">
           <div style="min-width:0;">
-            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${f.name}</div>
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.name)}</div>
             <div style="font-size:11px;color:var(--gray-4);">Family · pending approval</div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0;">
             <button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 10px;font-size:11px;"
-              onclick="dashApprove('family','${f.id}','${f.name}')">Approve</button>
+              onclick="dashApprove('family','${f.id}','${escJs(f.name)}')">Approve</button>
             <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;"
               onclick="viewFamily('${f.id}')">View</button>
           </div>
@@ -929,12 +934,12 @@ async function renderDashboard() {
       qaItems.push(`
         <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#fff;border:1px solid #e0e0e0;border-left:3px solid #2e86c1;border-radius:4px;gap:10px;">
           <div style="min-width:0;">
-            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${v.name}</div>
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(v.name)}</div>
             <div style="font-size:11px;color:var(--gray-4);">Volunteer · pending approval</div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0;">
             <button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 10px;font-size:11px;"
-              onclick="dashApprove('volunteer','${v.id}','${v.name}')">Approve</button>
+              onclick="dashApprove('volunteer','${v.id}','${escJs(v.name)}')">Approve</button>
             <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;"
               onclick="viewVolunteer('${v.id}')">View</button>
           </div>
@@ -963,7 +968,7 @@ async function renderDashboard() {
             return `
             <div style="padding:12px 14px;border:1px solid #e0e0e0;border-top:3px solid ${sc};cursor:pointer;background:#fff;"
                  onclick="viewCycleDetail('${c.id}')">
-              <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:2px;">${c.title}</div>
+              <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:2px;">${esc(c.title)}</div>
               <div style="font-size:11px;color:var(--gray-4);margin-bottom:8px;">
                 ${fmtDateShort(c.delivery_date_start)} – ${fmtDateShort(c.delivery_date_end)}
                 &nbsp;·&nbsp;<span style="font-weight:700;color:${sc};text-transform:uppercase;">${c.status}</span>
@@ -1368,7 +1373,7 @@ async function renderDashboard() {
     updateDashProjection();
 
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -1611,7 +1616,7 @@ async function renderFamilies(filter, search) {
 
     const hasActiveCycle = !!activeCycle;
     const cycleLabel = hasActiveCycle
-      ? `${activeCycle.title} <span style="font-size:11px;font-weight:400;color:var(--gray-4)">(${activeCycle.status})</span>`
+      ? `${esc(activeCycle.title)} <span style="font-size:11px;font-weight:400;color:var(--gray-4)">(${activeCycle.status})</span>`
       : '';
 
     function orderBadge(familyId) {
@@ -1637,7 +1642,7 @@ async function renderFamilies(filter, search) {
           <span class="table-title">All Families</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <input class="search-input" placeholder="Search name, phone…"
-              id="family-search" value="${search||''}"
+              id="family-search" value="${esc(search||'')}"
               oninput="renderFamilies('${filter}', this.value)">
             <div class="filter-tabs">
               ${['all','pending','active','inactive'].map(f =>
@@ -1659,19 +1664,19 @@ async function renderFamilies(filter, search) {
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr id="frow-${r.id}" style="cursor:pointer" onclick="viewFamily('${r.id}')">
-                <td><span style="font-family:monospace;font-size:12px;font-weight:700;color:var(--black)">${r.family_code||'—'}</span></td>
-                <td><strong>${r.name}</strong></td>
-                <td>${r.phone||'—'}</td>
-                <td>${r.city||'—'}</td>
+                <td><span style="font-family:monospace;font-size:12px;font-weight:700;color:var(--black)">${esc(r.family_code||'—')}</span></td>
+                <td><strong>${esc(r.name)}</strong></td>
+                <td>${esc(r.phone||'—')}</td>
+                <td>${esc(r.city||'—')}</td>
                 <td>${r.family_size||'—'}</td>
                 <td>${badge(r.status)}${r.pending_bundle_size ? ` <span title="Bundle size change pending" style="display:inline-block;font-size:10px;background:#fff3cd;color:#7a4f00;border:1px solid #f0c060;padding:1px 5px;border-radius:3px;font-weight:700;cursor:default">⚠ Bundle</span>` : ''}</td>
                 ${hasActiveCycle ? `<td onclick="event.stopPropagation()">${orderBadge(r.id)}</td>` : ''}
                 <td style="font-size:12px;color:${r.last_delivery_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_delivery_volunteer?'600':'400'}">
-                  ${r.last_delivery_volunteer||'—'}
+                  ${esc(r.last_delivery_volunteer||'—')}
                   ${r.last_delivery_date?`<div style="font-size:10px;color:var(--gray-4);font-weight:400">${fmtDateShort(r.last_delivery_date)}</div>`:''}
                 </td>
                 <td style="font-size:12px;color:${r.last_shopping_volunteer?'var(--black)':'var(--gray-3)'};font-weight:${r.last_shopping_volunteer?'600':'400'}">
-                  ${r.last_shopping_volunteer||'—'}
+                  ${esc(r.last_shopping_volunteer||'—')}
                   ${r.last_shopping_date?`<div style="font-size:10px;color:var(--gray-4);font-weight:400">${fmtDateShort(r.last_shopping_date)}</div>`:''}
                 </td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
@@ -1692,7 +1697,7 @@ async function renderFamilies(filter, search) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -1747,25 +1752,25 @@ function familyFormHTML(r) {
     <div class="form-section">Basic Information</div>
     <div class="form-group">
       <label>Full Name *</label>
-      <input type="text" id="f-name" value="${r.name||''}">
+      <input type="text" id="f-name" value="${esc(r.name||'')}">
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Phone</label>
-        <input type="tel" id="f-phone" value="${r.phone||''}">
+        <input type="tel" id="f-phone" value="${esc(r.phone||'')}">
       </div>
       <div class="form-group">
         <label>City</label>
-        <input type="text" id="f-city" value="${r.city||''}">
+        <input type="text" id="f-city" value="${esc(r.city||'')}">
       </div>
     </div>
     <div class="form-group">
       <label>Address</label>
-      <input type="text" id="f-address" value="${r.address||''}">
+      <input type="text" id="f-address" value="${esc(r.address||'')}">
     </div>
     <div class="form-group">
       <label>Email <span style="font-size:11px;color:var(--gray-4);font-weight:400">(credentials will be emailed on creation)</span></label>
-      <input type="email" id="f-email" value="${r.email||''}" placeholder="family@example.com">
+      <input type="email" id="f-email" value="${esc(r.email||'')}" placeholder="family@example.com">
     </div>
 
     <div class="form-section">Household</div>
@@ -1781,7 +1786,7 @@ function familyFormHTML(r) {
     </div>
     <div class="form-group">
       <label>Dietary Notes</label>
-      <input type="text" id="f-dietary" value="${r.dietary_notes||''}"
+      <input type="text" id="f-dietary" value="${esc(r.dietary_notes||'')}"
         placeholder="e.g. Vegetarian, Gluten-free">
     </div>
     <div class="form-row">
@@ -1823,7 +1828,7 @@ function familyFormHTML(r) {
     </div>
     <div class="form-group">
       <label>Admin Notes</label>
-      <textarea id="f-notes">${r.notes||''}</textarea>
+      <textarea id="f-notes">${esc(r.notes||'')}</textarea>
     </div>
     <div class="alert alert-error" id="family-form-err"></div>`;
 }
@@ -1877,14 +1882,14 @@ async function saveFamily() {
         setTimeout(() => {
           openDrawer('Family Created — Login Credentials',
             `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
-               Share these credentials with <strong>${res.name}</strong>. They will be asked to set a new password on first login.
+               Share these credentials with <strong>${esc(res.name)}</strong>. They will be asked to set a new password on first login.
              </p>
              <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-family:monospace;font-size:15px;line-height:2">
-               <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${res.login_username}</strong></div>
-               <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">TEMP PASSWORD</span><br><strong>${res.login_temp_password}</strong></div>
+               <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${esc(res.login_username)}</strong></div>
+               <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">TEMP PASSWORD</span><br><strong>${esc(res.login_temp_password)}</strong></div>
              </div>
              <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
-             ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Credentials emailed to ${res.email}</p>` : (res.email ? `<p style="font-size:12px;color:#c00;margin-top:4px">⚠ Email failed to send — share credentials manually</p>` : `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email provided — share credentials manually</p>`)}`,
+             ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Credentials emailed to ${esc(res.email)}</p>` : (res.email ? `<p style="font-size:12px;color:#c00;margin-top:4px">⚠ Email failed to send — share credentials manually</p>` : `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email provided — share credentials manually</p>`)}`,
             `<button class="btn" onclick="closeDrawer()">Done</button>`
           );
         }, 200);
@@ -1947,11 +1952,11 @@ async function famSaveField(famId, field, value) {
 function slotBox(allSlots, taskType, taskLabel, vols, familyId, cycleId) {
   const assigned = (allSlots || []).filter(s => s.task_type === taskType && s.volunteer_name);
   const addSelId = `add-${taskType}-${familyId}`;
-  const volOpts  = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+  const volOpts  = vols.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('');
 
   const volRows = assigned.map(s =>
     `<div style="display:flex;align-items:center;justify-content:space-between;padding:1px 0;">
-       <span style="font-size:12px;font-weight:600;color:var(--black);">${s.volunteer_name}</span>
+       <span style="font-size:12px;font-weight:600;color:var(--black);">${esc(s.volunteer_name)}</span>
        <button onclick="removeSlot('${s.id}','${familyId}',this)"
          style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:18px;line-height:1;padding:0 2px;margin-left:6px;"
          title="Remove">×</button>
@@ -1959,7 +1964,7 @@ function slotBox(allSlots, taskType, taskLabel, vols, familyId, cycleId) {
   ).join('');
 
   return `<div style="background:var(--gray-1);padding:8px 10px;">
-    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${taskLabel}</div>
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:4px;">${esc(taskLabel)}</div>
     ${assigned.length ? volRows : '<div style="color:var(--gray-3);font-size:12px;margin-bottom:4px;">—</div>'}
     <div style="display:flex;gap:5px;margin-top:6px;">
       <select id="${addSelId}" style="flex:1;font-size:12px;border:1px solid var(--gray-3);padding:3px 5px;background:#fff;">
@@ -1982,7 +1987,7 @@ async function addSlot(cycleId, familyId, taskType, selectId) {
     // Surgically insert the new volunteer row before the select — no page reload
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:3px;';
-    row.innerHTML = `<span style="font-size:12px;font-weight:600;">${volunteerName}</span>
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">${esc(volunteerName)}</span>
       <button onclick="removeSlot('${slot.id}','${familyId}',this)"
         style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;" title="Remove">×</button>`;
     sel.parentNode.insertBefore(row, sel);
@@ -2029,7 +2034,7 @@ async function viewFamily(id) {
     let topbarBtns = `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>
      <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>`;
     if (famUser) {
-      topbarBtns += ` <button class="btn btn-outline" onclick="openResetPassword('${famUser.id}','${famUser.username}','${r.name.replace(/'/g,"\\'")}')">🔑 Reset Password</button>
+      topbarBtns += ` <button class="btn btn-outline" onclick="openResetPassword('${famUser.id}','${escJs(famUser.username)}','${escJs(r.name)}')">🔑 Reset Password</button>
           <button class="btn btn-outline" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
     }
     topbarBtns += ` <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="deleteFamily('${fid}')">🗑 Delete</button>`;
@@ -2039,7 +2044,7 @@ async function viewFamily(id) {
     const markDirty = `document.getElementById('fam-save-btn').style.display='inline-flex';`;
 
     const inp = (field, val, type='text') =>
-      `<input id="fam-f-${field}" type="${type}" value="${(val!=null?String(val):'').replace(/"/g,'&quot;')}"
+      `<input id="fam-f-${field}" type="${type}" value="${esc(val!=null?String(val):'')}"
          style="width:100%;border:none;border-bottom:1px solid var(--gray-2);padding:4px 0;font-size:14px;font-family:var(--font-body);background:transparent;outline:none;"
          onfocus="this.style.borderBottomColor='var(--black)'"
          onblur="this.style.borderBottomColor='var(--gray-2)'"
@@ -2064,11 +2069,11 @@ async function viewFamily(id) {
     const summaryStrip = `
       <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <span style="font-family:monospace;font-size:13px;font-weight:800;background:var(--gray-1);padding:4px 10px;border-radius:4px;letter-spacing:.5px;">${r.family_code||'—'}</span>
-          <span style="font-size:15px;font-weight:700;">${r.name}</span>
+          <span style="font-family:monospace;font-size:13px;font-weight:800;background:var(--gray-1);padding:4px 10px;border-radius:4px;letter-spacing:.5px;">${esc(r.family_code||'—')}</span>
+          <span style="font-size:15px;font-weight:700;">${esc(r.name)}</span>
           <span style="font-size:13px;color:var(--gray-4);">${r.family_size||'—'} people${r.children_count?' · '+r.children_count+' children':''}</span>
           ${badge(r.status)}
-          ${r.bundle_size ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--gray-1);color:var(--gray-5);">Bundle: ${bundleLabel[r.bundle_size]||r.bundle_size}</span>` : ''}
+          ${r.bundle_size ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--gray-1);color:var(--gray-5);">Bundle: ${esc(bundleLabel[r.bundle_size]||r.bundle_size)}</span>` : ''}
         </div>
         <span id="fam-saved-${fid}" style="font-size:13px;font-weight:600;color:#1a8754;min-width:70px;text-align:right;"></span>
       </div>`;
@@ -2081,15 +2086,15 @@ async function viewFamily(id) {
           <div style="font-size:13px;font-weight:700;color:#7a4f00;margin-bottom:2px;">Bundle Size Change Request</div>
           <div style="font-size:12px;color:#92400e;">
             Family requested to change bundle from
-            <strong>${bundleLabel[r.bundle_size]||r.bundle_size||'—'}</strong>
-            → <strong>${bundleLabel[r.pending_bundle_size]||r.pending_bundle_size}</strong>
+            <strong>${esc(bundleLabel[r.bundle_size]||r.bundle_size||'—')}</strong>
+            → <strong>${esc(bundleLabel[r.pending_bundle_size]||r.pending_bundle_size)}</strong>
           </div>
         </div>
         <div style="display:flex;gap:8px;">
           <button class="btn btn-sm" style="font-size:12px;padding:4px 14px;background:#1a8754;color:#fff;"
-            onclick="approveBundleChange('${fid}','approve','${r.name}')">✓ Approve</button>
+            onclick="approveBundleChange('${fid}','approve','${escJs(r.name)}')">✓ Approve</button>
           <button class="btn btn-sm btn-outline" style="font-size:12px;padding:4px 14px;color:#c00;border-color:#c00;"
-            onclick="approveBundleChange('${fid}','deny','${r.name}')">✕ Deny</button>
+            onclick="approveBundleChange('${fid}','deny','${escJs(r.name)}')">✕ Deny</button>
         </div>
       </div>` : '';
 
@@ -2124,17 +2129,17 @@ async function viewFamily(id) {
            <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;margin-left:4px;" onclick="overrideFoodRequest('${o.id}','skipped','${o.cycle_id}','${fid}')">Skip</button>`;
       return `
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--gray-1);">
-          <span style="font-size:13px;font-weight:700;min-width:0;flex:1;">${o.cycle_title}</span>
+          <span style="font-size:13px;font-weight:700;min-width:0;flex:1;">${esc(o.cycle_title)}</span>
           ${o.delivery_date_start ? `<span style="font-size:12px;color:var(--gray-4);white-space:nowrap;">${fmtDate(o.delivery_date_start)}</span>` : ''}
           <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;white-space:nowrap;background:${sc.bg};color:${sc.color};">${sc.label}</span>
           <div style="display:flex;gap:4px;flex-wrap:wrap;margin-left:auto;">
             ${o.status !== 'delivered' && o.status !== 'cancelled' && o.status !== 'skipped' ? `
               <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;"
-                onclick="openEditOrderItems('${o.id}','${r.name}','${o.bundle_size||''}','${o.cycle_id}')">✏ Edit</button>` : ''}
+                onclick="openEditOrderItems('${o.id}','${escJs(r.name)}','${o.bundle_size||''}','${o.cycle_id}')">✏ Edit</button>` : ''}
             ${btns}
             ${o.status !== 'delivered' ? `
-              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="adminCancelOrder('${fid}','${o.cycle_id}','${r.name}')">✕ Cancel</button>
-              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" onclick="resetFamilyOrder('${fid}','${r.name}')">↺ Reset</button>` : ''}
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="adminCancelOrder('${fid}','${o.cycle_id}','${escJs(r.name)}')">✕ Cancel</button>
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" onclick="resetFamilyOrder('${fid}','${escJs(r.name)}')">↺ Reset</button>` : ''}
           </div>
         </div>`;
     };
@@ -2145,10 +2150,10 @@ async function viewFamily(id) {
       const orderRows = activeOrders.map(renderOrderRow).join('');
       const addRow = unorderedCycle ? `
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;">
-          <span style="font-size:13px;font-weight:700;flex:1;">${unorderedCycle.title}</span>
+          <span style="font-size:13px;font-weight:700;flex:1;">${esc(unorderedCycle.title)}</span>
           <span style="font-size:11px;color:var(--gray-4);">No order yet</span>
           <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;margin-left:auto;"
-            onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Add to Cycle</button>
+            onclick="manualConfirmFamily('${fid}','${escJs(r.name)}')">＋ Add to Cycle</button>
         </div>` : '';
       cycleStrip = `
         <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
@@ -2160,10 +2165,10 @@ async function viewFamily(id) {
         <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;color:var(--gray-4);padding-bottom:10px;border-bottom:1px solid var(--gray-2);margin-bottom:2px;">Food Orders</div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;">
-            <span style="font-size:13px;font-weight:700;flex:1;">${activeCycle.title}</span>
+            <span style="font-size:13px;font-weight:700;flex:1;">${esc(activeCycle.title)}</span>
             <span style="font-size:11px;color:var(--gray-4);">No order yet</span>
             <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;margin-left:auto;"
-              onclick="manualConfirmFamily('${fid}','${r.name}')">＋ Add to Cycle</button>
+              onclick="manualConfirmFamily('${fid}','${escJs(r.name)}')">＋ Add to Cycle</button>
           </div>
         </div>`;
     }
@@ -2203,7 +2208,7 @@ async function viewFamily(id) {
                onfocus="this.style.borderBottomColor='var(--black)'"
                onblur="this.style.borderBottomColor='var(--gray-2)'"
                oninput="${markDirty}"
-             >${r.notes||''}</textarea>`, true)}
+             >${esc(r.notes||'')}</textarea>`, true)}
         </div>
       </div>`;
 
@@ -2227,11 +2232,11 @@ async function viewFamily(id) {
       const slotCells = activeTT.map(tt => {
         const assigned = (o.slots||[]).filter(s => s.task_type === tt.slug && s.volunteer_name);
         const selId = `hslot-${tt.slug}-${o.id}`;
-        const volOpts = vols.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+        const volOpts = vols.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('');
         return `<td style="padding:10px;min-width:140px;vertical-align:top;">
           ${assigned.map(s =>
             `<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px;">
-               <span style="font-size:12px;font-weight:600;">${s.volunteer_name}</span>
+               <span style="font-size:12px;font-weight:600;">${esc(s.volunteer_name)}</span>
                <button onclick="removeSlot('${s.id}','${fid}',this)"
                  style="border:none;background:none;cursor:pointer;color:var(--gray-3);font-size:16px;line-height:1;padding:0 2px;" title="Remove">×</button>
              </div>`).join('')}
@@ -2253,8 +2258,8 @@ async function viewFamily(id) {
       // Inline callout: shown prominently when items were edited or order cancelled by family
       let inlineCallout = '';
       if (lastEdit) {
-        const added   = lastEdit.payload?.added?.length   ? `<span style="color:#1a7a3c">+${lastEdit.payload.added.join(', ')}</span>`   : '';
-        const removed = lastEdit.payload?.removed?.length ? `<span style="color:#c00">−${lastEdit.payload.removed.join(', ')}</span>` : '';
+        const added   = lastEdit.payload?.added?.length   ? `<span style="color:#1a7a3c">+${esc(lastEdit.payload.added.join(', '))}</span>`   : '';
+        const removed = lastEdit.payload?.removed?.length ? `<span style="color:#c00">−${esc(lastEdit.payload.removed.join(', '))}</span>` : '';
         const diff    = [added, removed].filter(Boolean).join(' &nbsp;');
         inlineCallout = `
           <div style="margin-top:5px;padding:5px 8px;background:#fff8e1;border:1px solid #ffc107;border-left:3px solid #e0a800;border-radius:3px;font-size:11px;">
@@ -2285,29 +2290,29 @@ async function viewFamily(id) {
               const ts  = fmtEvTs(ev.created_at);
               let detail = '';
               if (ev.event_type==='items_edited' && ev.payload) {
-                if (ev.payload.added?.length)   detail += ` <span style="color:#1a7a3c">+${ev.payload.added.join(', ')}</span>`;
-                if (ev.payload.removed?.length) detail += ` <span style="color:#c00">−${ev.payload.removed.join(', ')}</span>`;
+                if (ev.payload.added?.length)   detail += ` <span style="color:#1a7a3c">+${esc(ev.payload.added.join(', '))}</span>`;
+                if (ev.payload.removed?.length) detail += ` <span style="color:#c00">−${esc(ev.payload.removed.join(', '))}</span>`;
               }
-              if (ev.event_type==='admin_override' && ev.payload?.new_status) detail = ` <span style="color:#888">→ ${ev.payload.new_status}</span>`;
+              if (ev.event_type==='admin_override' && ev.payload?.new_status) detail = ` <span style="color:#888">→ ${esc(ev.payload.new_status)}</span>`;
               return `<div style="font-size:11px;padding:2px 0;color:#555;">${lbl}${detail||''} <span style="color:#ccc">${ts}</span></div>`;
             }).join('')}
           </div>
         </details>` : '';
 
       return `<tr style="border-bottom:1px solid var(--gray-1);">
-        <td style="padding:10px 10px 10px 0;font-weight:600;white-space:nowrap;">${o.cycle_title}</td>
+        <td style="padding:10px 10px 10px 0;font-weight:600;white-space:nowrap;">${esc(o.cycle_title)}</td>
         <td style="padding:10px;color:var(--gray-5);white-space:nowrap;">${o.delivery_date_start?fmtDateShort(o.delivery_date_start):'—'}</td>
         <td style="padding:10px;min-width:180px;">
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${sc.bg};color:${sc.color};">${sc.label}</span>
           ${inlineCallout}
           ${evHtml}
         </td>
-        <td style="padding:10px;color:var(--gray-5);">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
+        <td style="padding:10px;color:var(--gray-5);">${esc(bundleLabel[o.bundle_size]||o.bundle_size||'—')}</td>
         <td style="padding:10px;">
           ${o.selected_items?.length
             ? `<span class="items-badge">
                  ${o.selected_items.length} item${o.selected_items.length===1?'':'s'}
-                 <span class="items-tooltip">${o.selected_items.map(i=>i.name).join('<br>')}</span>
+                 <span class="items-tooltip">${o.selected_items.map(i=>esc(i.name)).join('<br>')}</span>
                </span>`
             : `<span style="color:var(--gray-3);font-size:13px;">—</span>`}
         </td>
@@ -2331,7 +2336,7 @@ async function viewFamily(id) {
                     <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">Response</th>
                     <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">Bundle</th>
                     <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">Items</th>
-                    ${activeTT.map(tt => `<th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">${tt.label}</th>`).join('')}
+                    ${activeTT.map(tt => `<th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray-4);font-weight:600;">${esc(tt.label)}</th>`).join('')}
                   </tr>
                 </thead>
                 <tbody>${historyRows}</tbody>
@@ -2347,7 +2352,7 @@ async function viewFamily(id) {
 
   } catch(e) {
     console.error(e);
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -2389,7 +2394,7 @@ async function renderVolunteers(filter, search) {
           <span class="table-title">All Volunteers</span>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <input class="search-input" placeholder="Search name, phone, email…"
-              id="vol-search" value="${search||''}"
+              id="vol-search" value="${esc(search||'')}"
               oninput="renderVolunteers('${filter}', this.value)">
             <div class="filter-tabs">
               ${['all','pending','active','inactive'].map(f =>
@@ -2408,9 +2413,9 @@ async function renderVolunteers(filter, search) {
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr id="vrow-${r.id}">
-                <td><strong>${r.name}</strong></td>
-                <td>${r.phone||'—'}</td>
-                <td>${r.email||'—'}</td>
+                <td><strong>${esc(r.name)}</strong></td>
+                <td>${esc(r.phone||'—')}</td>
+                <td>${esc(r.email||'—')}</td>
                 <td><span style="font-size:11px;text-transform:capitalize">${r.role||'—'}</span></td>
                 <td>${badge(r.status)}</td>
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
@@ -2434,7 +2439,7 @@ async function renderVolunteers(filter, search) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -2498,8 +2503,8 @@ async function renderVolunteerActivityReport() {
             ${data.length ? data.map(v => `
               <tr style="${!v.total_tasks ? 'color:var(--gray-4)' : ''}">
                 <td>
-                  <strong style="cursor:pointer;text-decoration:underline" onclick="viewVolunteer('${v.id}')">${v.name}</strong>
-                  ${v.phone ? `<br><span style="font-size:11px;color:var(--gray-4)">${v.phone}</span>` : ''}
+                  <strong style="cursor:pointer;text-decoration:underline" onclick="viewVolunteer('${v.id}')">${esc(v.name)}</strong>
+                  ${v.phone ? `<br><span style="font-size:11px;color:var(--gray-4)">${esc(v.phone)}</span>` : ''}
                 </td>
                 <td>${statusPill(v.status)}</td>
                 <td style="text-align:center;font-weight:${v.total_tasks ? '700' : '400'}">${v.total_tasks || 0}</td>
@@ -2514,7 +2519,7 @@ async function renderVolunteerActivityReport() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -2560,7 +2565,7 @@ async function renderTaskTypes() {
             ${types.map(t => `
               <tr id="tt-${t.slug}">
                 <td>
-                  <input id="tt-label-${t.slug}" value="${t.label}"
+                  <input id="tt-label-${t.slug}" value="${esc(t.label)}"
                     style="border:none;border-bottom:1px solid var(--gray-2);font-size:13px;font-family:var(--font-body);background:transparent;width:120px;outline:none;"
                     onfocus="this.style.borderBottomColor='var(--black)'"
                     onblur="this.style.borderBottomColor='var(--gray-2)'">
@@ -2591,7 +2596,7 @@ async function renderTaskTypes() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -2648,16 +2653,16 @@ function volunteerFormHTML(r) {
     <div class="form-section">Basic Information</div>
     <div class="form-group">
       <label>Full Name *</label>
-      <input type="text" id="v-name" value="${r.name||''}">
+      <input type="text" id="v-name" value="${esc(r.name||'')}">
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Phone</label>
-        <input type="tel" id="v-phone" value="${r.phone||''}">
+        <input type="tel" id="v-phone" value="${esc(r.phone||'')}">
       </div>
       <div class="form-group">
         <label>Email</label>
-        <input type="email" id="v-email" value="${r.email||''}">
+        <input type="email" id="v-email" value="${esc(r.email||'')}">
       </div>
     </div>
 
@@ -2680,7 +2685,7 @@ function volunteerFormHTML(r) {
     </div>
     <div class="form-group">
       <label>Notes</label>
-      <textarea id="v-notes">${r.notes||''}</textarea>
+      <textarea id="v-notes">${esc(r.notes||'')}</textarea>
     </div>
 
     <div class="alert alert-error" id="vol-form-err"></div>`;
@@ -2760,8 +2765,8 @@ async function viewVolunteer(id) {
 
     const detailsHTML = `
       <div class="detail-row"><div class="detail-label">Status</div><div class="detail-value">${badge(r.status)}</div></div>
-      <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${r.phone||'—'}</div></div>
-      <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${r.email||'—'}</div></div>
+      <div class="detail-row"><div class="detail-label">Phone</div><div class="detail-value">${esc(r.phone||'—')}</div></div>
+      <div class="detail-row"><div class="detail-label">Email</div><div class="detail-value">${esc(r.email||'—')}</div></div>
       <div class="detail-row">
         <div class="detail-label">Role</div>
         <div class="detail-value">
@@ -2770,7 +2775,7 @@ async function viewVolunteer(id) {
         </div>
       </div>
       <div class="detail-row"><div class="detail-label">Added</div><div class="detail-value">${fmtDate(r.created_at)}</div></div>
-      ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${r.notes}</div></div>`:''}`;
+      ${r.notes?`<div class="detail-row"><div class="detail-label">Notes</div><div class="detail-value">${esc(r.notes)}</div></div>`:''}`;
 
     const s = hist.stats || {};
     const tasks = hist.tasks || [];
@@ -2793,7 +2798,7 @@ async function viewVolunteer(id) {
             <div class="hist-row">
               <div class="hist-row-head" style="cursor:default">
                 <div>
-                  <div style="font-size:13px;font-weight:600">${t.cycle_title}</div>
+                  <div style="font-size:13px;font-weight:600">${esc(t.cycle_title)}</div>
                   <div style="font-size:11px;color:var(--gray-4);margin-top:2px">
                     <span style="text-transform:capitalize">${t.task_type}</span>
                     ${t.claimed_at ? '· Claimed ' + fmtDate(t.claimed_at) : ''}
@@ -2856,8 +2861,8 @@ async function renderAssignments(filter) {
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr>
-                <td><strong>${r.family_name||'—'}</strong></td>
-                <td>${r.volunteer_name||'<span style="color:var(--gray-4)">Unassigned</span>'}</td>
+                <td><strong>${esc(r.family_name||'—')}</strong></td>
+                <td>${r.volunteer_name?esc(r.volunteer_name):'<span style="color:var(--gray-4)">Unassigned</span>'}</td>
                 <td style="text-transform:capitalize">${r.task_type||'—'}</td>
                 <td>${fmtDate(r.due_date)}</td>
                 <td>${badge(r.status)}</td>
@@ -2870,7 +2875,7 @@ async function renderAssignments(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -2887,14 +2892,14 @@ async function openAssignmentForm(id) {
       <label>Family *</label>
       <select id="a-family">
         <option value="">— Select Family —</option>
-        ${families.map(f => `<option value="${f.id}" ${r.family_id===f.id?'selected':''}>${f.name}</option>`).join('')}
+        ${families.map(f => `<option value="${f.id}" ${r.family_id===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}
       </select>
     </div>
     <div class="form-group">
       <label>Volunteer</label>
       <select id="a-volunteer">
         <option value="">— Unassigned —</option>
-        ${volunteers.map(v => `<option value="${v.id}" ${r.volunteer_id===v.id?'selected':''}>${v.name} (${v.role})</option>`).join('')}
+        ${volunteers.map(v => `<option value="${v.id}" ${r.volunteer_id===v.id?'selected':''}>${esc(v.name)} (${esc(v.role)})</option>`).join('')}
       </select>
     </div>
     <div class="form-row">
@@ -2919,7 +2924,7 @@ async function openAssignmentForm(id) {
     </div>
     <div class="form-group">
       <label>Notes</label>
-      <textarea id="a-notes">${r.notes||''}</textarea>
+      <textarea id="a-notes">${esc(r.notes||'')}</textarea>
     </div>
     <div class="alert alert-error" id="assign-err"></div>`;
 
@@ -2983,14 +2988,14 @@ async function renderReceipts(filter) {
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr id="rrow-${r.id}">
-                <td><strong>${r.volunteer_name||'—'}</strong></td>
-                <td>${r.family_name||'—'}</td>
-                <td style="font-size:12px;color:var(--gray-4)">${r.cycle_title||'—'}</td>
-                <td>${r.store||'—'}</td>
+                <td><strong>${esc(r.volunteer_name||'—')}</strong></td>
+                <td>${esc(r.family_name||'—')}</td>
+                <td style="font-size:12px;color:var(--gray-4)">${esc(r.cycle_title||'—')}</td>
+                <td>${esc(r.store||'—')}</td>
                 <td style="white-space:nowrap">${fmtDate(r.purchase_date)}</td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>${r.file_url
-                  ? `<a href="${r.file_url}" target="_blank" style="color:var(--green);font-size:13px">📷 View</a>`
+                  ? `<a href="${esc(r.file_url)}" target="_blank" style="color:var(--green);font-size:13px">📷 View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td>${badge(r.status)}</td>
                 <td style="white-space:nowrap" id="receipt-actions-${r.id}">
@@ -3006,7 +3011,7 @@ async function renderReceipts(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3018,10 +3023,10 @@ async function openAddReceiptDrawer() {
   ]);
   const activeVols = vols.filter(v => v.active);
   const cycleOpts = cycles.map(c =>
-    `<option value="${c.id}">${c.title}</option>`
+    `<option value="${c.id}">${esc(c.title)}</option>`
   ).join('');
   const volOpts = activeVols.map(v =>
-    `<option value="${v.id}">${v.name}</option>`
+    `<option value="${v.id}">${esc(v.name)}</option>`
   ).join('');
 
   const body = `
@@ -3194,7 +3199,7 @@ async function renderFinanceSummary() {
             <tbody>
               ${hasCycleData ? cycles.filter(c => c.receipt_count > 0 || true).map(c => `
                 <tr style="${c.receipt_count===0?'opacity:0.45':''}">
-                  <td><strong>${c.title}</strong></td>
+                  <td><strong>${esc(c.title)}</strong></td>
                   <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)}</td>
                   <td style="text-align:center">${c.receipt_count||0}</td>
                   <td><strong>${fmtMoney(c.receipts_total)}</strong></td>
@@ -3208,7 +3213,7 @@ async function renderFinanceSummary() {
 
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3244,14 +3249,14 @@ async function renderPayments(filter) {
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr>
-                <td><strong>${r.volunteer_name||'—'}</strong></td>
-                <td>${r.store||'—'}</td>
+                <td><strong>${esc(r.volunteer_name||'—')}</strong></td>
+                <td>${esc(r.store||'—')}</td>
                 <td style="font-size:11px;white-space:nowrap">${fmtDate(r.purchase_date)}</td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>${r.receipt_photo
-                  ? `<a href="${r.receipt_photo}" target="_blank" style="font-size:12px;color:var(--green);white-space:nowrap">📷 View</a>`
+                  ? `<a href="${esc(r.receipt_photo)}" target="_blank" style="font-size:12px;color:var(--green);white-space:nowrap">📷 View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
-                <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${r.payment_ref}</span>` : ''}</td>
+                <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${esc(r.payment_ref)}</span>` : ''}</td>
                 <td>${badge(r.status)}</td>
                 <td style="white-space:nowrap" id="reimb-actions-${r.id}">
                   ${r.status==='pending' ? `
@@ -3272,7 +3277,7 @@ async function renderPayments(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3336,8 +3341,8 @@ async function renderDonations(filter) {
             ${rows.length ? rows.map(r => `
               <tr>
                 <td>
-                  <strong>${r.donor_name||'Anonymous'}</strong>
-                  ${r.donor_email ? `<br><span style="font-size:11px;color:var(--gray-4)">${r.donor_email}</span>` : ''}
+                  <strong>${esc(r.donor_name||'Anonymous')}</strong>
+                  ${r.donor_email ? `<br><span style="font-size:11px;color:var(--gray-4)">${esc(r.donor_email)}</span>` : ''}
                 </td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>
@@ -3346,10 +3351,10 @@ async function renderDonations(filter) {
                   </span>
                 </td>
                 <td style="white-space:nowrap">${fmtDate(r.date)}</td>
-                <td style="font-size:12px;color:var(--gray-4)">${r.notes||r.source||'—'}</td>
+                <td style="font-size:12px;color:var(--gray-4)">${esc(r.notes||r.source||'—')}</td>
                 <td style="white-space:nowrap">
-                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;" onclick='openDonationForm(${JSON.stringify(r)})'>Edit</button>
-                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;color:#c00;border-color:#c00;margin-left:4px" onclick="deleteDonation('${r.id}','${(r.donor_name||'Anonymous').replace(/'/g,"\\'")}')">Delete</button>
+                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;" onclick='openDonationForm(${esc(JSON.stringify(r))})'>Edit</button>
+                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;color:#c00;border-color:#c00;margin-left:4px" onclick="deleteDonation('${r.id}','${escJs(r.donor_name||'Anonymous')}')">Delete</button>
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="6">No donations yet — click Sync Wix to import</td></tr>'}
@@ -3357,7 +3362,7 @@ async function renderDonations(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3412,8 +3417,8 @@ function openDonationForm(existing) {
   const isEdit = existing && existing.id;
   const sel = (id, val) => `<select id="${id}" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">`;
   openDrawer(isEdit ? 'Edit Donation' : 'Log Donation',
-    `<div class="form-group"><label>Donor Name</label><input type="text" id="don-name" placeholder="Anonymous" value="${isEdit ? (existing.donor_name||'') : ''}"></div>
-     <div class="form-group"><label>Donor Email</label><input type="email" id="don-email" placeholder="optional" value="${isEdit ? (existing.donor_email||'') : ''}"></div>
+    `<div class="form-group"><label>Donor Name</label><input type="text" id="don-name" placeholder="Anonymous" value="${isEdit ? esc(existing.donor_name||'') : ''}"></div>
+     <div class="form-group"><label>Donor Email</label><input type="email" id="don-email" placeholder="optional" value="${isEdit ? esc(existing.donor_email||'') : ''}"></div>
      <div class="form-group"><label>Amount *</label><input type="number" id="don-amount" step="0.01" min="0" placeholder="0.00" value="${isEdit ? (existing.amount||'') : ''}"></div>
      <div class="form-group"><label>Frequency</label>
        <select id="don-freq" style="width:100%;padding:10px 12px;border:1px solid var(--gray-2);font-size:14px">
@@ -3429,8 +3434,8 @@ function openDonationForm(existing) {
          <option value="other"  ${(isEdit&&existing.type==='other')?'selected':''}>Other</option>
        </select></div>
      <div class="form-group"><label>Date *</label><input type="date" id="don-date" value="${isEdit ? (existing.date||'').slice(0,10) : new Date().toISOString().slice(0,10)}"></div>
-     <div class="form-group"><label>Source</label><input type="text" id="don-source" placeholder="Website, event, direct, etc." value="${isEdit ? (existing.source||'') : ''}"></div>
-     <div class="form-group"><label>Notes</label><input type="text" id="don-notes" placeholder="Optional" value="${isEdit ? (existing.notes||'') : ''}"></div>
+     <div class="form-group"><label>Source</label><input type="text" id="don-source" placeholder="Website, event, direct, etc." value="${isEdit ? esc(existing.source||'') : ''}"></div>
+     <div class="form-group"><label>Notes</label><input type="text" id="don-notes" placeholder="Optional" value="${isEdit ? esc(existing.notes||'') : ''}"></div>
      <div class="alert alert-error" id="don-err" style="display:none"></div>`,
     `<button class="btn" onclick="saveDonation('${isEdit ? existing.id : ''}')">${isEdit ? 'Update Donation' : 'Save Donation'}</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
@@ -3483,7 +3488,7 @@ async function quickPayReimb(id, method, amount) {
     });
     renderPayments(STATE.filter);
   } catch(e) {
-    if (cell) cell.innerHTML = `<span style="color:#c00;font-size:11px">${e.message}</span>`;
+    if (cell) cell.innerHTML = `<span style="color:#c00;font-size:11px">${esc(e.message)}</span>`;
   }
 }
 
@@ -3583,8 +3588,8 @@ async function renderUsers() {
           <tbody>
             ${rows.map(r => `
               <tr>
-                <td><strong>${r.name||'—'}</strong></td>
-                <td style="font-size:13px">${r.username}</td>
+                <td><strong>${esc(r.name||'—')}</strong></td>
+                <td style="font-size:13px">${esc(r.username)}</td>
                 <td><span class="badge badge-${r.role==='admin'?'active':r.role==='family'?'pending':r.role==='volunteer'?'shopper':'inactive'}" style="text-transform:capitalize">${r.role}</span></td>
                 <td>${linkedLabel(r)}</td>
                 <td>${lastLoginLabel(r)}</td>
@@ -3592,14 +3597,14 @@ async function renderUsers() {
                 <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
-                  <button class="btn btn-sm btn-outline" style="margin-left:4px" onclick="openResetPassword('${r.id}','${r.username}','${r.name||r.username}')">🔑 Reset PW</button>
+                  <button class="btn btn-sm btn-outline" style="margin-left:4px" onclick="openResetPassword('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}')">🔑 Reset PW</button>
                 </td>
               </tr>`).join('')}
           </tbody>
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3615,7 +3620,7 @@ function openResetPassword(uid, username, name) {
        </label>
        <div style="font-size:11px;color:var(--gray-4);margin-top:4px;margin-left:24px;">Uncheck this if you want to set a fixed password the user can keep using directly.</div>
      </div>`,
-    `<button class="btn" onclick="doResetPassword('${uid}','${username}')">Generate New Password</button>
+    `<button class="btn" onclick="doResetPassword('${uid}','${escJs(username)}')">Generate New Password</button>
      <button class="btn btn-outline" onclick="closeDrawer()" style="margin-left:8px">Cancel</button>`
   );
 }
@@ -3629,11 +3634,11 @@ async function doResetPassword(uid, username) {
          Share these credentials with the user.${mustChange ? ' They will be asked to set a new password on first login.' : ''}
        </p>
        <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-family:monospace;font-size:15px;line-height:2">
-         <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${res.username}</strong></div>
-         <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">NEW PASSWORD</span><br><strong>${res.new_password}</strong></div>
+         <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${esc(res.username)}</strong></div>
+         <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">NEW PASSWORD</span><br><strong>${esc(res.new_password)}</strong></div>
        </div>
        <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
-       ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Emailed to ${res.email}</p>` :
+       ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Emailed to ${esc(res.email)}</p>` :
          res.email ? `<p style="font-size:12px;color:#c00;margin-top:4px">⚠ Email failed — share manually</p>` :
          `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email on file — share manually</p>`}`,
       `<button class="btn" onclick="closeDrawer();renderUsers()">Done</button>`
@@ -3679,19 +3684,19 @@ function openUserForm(idOrObj) {
   // Load volunteers and families for linked record dropdown
   Promise.all([GET('/volunteers'), GET('/families')]).then(([vols, fams]) => {
     const volOpts = vols.filter(v=>v.status==='active').map(v =>
-      `<option value="${v.id}" data-type="volunteer" ${r.linked_id===v.id&&r.linked_type==='volunteer'?'selected':''}>${v.name}</option>`).join('');
+      `<option value="${v.id}" data-type="volunteer" ${r.linked_id===v.id&&r.linked_type==='volunteer'?'selected':''}>${esc(v.name)}</option>`).join('');
     const famOpts = fams.filter(f=>f.status==='active').map(f =>
-      `<option value="${f.id}" data-type="family" ${r.linked_id===f.id&&r.linked_type==='family'?'selected':''}>${f.name} (${f.family_code||''})</option>`).join('');
+      `<option value="${f.id}" data-type="family" ${r.linked_id===f.id&&r.linked_type==='family'?'selected':''}>${esc(f.name)} (${esc(f.family_code||'')})</option>`).join('');
 
     openDrawer(r.id ? 'Edit User' : 'Add User',
       `<div class="form-section">Account</div>
        <div class="form-group">
          <label>Name</label>
-         <input type="text" id="u-name" value="${r.name||''}">
+         <input type="text" id="u-name" value="${esc(r.name||'')}">
        </div>
        <div class="form-group">
          <label>Username *</label>
-         <input type="text" id="u-username" value="${r.username||''}" ${r.id?'readonly':''}>
+         <input type="text" id="u-username" value="${esc(r.username||'')}" ${r.id?'readonly':''}>
        </div>
        <div class="form-group">
          <label>${r.id?'New Password (leave blank = auto-generate temp)':'Password (leave blank = auto-generate temp)'}</label>
@@ -3725,7 +3730,7 @@ function openUserForm(idOrObj) {
        <div class="form-section" style="margin-top:16px">Contact</div>
        <div class="form-group">
          <label>Email</label>
-         <input type="email" id="u-email" value="${r.email||''}" placeholder="user@example.com">
+         <input type="email" id="u-email" value="${esc(r.email||'')}" placeholder="user@example.com">
        </div>
        <div class="alert alert-error" id="user-err" style="display:none"></div>`,
       `<button class="btn" onclick="saveUser()">Save</button>
@@ -3735,15 +3740,15 @@ function openUserForm(idOrObj) {
   }).catch(() => {
     // Fallback without linked dropdown
     openDrawer(r.id ? 'Edit User' : 'Add User',
-      `<div class="form-group"><label>Name</label><input type="text" id="u-name" value="${r.name||''}"></div>
-       <div class="form-group"><label>Username *</label><input type="text" id="u-username" value="${r.username||''}" ${r.id?'readonly':''}></div>
+      `<div class="form-group"><label>Name</label><input type="text" id="u-name" value="${esc(r.name||'')}"></div>
+       <div class="form-group"><label>Username *</label><input type="text" id="u-username" value="${esc(r.username||'')}" ${r.id?'readonly':''}></div>
        <div class="form-group"><label>Password</label><input type="password" id="u-password"></div>
        <div class="form-group"><label>Role</label><select id="u-role">
          ${['admin','treasurer','finance','volunteer','family','viewer'].map(v=>`<option value="${v}" ${r.role===v?'selected':''}>${v}</option>`).join('')}
        </select></div>
        <input type="hidden" id="u-linked-id" value="${r.linked_id||''}">
        <input type="hidden" id="u-linked-type" value="${r.linked_type||''}">
-       <div class="form-group"><label>Email</label><input type="email" id="u-email" value="${r.email||''}"></div>
+       <div class="form-group"><label>Email</label><input type="email" id="u-email" value="${esc(r.email||'')}"></div>
        <div class="alert alert-error" id="user-err" style="display:none"></div>`,
       `<button class="btn" onclick="saveUser()">Save</button><button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
     );
@@ -3813,7 +3818,7 @@ async function renderOrders() {
     STATE._ordersSearch  = STATE._ordersSearch  || '';
 
     const cycleOptions = cycles.map(c =>
-      `<option value="${c.id}" ${c.id === STATE._ordersCycleId ? 'selected' : ''}>${c.title} (${c.status})</option>`
+      `<option value="${c.id}" ${c.id === STATE._ordersCycleId ? 'selected' : ''}>${esc(c.title)} (${c.status})</option>`
     ).join('');
 
     document.getElementById('content').innerHTML = `
@@ -3825,7 +3830,7 @@ async function renderOrders() {
                     onchange="STATE._ordersCycleId=this.value;loadOrders()">
               ${cycleOptions}
             </select>
-            <input class="search-input" id="orders-search" placeholder="Search family…" value="${STATE._ordersSearch}"
+            <input class="search-input" id="orders-search" placeholder="Search family…" value="${esc(STATE._ordersSearch)}"
                    oninput="STATE._ordersSearch=this.value;loadOrders()">
           </div>
         </div>
@@ -3841,7 +3846,7 @@ async function renderOrders() {
 
     if (STATE._ordersCycleId) loadOrders();
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3875,9 +3880,9 @@ async function loadOrders() {
     const html = rows.map(o => {
       const sStyle = statusStyle[o.status] || '';
       const items  = o.items && o.items.length
-        ? `<span style="font-size:11px;color:var(--gray-5);">${o.items.slice(0,3).join(', ')}${o.items.length>3?` +${o.items.length-3}`:''}</span>`
+        ? `<span style="font-size:11px;color:var(--gray-5);">${esc(o.items.slice(0,3).join(', '))}${o.items.length>3?` +${o.items.length-3}`:''}</span>`
         : `<span style="color:var(--gray-3);font-size:11px;">—</span>`;
-      const safeName = (o.family_name||'').replace(/'/g,"\\'");
+      const safeName = escJs(o.family_name||'');
       const actions = o.status === 'no_order' ? `
         <button class="btn btn-sm" style="background:#1a8754;color:#fff;font-size:11px;"
           onclick="manualConfirmFamily('${o.id}','${safeName}')">＋ Add to Cycle</button>` : `
@@ -3890,15 +3895,15 @@ async function loadOrders() {
         <button class="btn btn-sm btn-outline" style="font-size:11px;margin-left:4px;" title="Preview portal"
           onclick="previewFamilyPortal('${o.family_id}')">👁</button>`;
       const notesFlag = o.family_notes
-        ? `<span title="${(o.family_notes||'').replace(/"/g,'&quot;')}" style="cursor:help;margin-left:4px;font-size:13px;" onclick="alert('Notes: '+${JSON.stringify(o.family_notes||'')})">💬</span>`
+        ? `<span title="${esc(o.family_notes||'')}" style="cursor:help;margin-left:4px;font-size:13px;" onclick="alert('Notes: '+${esc(JSON.stringify(o.family_notes||''))})">💬</span>`
         : '';
       return `<tr>
-        <td><strong>${o.family_name}</strong>${notesFlag}<br><span style="font-family:monospace;font-size:11px;color:var(--gray-4)">${o.family_code||''}</span></td>
-        <td style="font-size:12px;font-weight:700;">${bundleLabel[o.bundle_size]||o.bundle_size||'—'}</td>
+        <td><strong>${esc(o.family_name)}</strong>${notesFlag}<br><span style="font-family:monospace;font-size:11px;color:var(--gray-4)">${esc(o.family_code||'')}</span></td>
+        <td style="font-size:12px;font-weight:700;">${esc(bundleLabel[o.bundle_size]||o.bundle_size||'—')}</td>
         <td><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;${sStyle}">${statusLabel(o.status)}</span></td>
         <td>${items}</td>
-        <td style="font-size:12px;">${o.shopper||'<span style="color:var(--gray-3)">—</span>'}</td>
-        <td style="font-size:12px;">${o.deliverer||'<span style="color:var(--gray-3)">—</span>'}</td>
+        <td style="font-size:12px;">${o.shopper?esc(o.shopper):'<span style="color:var(--gray-3)">—</span>'}</td>
+        <td style="font-size:12px;">${o.deliverer?esc(o.deliverer):'<span style="color:var(--gray-3)">—</span>'}</td>
         <td style="white-space:nowrap">${actions}</td>
       </tr>`;
     }).join('');
@@ -3911,7 +3916,7 @@ async function loadOrders() {
       <div style="padding:10px 16px;font-size:12px;color:var(--gray-4);border-top:1px solid var(--gray-2);">
         ${rows.length} ${filter==='no_order'?'families without orders':'orders'}</div>`;
   } catch(e) {
-    body.innerHTML = `<p style="padding:16px;color:#c00">${e.message}</p>`;
+    body.innerHTML = `<p style="padding:16px;color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3955,7 +3960,7 @@ async function renderActiveCycle() {
     document.getElementById('page-title').textContent = active.title;
     await viewCycleDetail(active.id);
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -3987,7 +3992,7 @@ async function renderDeliveries(filterStatus) {
           <tbody>
             ${_cyclesCache.length ? _cyclesCache.map(c => `
               <tr style="cursor:pointer" onclick="viewCycleDetail('${c.id}')">
-                <td><strong>${c.title}</strong></td>
+                <td><strong>${esc(c.title)}</strong></td>
                 <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)} – ${fmtDate(c.delivery_date_end)}</td>
                 <td><span class="badge ${statusColors[c.status]||'badge-pending'}">${statusLabels[c.status]||c.status}</span></td>
                 <td id="conf-${c.id}" style="font-size:12px;color:var(--gray-4)">—</td>
@@ -4008,7 +4013,7 @@ async function renderDeliveries(filterStatus) {
     // Load confirmation counts async
     _cyclesCache.forEach(c => loadConfirmationCount(c.id));
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -4071,7 +4076,7 @@ function openCycleForm(id) {
   openDrawer(id ? 'Edit Delivery' : 'New Delivery', `
     <div class="form-group">
       <label>Delivery Title *</label>
-      <input type="text" id="cy-title" placeholder="e.g. May 9–10, 2026" value="${c?.title||''}">
+      <input type="text" id="cy-title" placeholder="e.g. May 9–10, 2026" value="${esc(c?.title||'')}">
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -4093,7 +4098,7 @@ function openCycleForm(id) {
     </p>`}
     <div class="form-group">
       <label>Notes</label>
-      <textarea id="cy-notes">${c?.notes||''}</textarea>
+      <textarea id="cy-notes">${esc(c?.notes||'')}</textarea>
     </div>
     <div class="alert alert-error" id="cy-err"></div>`,
     `<button class="btn" onclick="saveCycle()">Save</button>
@@ -4207,17 +4212,17 @@ async function viewCycleDetail(cycleId) {
           <tbody>
             ${orders.length ? orders.map(o => `
               <tr id="frow-${o.id}">
-                <td><strong>${o.family_name}</strong></td>
-                <td style="font-size:12px">${o.family_phone||'—'}</td>
-                <td style="font-size:12px">${{S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size}</td>
+                <td><strong>${esc(o.family_name)}</strong></td>
+                <td style="font-size:12px">${esc(o.family_phone||'—')}</td>
+                <td style="font-size:12px">${esc({S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size)}</td>
                 <td>${confStatusBadge(o)}</td>
                 <td style="font-size:11px;color:var(--gray-4);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                  ${o.selected_items?.length ? o.selected_items.map(i=>`${i.name}${i.quantity>1?' ×'+i.quantity:''}`).join(', ') : '—'}
+                  ${o.selected_items?.length ? o.selected_items.map(i=>`${esc(i.name)}${i.quantity>1?' ×'+i.quantity:''}`).join(', ') : '—'}
                 </td>
                 <td style="white-space:nowrap">${overrideBtns(o)}</td>
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm btn-outline" style="font-size:11px;padding:2px 8px"
-                    onclick="openEditOrderItems('${o.id}','${o.family_name}','${o.bundle_size}','${cycleId}')">✏ Items</button>
+                    onclick="openEditOrderItems('${o.id}','${escJs(o.family_name)}','${o.bundle_size}','${cycleId}')">✏ Items</button>
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="7">No families notified yet — notifications send 7 days before delivery</td></tr>'}
@@ -4244,8 +4249,8 @@ async function viewCycleDetail(cycleId) {
         const slotBadge = slot => {
           if (!slot) return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:#c00">⚠ No slot</span>';
           if (slot.status === 'open')      return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:#c00">⚠ Open</span>';
-          if (slot.status === 'claimed')   return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fff8e6;color:#7a6000">⏳ ${slot.claimed_by_name||'?'}</span>`;
-          if (slot.status === 'confirmed') return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ ${slot.claimed_by_name||'?'}</span>`;
+          if (slot.status === 'claimed')   return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fff8e6;color:#7a6000">⏳ ${esc(slot.claimed_by_name||'?')}</span>`;
+          if (slot.status === 'confirmed') return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ ${esc(slot.claimed_by_name||'?')}</span>`;
           if (slot.status === 'complete')  return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ Done</span>`;
           return `<span style="font-size:11px;padding:2px 8px;background:var(--gray-1);color:var(--gray-4)">${slot.status}</span>`;
         };
@@ -4265,8 +4270,8 @@ async function viewCycleDetail(cycleId) {
           const delSlot  = slotMap[o.family_id]?.delivery;
           const needsAttn = (!shopSlot || shopSlot.status==='open') || (!delSlot || delSlot.status==='open');
           return `<tr style="${needsAttn ? 'background:#fffaf8' : ''}">
-            <td><strong>${o.family_name}</strong><br><span style="font-size:11px;color:var(--gray-4);font-family:monospace">${o.family_code||''}</span></td>
-            <td style="font-size:12px">${{S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size}</td>
+            <td><strong>${esc(o.family_name)}</strong><br><span style="font-size:11px;color:var(--gray-4);font-family:monospace">${esc(o.family_code||'')}</span></td>
+            <td style="font-size:12px">${esc({S:'Small',M:'Medium',L:'Large'}[o.bundle_size]||o.bundle_size)}</td>
             <td>${slotBadge(shopSlot)}</td>
             <td>${slotBadge(delSlot)}</td>
           </tr>`;
@@ -4287,7 +4292,7 @@ async function viewCycleDetail(cycleId) {
         </div>`;
       })()}`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -4328,7 +4333,7 @@ async function openEditOrderItems(requestId, familyName, bundleSize, cycleId) {
 
   const catHtml = Object.values(byCat).filter(c => c.items.length).map(c => `
     <div style="margin-bottom:14px">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:6px">${c.name}</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin-bottom:6px">${esc(c.name)}</div>
       ${c.items.map(item => {
         const checked = selectedMap[item.id] !== undefined;
         const qty     = selectedMap[item.id] || 1;
@@ -4339,8 +4344,8 @@ async function openEditOrderItems(requestId, familyName, bundleSize, cycleId) {
             onchange="eiUpdateTotal('${requestId}')"
             style="width:16px;height:16px;cursor:pointer">
           <div style="flex:1">
-            <span style="font-weight:600;font-size:13px">${item.name}</span>
-            <span style="font-size:11px;color:var(--gray-4);margin-left:6px">${item.unit||''}</span>
+            <span style="font-weight:600;font-size:13px">${esc(item.name)}</span>
+            <span style="font-size:11px;color:var(--gray-4);margin-left:6px">${esc(item.unit||'')}</span>
           </div>
           <span style="font-size:12px;font-weight:700;color:#333;min-width:48px;text-align:right">$${price.toFixed(2)}</span>
           ${item.allow_qty ? `
@@ -4361,7 +4366,7 @@ async function openEditOrderItems(requestId, familyName, bundleSize, cycleId) {
   const notesBlock = familyNotes
     ? `<div style="margin-bottom:14px;padding:10px 12px;background:#fff8e6;border:1px solid #f0c040;border-radius:6px;font-size:13px;">
          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#7a4a00;margin-bottom:4px;">💬 Family Notes</div>
-         <div style="color:#5a3000;">${familyNotes.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+         <div style="color:#5a3000;">${esc(familyNotes)}</div>
        </div>` : '';
 
   openDrawer(`Edit Order — ${familyName} (${bundleLabel})`,
@@ -4485,20 +4490,20 @@ async function renderRequests() {
     })[s] || s;
 
     const renderRow = (cr, showActions) => {
-      const itemList = (cr.selected_items||[]).map(i => `<span style="display:inline-block;background:#f5f5f5;border-radius:3px;padding:1px 6px;margin:2px;font-size:11px;">${i.name}</span>`).join('');
+      const itemList = (cr.selected_items||[]).map(i => `<span style="display:inline-block;background:#f5f5f5;border-radius:3px;padding:1px 6px;margin:2px;font-size:11px;">${esc(i.name)}</span>`).join('');
       return `
         <div style="background:#fff;border:1px solid #eee;border-left:3px solid ${cr.status==='pending'?'#f0c040':cr.status==='approved'?'#1a8754':'#ccc'};padding:14px 16px;margin-bottom:10px;">
           <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <div style="flex:1;min-width:200px;">
-              <div style="font-weight:700;font-size:14px;">${cr.family_name} <span style="font-weight:400;font-size:12px;color:#888;font-family:monospace;">${cr.family_code||''}</span></div>
-              <div style="font-size:12px;color:#555;margin-top:2px;">${cr.cycle_title} · ${fmtDate(cr.delivery_date_start)}</div>
+              <div style="font-weight:700;font-size:14px;">${esc(cr.family_name)} <span style="font-weight:400;font-size:12px;color:#888;font-family:monospace;">${esc(cr.family_code||'')}</span></div>
+              <div style="font-size:12px;color:#555;margin-top:2px;">${esc(cr.cycle_title)} · ${fmtDate(cr.delivery_date_start)}</div>
               <div style="font-size:12px;color:#888;margin-top:2px;">Submitted ${fmtTs(cr.created_at)}</div>
             </div>
             <div>${statusBadge(cr.status)}</div>
           </div>
-          ${cr.family_notes ? `<div style="background:#f9f9f9;border-left:2px solid #ddd;padding:6px 10px;font-size:13px;margin-bottom:8px;color:#333;">💬 "${cr.family_notes}"</div>` : ''}
+          ${cr.family_notes ? `<div style="background:#f9f9f9;border-left:2px solid #ddd;padding:6px 10px;font-size:13px;margin-bottom:8px;color:#333;">💬 "${esc(cr.family_notes)}"</div>` : ''}
           ${itemList ? `<div style="margin-bottom:8px;"><div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Requested items:</div>${itemList}</div>` : ''}
-          ${cr.admin_notes ? `<div style="background:#f0faf5;border-left:2px solid #1a8754;padding:6px 10px;font-size:12px;color:#1a5e34;margin-bottom:8px;">📝 Admin note: "${cr.admin_notes}"</div>` : ''}
+          ${cr.admin_notes ? `<div style="background:#f0faf5;border-left:2px solid #1a8754;padding:6px 10px;font-size:12px;color:#1a5e34;margin-bottom:8px;">📝 Admin note: "${esc(cr.admin_notes)}"</div>` : ''}
           ${showActions && cr.status === 'pending' ? `
             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
               <input type="text" id="note-${cr.id}" placeholder="Admin note (optional)" style="flex:1;min-width:200px;border:1px solid #ddd;padding:5px 8px;font-size:12px;font-family:inherit;">
@@ -4527,7 +4532,7 @@ async function renderRequests() {
         ` : ''}
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00;padding:20px">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00;padding:20px">${esc(e.message)}</p>`;
   }
 }
 
@@ -4566,7 +4571,7 @@ async function viewShoppingList(cycleId) {
 
     document.getElementById('content').innerHTML = `
       <div style="margin-bottom:20px">
-        <div style="font-size:13px;font-weight:700;margin-bottom:4px">${cycle.title||''}</div>
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px">${esc(cycle.title||'')}</div>
         <div style="font-size:12px;color:var(--gray-4)">
           Delivery: ${fmtDate(cycle.delivery_date_start)} – ${fmtDate(cycle.delivery_date_end)}
           · ${data.total_orders} order${data.total_orders!==1?'s':''}
@@ -4576,7 +4581,7 @@ async function viewShoppingList(cycleId) {
         Object.entries(byCategory).map(([cat, items]) => `
           <div class="table-card" style="margin-bottom:16px">
             <div class="table-header">
-              <span class="table-title">${cat}</span>
+              <span class="table-title">${esc(cat)}</span>
             </div>
             <table>
               <thead><tr>
@@ -4584,15 +4589,15 @@ async function viewShoppingList(cycleId) {
               </tr></thead>
               <tbody>
                 ${items.map(item => `<tr>
-                    <td><strong>${item.item_name}</strong> <span style="color:var(--gray-4);font-size:11px">(${item.unit})</span></td>
-                    <td style="text-align:center;font-weight:700;font-size:15px">${item.total_qty}</td>
+                    <td><strong>${esc(item.item_name)}</strong> <span style="color:var(--gray-4);font-size:11px">(${esc(item.unit)})</span></td>
+                    <td style="text-align:center;font-weight:700;font-size:15px">${esc(item.total_qty)}</td>
                     <td style="text-align:center;color:var(--gray-4);font-size:12px">${item.order_count} order${item.order_count!==1?'s':''}</td>
                   </tr>`).join('')}
               </tbody>
             </table>
           </div>`).join('')}`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -4624,10 +4629,10 @@ async function viewSlotBoard(cycleId) {
         <thead><tr><th>Family ID</th><th>Size</th><th>Status</th><th>Assigned To</th><th>Task Date</th></tr></thead>
         <tbody>
           ${rows.map(s => `<tr>
-            <td><span style="font-family:monospace;font-weight:700;font-size:12px">${s.family_code||'—'}</span></td>
+            <td><span style="font-family:monospace;font-weight:700;font-size:12px">${esc(s.family_code||'—')}</span></td>
             <td style="font-size:12px;color:var(--gray-4)">${s.family_size || '?'} people</td>
             <td><span class="badge ${s.status==='open'?'badge-pending':s.status==='claimed'?'badge-active':'badge-inactive'}">${s.status}</span></td>
-            <td>${s.claimed_by_name || '<span style="color:var(--gray-4)">—</span>'}</td>
+            <td>${s.claimed_by_name ? esc(s.claimed_by_name) : '<span style="color:var(--gray-4)">—</span>'}</td>
             <td style="font-size:12px">${s.task_date ? fmtDate(s.task_date) : '—'}</td>
           </tr>`).join('')}
         </tbody>
@@ -4651,7 +4656,7 @@ async function viewSlotBoard(cycleId) {
         </div>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -4687,7 +4692,7 @@ async function renderCatalog() {
       ${Object.values(byCat).map(({ cat, items }) => `
         <div class="table-card" style="margin-bottom:16px">
           <div class="table-header">
-            <span class="table-title">${cat.name}</span>
+            <span class="table-title">${esc(cat.name)}</span>
             <div style="display:flex;gap:8px;align-items:center">
               <span class="badge ${cat.is_active?'badge-active':'badge-inactive'}">${cat.is_active?'Active':'Hidden'}</span>
               <button class="btn btn-outline btn-sm" onclick="openCategoryForm('${cat.id}')">Edit</button>
@@ -4703,8 +4708,8 @@ async function renderCatalog() {
                 const priceLabel = (item.price && item.price > 0) ? `$${parseFloat(item.price).toFixed(2)}` : '—';
                 const qtyLabel   = item.allow_qty ? '<span style="color:var(--green);font-weight:700">+/−</span>' : '—';
                 return `<tr>
-                  <td><strong>${item.name}</strong></td>
-                  <td style="font-size:12px;color:var(--gray-4)">${item.unit||'—'}</td>
+                  <td><strong>${esc(item.name)}</strong></td>
+                  <td style="font-size:12px;color:var(--gray-4)">${esc(item.unit||'—')}</td>
                   <td style="font-size:12px;font-weight:600">${priceLabel}</td>
                   <td style="font-size:12px;text-align:center">${qtyLabel}</td>
                   <td style="font-size:12px" data-bq="${item.id}_S">—</td>
@@ -4723,7 +4728,7 @@ async function renderCatalog() {
     // Load and display bundle quantities
     loadBundleQtysIntoTable();
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
@@ -4745,7 +4750,7 @@ function openCategoryForm(id) {
   openDrawer(id ? 'Edit Category' : 'Add Category', `
     <div class="form-group">
       <label>Category Name *</label>
-      <input type="text" id="cat-name" value="${cat?.name||''}">
+      <input type="text" id="cat-name" value="${esc(cat?.name||'')}">
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -4786,7 +4791,7 @@ async function openItemForm(id, defaultCatId) {
   STATE.editId = id || null;
   const item = id ? _catalogItems.find(i => i.id === id) : null;
   const catOptions = _catalogCats.map(c =>
-    `<option value="${c.id}" ${(item?.category_id||defaultCatId)===c.id?'selected':''}>${c.name}</option>`
+    `<option value="${c.id}" ${(item?.category_id||defaultCatId)===c.id?'selected':''}>${esc(c.name)}</option>`
   ).join('');
 
   // Pre-load existing quantities if editing
@@ -4811,12 +4816,12 @@ async function openItemForm(id, defaultCatId) {
     </div>
     <div class="form-group">
       <label>Item Name *</label>
-      <input type="text" id="item-name" value="${item?.name||''}">
+      <input type="text" id="item-name" value="${esc(item?.name||'')}">
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Unit</label>
-        <input type="text" id="item-unit" placeholder="e.g. lb, can, bag" value="${item?.unit||''}">
+        <input type="text" id="item-unit" placeholder="e.g. lb, can, bag" value="${esc(item?.unit||'')}">
       </div>
       <div class="form-group">
         <label>Status</label>
@@ -4845,15 +4850,15 @@ async function openItemForm(id, defaultCatId) {
     <div class="form-row">
       <div class="form-group">
         <label>Small</label>
-        <input type="number" id="item-qty-s" min="0" step="0.5" placeholder="—" value="${qtyS}" style="text-align:center">
+        <input type="number" id="item-qty-s" min="0" step="0.5" placeholder="—" value="${esc(qtyS)}" style="text-align:center">
       </div>
       <div class="form-group">
         <label>Medium</label>
-        <input type="number" id="item-qty-m" min="0" step="0.5" placeholder="—" value="${qtyM}" style="text-align:center">
+        <input type="number" id="item-qty-m" min="0" step="0.5" placeholder="—" value="${esc(qtyM)}" style="text-align:center">
       </div>
       <div class="form-group">
         <label>Large</label>
-        <input type="number" id="item-qty-l" min="0" step="0.5" placeholder="—" value="${qtyL}" style="text-align:center">
+        <input type="number" id="item-qty-l" min="0" step="0.5" placeholder="—" value="${esc(qtyL)}" style="text-align:center">
       </div>
     </div>
     <div class="alert alert-error" id="item-err"></div>`,
@@ -4916,15 +4921,15 @@ async function openBundleQuantitiesForm() {
   const rows = items.map(item => `
     <tr>
       <td style="font-size:12px;padding:8px 10px">
-        <strong>${item.name}</strong>
-        <span style="color:var(--gray-4);font-size:11px"> (${item.unit})</span>
-        <div style="font-size:10px;color:var(--gray-4)">${item.category_name}</div>
+        <strong>${esc(item.name)}</strong>
+        <span style="color:var(--gray-4);font-size:11px"> (${esc(item.unit)})</span>
+        <div style="font-size:10px;color:var(--gray-4)">${esc(item.category_name)}</div>
       </td>
       ${['S','M','L'].map(size => `
         <td style="padding:6px 8px">
           <input type="text" style="width:80px;border:1px solid var(--gray-3);padding:5px 8px;font-size:12px;font-family:var(--font)"
             id="bq-${item.id}-${size}"
-            value="${bqMap[item.id+'_'+size]||''}"
+            value="${esc(bqMap[item.id+'_'+size]||'')}"
             placeholder="${size}">
         </td>`).join('')}
     </tr>`).join('');
@@ -4945,7 +4950,7 @@ async function openBundleQuantitiesForm() {
       <tbody>${rows}</tbody>
     </table>
     <div class="alert alert-error" id="bq-err"></div>`,
-    `<button class="btn" onclick="saveBundleQuantities(${JSON.stringify(items.map(i=>i.id))})">Save All</button>
+    `<button class="btn" onclick="saveBundleQuantities(${esc(JSON.stringify(items.map(i=>i.id)))})">Save All</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
   );
 }
@@ -5092,10 +5097,10 @@ async function renderPricingTable() {
               const qL = _ptBqMap[item.id+'_L'] ?? 0;
               return `
               <tr id="pt-row-${item.id}">
-                <td><strong>${item.name}</strong></td>
-                <td style="font-size:12px;color:var(--gray-4)">${catMap[item.category_id]||'—'}</td>
+                <td><strong>${esc(item.name)}</strong></td>
+                <td style="font-size:12px;color:var(--gray-4)">${esc(catMap[item.category_id]||'—')}</td>
                 <td>
-                  <input type="text" id="pt-unit-${item.id}" value="${item.unit||''}"
+                  <input type="text" id="pt-unit-${item.id}" value="${esc(item.unit||'')}"
                     style="width:90px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:13px"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
@@ -5111,7 +5116,7 @@ async function renderPricingTable() {
                   <input type="checkbox" id="pt-default-${item.id}" ${item.is_default?'checked':''} title="Pre-selected on order form">
                 </td>
                 <td>
-                  <input type="text" id="pt-group-${item.id}" value="${item.group_id||''}"
+                  <input type="text" id="pt-group-${item.id}" value="${esc(item.group_id||'')}"
                     style="width:100px;padding:4px 6px;border:1px solid var(--gray-2);border-radius:4px;font-size:12px"
                     placeholder="e.g. beans"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
@@ -5120,17 +5125,17 @@ async function renderPricingTable() {
                   <input type="checkbox" id="pt-ft-${item.id}" ${item.is_free_text?'checked':''} title="Show free-text input">
                 </td>
                 <td style="background:var(--gray-1);text-align:center">
-                  <input type="number" id="pt-qS-${item.id}" value="${qS}" min="0"
+                  <input type="number" id="pt-qS-${item.id}" value="${esc(qS)}" min="0"
                     style="${inputStyle}" placeholder="0"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
                 <td style="background:var(--gray-1);text-align:center">
-                  <input type="number" id="pt-qM-${item.id}" value="${qM}" min="0"
+                  <input type="number" id="pt-qM-${item.id}" value="${esc(qM)}" min="0"
                     style="${inputStyle}" placeholder="0"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
                 <td style="background:var(--gray-1);text-align:center">
-                  <input type="number" id="pt-qL-${item.id}" value="${qL}" min="0"
+                  <input type="number" id="pt-qL-${item.id}" value="${esc(qL)}" min="0"
                     style="${inputStyle}" placeholder="0"
                     onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();savePricingRow('${item.id}');}">
                 </td>
@@ -5147,7 +5152,7 @@ async function renderPricingTable() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${e.message}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
   }
 }
 
