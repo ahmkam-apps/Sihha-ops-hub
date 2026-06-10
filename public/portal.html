@@ -34,7 +34,7 @@
   }
   body { font-family: var(--font); background: var(--off-white); color: var(--black); min-height: 100vh; }
 
-  /* Header */
+  /* ── Header ── */
   .header {
     background: var(--black); color: var(--white);
     padding: 14px 20px; display: flex; justify-content: space-between; align-items: center;
@@ -48,111 +48,145 @@
   }
   .btn-logout:hover { border-color: var(--white); color: var(--white); }
 
-  /* Main */
-  .container { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
-
-  /* Login screen */
-  .login-wrap {
-    max-width: 380px; margin: 60px auto; background: var(--white);
-    border: 1px solid var(--gray-2); padding: 32px;
-  }
-  .login-title { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
-  .login-sub { font-size: 13px; color: var(--gray-4); margin-bottom: 24px; }
-  label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
-          letter-spacing: 0.06em; margin-bottom: 6px; color: var(--gray-5); }
-  input[type="tel"], input[type="text"] {
-    width: 100%; border: 1px solid var(--gray-2); padding: 12px 14px;
-    font-family: var(--font); font-size: 16px; background: var(--white);
-    outline: none; -webkit-appearance: none;
-  }
-  input:focus { border-color: var(--black); }
-  .btn {
-    display: inline-block; background: var(--black); color: var(--white);
-    border: none; padding: 12px 24px; font-size: 14px; font-weight: 600;
-    cursor: pointer; font-family: var(--font); width: 100%; margin-top: 16px; letter-spacing: 0.02em;
-  }
-  .btn:hover { background: #333; }
-  .btn-outline {
-    background: transparent; color: var(--black); border: 1px solid var(--black);
-    padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
-    font-family: var(--font); letter-spacing: 0.02em;
-  }
-  .btn-outline:hover { background: var(--gray-1); }
-  .btn-sm { padding: 6px 14px; font-size: 12px; }
-  .btn-green { background: var(--green); }
-  .btn-green:hover { background: #145e2d; }
-  .btn-disabled { background: var(--gray-3); cursor: not-allowed; }
-  .error { color: var(--red); font-size: 13px; margin-top: 10px; display: none; }
-
-  /* Section headings (main page sections) */
-  .section-divider {
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--gray-4); margin: 28px 0 12px; padding-bottom: 8px;
-    border-bottom: 2px solid var(--gray-2); display: flex; align-items: center;
-    justify-content: space-between;
-  }
-  /* History tab */
+  /* ── Tab bar ── */
   .tab-bar {
-    display: flex; border-bottom: 2px solid var(--gray-2); margin-bottom: 24px;
+    display: flex; border-bottom: 2px solid var(--gray-2);
     position: sticky; top: 0; background: var(--off-white); z-index: 50;
   }
   .tab {
     flex: 1; text-align: center;
-    padding: 13px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
-    border-bottom: 2px solid transparent; margin-bottom: -2px; color: var(--gray-4);
-    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 14px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+    border-bottom: 3px solid transparent; margin-bottom: -2px; color: var(--gray-4);
+    text-transform: uppercase; letter-spacing: 0.06em; transition: color 0.15s;
   }
   .tab.active { color: var(--black); border-bottom-color: var(--black); }
+  .tab:hover:not(.active) { color: var(--black); }
 
-  /* Cards */
-  .card { background: var(--white); border: 1px solid var(--gray-2); margin-bottom: 12px; padding: 16px 20px; }
-  .card-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-  .card-meta { font-size: 12px; color: var(--gray-4); margin-bottom: 12px; }
-  .card-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  /* ── Container ── */
+  .container { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
 
-  /* Badges */
-  .badge {
-    display: inline-block; padding: 3px 10px; font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.05em; border-radius: 2px;
+  /* ── Buttons ── */
+  .btn {
+    display: block; width: 100%; background: var(--black); color: var(--white);
+    border: none; padding: 14px 20px; font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: var(--font); letter-spacing: 0.02em; text-align: center;
   }
-  .badge-open { background: #fff3cd; color: #856404; }
-  .badge-claimed { background: #d1e7dd; color: #0a3622; }
-  .badge-complete { background: #e2e3e5; color: #383d41; }
-  .badge-shopping { background: #cff4fc; color: #055160; }
-  .badge-delivery { background: #f8d7da; color: #842029; }
+  .btn:hover { background: #333; }
+  .btn-green { background: var(--green); }
+  .btn-green:hover { background: #145e2d; }
+  .btn-outline {
+    display: block; width: 100%; background: transparent; color: var(--black);
+    border: 1.5px solid var(--black); padding: 13px 20px; font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: var(--font); letter-spacing: 0.02em; text-align: center;
+  }
+  .btn-outline:hover { background: var(--gray-1); }
+  .btn-sm {
+    display: inline-block; width: auto; padding: 7px 16px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .btn-cancel { background: var(--gray-1); color: var(--black); border: 1px solid var(--gray-2); width: 100%; padding: 14px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: var(--font); }
+  .btn-cancel:hover { background: var(--gray-2); }
+  .btn-disabled { background: var(--gray-3); cursor: not-allowed; }
+  .error { color: var(--red); font-size: 13px; margin-top: 10px; display: none; }
 
-  /* Section headings */
-  .section-heading {
+  /* ── Section divider ── */
+  .section-divider {
     font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--gray-4); margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--gray-2);
+    color: var(--gray-4); margin: 0 0 12px; padding-bottom: 8px;
+    border-bottom: 2px solid var(--gray-2); display: flex; align-items: center;
+    justify-content: space-between;
+  }
+  .section-divider + * { margin-top: 0; }
+
+  /* ── Work Cards ── */
+  .work-card {
+    background: var(--white); border: 1px solid var(--gray-2);
+    margin-bottom: 16px; overflow: hidden;
+  }
+  .work-card-header {
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid var(--gray-2);
+    display: flex; justify-content: space-between; align-items: flex-start;
+  }
+  .work-card-role {
+    font-family: var(--font-head); font-size: 20px; font-weight: 800;
+    letter-spacing: -0.02em; line-height: 1;
+  }
+  .work-card-status {
+    font-size: 12px; font-weight: 700; padding: 4px 10px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .status-confirmed { background: #e6f4ea; color: var(--green); }
+  .status-done { background: var(--gray-1); color: var(--gray-4); }
+  .work-card-body { padding: 14px 20px; }
+  .work-card-family {
+    font-family: monospace; font-size: 18px; font-weight: 700;
+    letter-spacing: 0.04em; margin-bottom: 3px;
+  }
+  .work-card-meta { font-size: 12px; color: var(--gray-4); margin-bottom: 12px; }
+  .work-card-items {
+    background: var(--off-white); border: 1px solid var(--gray-2);
+    padding: 10px 14px; margin-bottom: 12px; font-size: 13px; line-height: 1.7;
+  }
+  .work-card-items-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--gray-4); margin-bottom: 5px;
+  }
+  .work-card-address {
+    background: #fffbeb; border: 1px solid #fcd34d;
+    padding: 10px 14px; margin-bottom: 12px; font-size: 13px; font-weight: 600;
+  }
+  .work-card-address-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #92400e; margin-bottom: 4px;
+  }
+  .work-card-footer { padding: 0 20px 20px; }
+  .receipt-submitted-note {
+    font-size: 12px; color: var(--green); font-weight: 600;
+    margin-top: 8px; text-align: center;
   }
 
-  /* Cycle selector */
-  .cycle-select-wrap { margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }
-  select {
-    border: 1px solid var(--gray-2); padding: 8px 12px; font-family: var(--font); font-size: 13px;
-    background: var(--white); outline: none; cursor: pointer;
+  /* ── Sign-up family rows ── */
+  .signup-card {
+    background: var(--white); border: 1px solid var(--gray-2);
+    margin-bottom: 8px; padding: 14px 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 10px;
   }
-  select:focus { border-color: var(--black); }
-
-  /* Empty state */
-  .empty { text-align: center; color: var(--gray-4); font-size: 13px; padding: 40px 20px; }
-
-  /* Address reveal */
-  .address-box {
-    background: #fff3cd; border: 1px solid #ffc107; padding: 10px 14px;
-    font-size: 13px; margin-top: 8px; font-weight: 600;
+  .signup-card-left {}
+  .signup-family-code { font-family: monospace; font-size: 15px; font-weight: 700; }
+  .signup-family-meta { font-size: 12px; color: var(--gray-4); margin-top: 2px; }
+  .signup-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .slot-btn {
+    padding: 7px 16px; font-size: 12px; font-weight: 700;
+    cursor: pointer; font-family: var(--font); border: none; letter-spacing: 0.02em;
   }
+  .slot-btn-open { background: var(--black); color: var(--white); }
+  .slot-btn-open:hover { background: #333; }
+  .slot-btn-mine { color: var(--white); border: none; }
+  .slot-btn-taken { background: var(--gray-1); color: var(--gray-4); border: 1px solid var(--gray-2); font-size: 11px; padding: 6px 10px; cursor: default; }
 
-  /* History */
-  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  /* ── Cycle accordion for upcoming ── */
+  .cycle-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; cursor: pointer; background: var(--gray-1);
+    border: 1px solid var(--gray-2); margin-bottom: -1px;
+  }
+  .cycle-header-title { font-size: 14px; font-weight: 700; }
+  .cycle-header-meta { font-size: 12px; color: var(--gray-4); margin-top: 2px; }
+  .cycle-toggle { font-size: 20px; color: var(--gray-4); line-height: 1; font-weight: 300; }
+  .cycle-families-wrap { border: 1px solid var(--gray-2); border-top: none; margin-bottom: 16px; display: none; }
+
+  /* ── Stat pills (History) ── */
+  .stat-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
   .stat-pill {
     background: var(--white); border: 1px solid var(--gray-2);
-    padding: 12px 18px; flex: 1; min-width: 100px; text-align: center;
+    padding: 14px 16px; flex: 1; min-width: 90px; text-align: center;
   }
   .stat-pill-num { font-family: var(--font-head); font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -0.04em; }
-  .stat-pill-lbl { font-size: 10px; color: var(--gray-4); text-transform: uppercase;
-                   letter-spacing: 0.06em; margin-top: 4px; }
+  .stat-pill-lbl { font-size: 10px; color: var(--gray-4); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+
+  /* ── History rows ── */
   .history-row {
     background: var(--white); border: 1px solid var(--gray-2);
     padding: 12px 16px; margin-bottom: 8px;
@@ -161,13 +195,30 @@
   .history-row-left { font-size: 13px; }
   .history-row-meta { font-size: 12px; color: var(--gray-4); margin-top: 2px; }
 
-  /* Footer */
-  .footer { text-align: center; font-size: 12px; color: var(--gray-3); margin-top: 40px; padding: 20px; }
-  .footer a { color: var(--gray-3); }
+  /* ── Badges ── */
+  .badge {
+    display: inline-block; padding: 3px 10px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .badge-shopping { background: #cff4fc; color: #055160; }
+  .badge-delivery { background: #f8d7da; color: #842029; }
+  .badge-stock    { background: #e2e3e5; color: #383d41; }
+  .badge-complete { background: #e2e3e5; color: #383d41; }
 
-  .spinner { display: inline-block; font-size: 13px; color: var(--gray-4); padding: 20px 0; }
+  /* ── Order status indicator ── */
+  .order-chip {
+    font-size: 11px; font-weight: 700; padding: 3px 8px; white-space: nowrap;
+  }
+  .order-chip-yes { background: #e6f4ea; color: var(--green); }
+  .order-chip-no  { background: #fff8e1; color: #b45309; }
 
-  /* Receipt modal overlay */
+  /* ── Misc ── */
+  .empty { text-align: center; color: var(--gray-4); font-size: 14px; padding: 48px 20px; line-height: 1.6; }
+  .empty-cta { margin-top: 14px; display: inline-block; font-size: 13px; font-weight: 700; color: var(--black); text-decoration: underline; cursor: pointer; }
+  .spinner { display: block; font-size: 13px; color: var(--gray-4); padding: 32px 0; text-align: center; }
+  .section-gap { margin-top: 32px; }
+
+  /* ── Receipt modal ── */
   .modal-overlay {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 200;
     align-items: flex-end; justify-content: center;
@@ -195,86 +246,73 @@
   .file-upload-area:hover { border-color: var(--black); color: var(--black); }
   .file-preview { max-width: 100%; max-height: 160px; margin-top: 10px; border: 1px solid var(--gray-2); }
   .btn-row { display: flex; gap: 10px; margin-top: 18px; }
-  .btn-row .btn { flex: 1; margin-top: 0; }
-  .btn-cancel { background: var(--gray-1); color: var(--black); border: 1px solid var(--gray-2); }
-  .btn-cancel:hover { background: var(--gray-2); }
-  .reimb-status {
-    display: inline-block; padding: 3px 9px; font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.04em; border-radius: 2px; margin-left: 6px;
-  }
-  .reimb-pending  { background: #fff3cd; color: #856404; }
-  .reimb-paid     { background: #d1e7dd; color: #0a3622; }
-  .reimb-rejected { background: #f8d7da; color: #842029; }
+  .btn-row > * { flex: 1; }
 
   @media (max-width: 480px) {
-    .login-wrap { margin: 24px auto; padding: 24px; }
-    .container { padding: 16px 12px; }
+    .container { padding: 16px 12px 48px; }
+    .work-card-role { font-size: 17px; }
+    .work-card-family { font-size: 16px; }
+  }
+
+  /* ── Login screen ── */
+  .login-wrap {
+    max-width: 380px; margin: 60px auto; background: var(--white);
+    border: 1px solid var(--gray-2); padding: 32px;
   }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-logo">Sihha · Volunteer Portal</div>
+  <div class="header-logo">Sihha · Volunteer</div>
   <div class="header-right">
     <span id="vol-name-display"></span>
     <button class="btn-logout" id="logout-btn" style="display:none" onclick="logout()">Log out</button>
   </div>
 </div>
 
-<!-- LOGIN SCREEN — redirects to /login -->
+<!-- LOGIN SCREEN (redirect only) -->
 <div id="login-screen" style="display:none"></div>
 
-<!-- MAIN APP (hidden until logged in) -->
+<!-- MAIN APP -->
 <div id="app-screen" style="display:none">
 
-  <!-- TAB BAR -->
+  <!-- 3-TAB BAR -->
   <div class="tab-bar">
-    <div class="tab active" id="tab-main"    onclick="switchTab('main')">Deliveries</div>
+    <div class="tab active" id="tab-work"    onclick="switchTab('work')">My Work</div>
+    <div class="tab"        id="tab-signup"  onclick="switchTab('signup')">Sign Up</div>
     <div class="tab"        id="tab-history" onclick="switchTab('history')">History</div>
   </div>
 
-  <!-- MAIN TAB: My Sign-Ups + Active + Upcoming -->
-  <div id="pane-main" class="container">
-
-    <!-- MY SIGN-UPS -->
-    <div class="section-divider" style="margin-top:16px;">
-      <span>My Sign-Ups</span>
-    </div>
-    <div id="my-signups-content"><div class="spinner">Loading…</div></div>
-
-    <!-- ACTIVE DELIVERIES -->
-    <div class="section-divider" style="margin-top:32px;">
-      <span id="active-section-label">Active Deliveries</span>
-    </div>
-    <div id="slots-content"><div class="spinner">Loading…</div></div>
-
-    <!-- UPCOMING DELIVERIES -->
-    <div class="section-divider" style="margin-top:32px;" id="upcoming-section-header" style="display:none">
-      <span>Upcoming Deliveries</span>
-    </div>
-    <div id="upcoming-content"></div>
-
+  <!-- MY WORK PANE -->
+  <div id="pane-work" class="container">
+    <div id="my-work-content"><div class="spinner">Loading…</div></div>
   </div>
 
-  <!-- HISTORY TAB -->
+  <!-- SIGN UP PANE -->
+  <div id="pane-signup" class="container" style="display:none">
+    <div class="section-divider"><span id="active-section-label">Active</span></div>
+    <div id="slots-content"><div class="spinner">Loading…</div></div>
+    <div class="section-gap" id="upcoming-section-header" style="display:none">
+      <div class="section-divider"><span>Upcoming</span></div>
+    </div>
+    <div id="upcoming-content"></div>
+  </div>
+
+  <!-- HISTORY PANE -->
   <div id="pane-history" class="container" style="display:none">
     <div id="history-content"><div class="spinner">Loading…</div></div>
   </div>
 
 </div>
 
-<div class="footer">
-  <a href="https://sihha.org">sihha.org</a> · Questions? Contact your coordinator.
-</div>
-
-<!-- RECEIPT SUBMISSION MODAL -->
+<!-- RECEIPT MODAL -->
 <div class="modal-overlay" id="receipt-modal">
   <div class="modal-sheet">
-    <div class="modal-title">Submit Shopping Receipt</div>
+    <div class="modal-title">Submit Receipt</div>
     <div class="field-group">
       <label>Store Name</label>
-      <input type="text" id="r-store" placeholder="e.g. Wegmans, Costco">
+      <input type="text" id="r-store" placeholder="e.g. Sam's Club, Wegmans">
     </div>
     <div class="field-group">
       <label>Purchase Date</label>
@@ -287,15 +325,15 @@
     <div class="field-group">
       <label>Receipt Photo</label>
       <div class="file-upload-area" onclick="document.getElementById('r-file').click()">
-        <div id="r-upload-label">📷 Tap to upload receipt photo (JPG, PNG, PDF)</div>
+        <div id="r-upload-label">📷 Tap to upload photo (JPG, PNG, PDF)</div>
         <img id="r-file-preview" class="file-preview" style="display:none">
       </div>
       <input type="file" id="r-file" accept="image/*,.pdf,.heic" style="display:none" onchange="handleFileSelect(this)">
     </div>
     <div id="r-error" style="color:var(--red);font-size:13px;display:none;margin-top:8px"></div>
     <div class="btn-row">
-      <button class="btn btn-cancel" onclick="closeReceiptModal()">Cancel</button>
-      <button class="btn btn-green" id="r-submit-btn" onclick="submitReceipt()">Submit Receipt</button>
+      <button class="btn-cancel" onclick="closeReceiptModal()">Cancel</button>
+      <button class="btn btn-green" id="r-submit-btn" onclick="submitReceipt()">Submit</button>
     </div>
   </div>
 </div>
@@ -304,16 +342,15 @@
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 const BASE = '';
-// Support both old key (portal_token) and new key (portalToken) for smooth transition
 let TOKEN = localStorage.getItem('portalToken') || localStorage.getItem('portal_token');
 let VOL   = JSON.parse(localStorage.getItem('portalVolunteer') || localStorage.getItem('portal_vol') || 'null');
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── API ───────────────────────────────────────────────────────────────────────
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
   if (body !== undefined) opts.body = JSON.stringify(body);
-  const res = await fetch(BASE + '/api' + path, opts);
+  const res  = await fetch(BASE + '/api' + path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
@@ -321,6 +358,7 @@ async function api(method, path, body) {
 const GET  = p => api('GET', p);
 const POST = (p, b) => api('POST', p, b);
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
 function logout() {
   stopPolling();
   localStorage.removeItem('portalToken');
@@ -328,159 +366,182 @@ function logout() {
   localStorage.removeItem('portal_token');
   localStorage.removeItem('portal_vol');
   TOKEN = null; VOL = null;
-  // Redirect to unified login
   window.location.href = '/login';
 }
 
 async function showApp() {
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app-screen').style.display   = 'block';
+  document.getElementById('login-screen').style.display  = 'none';
+  document.getElementById('app-screen').style.display    = 'block';
   document.getElementById('vol-name-display').textContent = VOL.name;
-  document.getElementById('logout-btn').style.display = 'inline-block';
-  switchTab('main');
+  document.getElementById('logout-btn').style.display    = 'inline-block';
+  switchTab('work');
 }
 
+// ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(tab) {
-  ['main','history'].forEach(t => {
+  ['work','signup','history'].forEach(t => {
     document.getElementById('tab-' + t).classList.toggle('active', t === tab);
     document.getElementById('pane-' + t).style.display = t === tab ? '' : 'none';
   });
-  if (tab === 'main')    { refreshAll(); startPolling(); }
+  if (tab === 'work')    { refreshWork(); startPolling(); }
+  if (tab === 'signup')  { stopPolling(); refreshSignup(); }
   if (tab === 'history') { stopPolling(); loadHistory(); }
 }
 
-// ── Background polling — keeps shopping list current ──────────────────────────
+// ── Polling ───────────────────────────────────────────────────────────────────
 let _pollTimer = null;
-const POLL_INTERVAL = 60000; // 60 seconds
-
 function startPolling() {
   stopPolling();
   _pollTimer = setInterval(() => {
-    if (document.visibilityState !== 'hidden') silentRefreshTasks();
-  }, POLL_INTERVAL);
+    if (document.visibilityState !== 'hidden') silentRefreshWork();
+  }, 60000);
 }
-
 function stopPolling() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
 }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _pollTimer) silentRefreshWork();
+});
 
-// Silently re-fetch tasks + receipts only (not the full family list)
-async function silentRefreshTasks() {
+async function silentRefreshWork() {
   try {
     const [tasks, receipts] = await Promise.all([
       GET('/portal/my-tasks'),
       GET('/portal/receipts').catch(() => [])
     ]);
-    renderMySignups(tasks, receipts);
+    renderMyWork(tasks, receipts);
   } catch(e) {
-    if (e.message.includes('expired')) { logout(); }
+    if (e.message.includes('expired')) logout();
   }
 }
 
-// Pause polling when browser tab is hidden, resume when visible
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && _pollTimer) silentRefreshTasks();
-});
+// ── My Work Tab ───────────────────────────────────────────────────────────────
+let _receipts = [];
 
-// Refresh both sections together
-async function refreshAll() {
+async function refreshWork() {
+  document.getElementById('my-work-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
-    const [tasks, receipts, cyclesData] = await Promise.all([
+    const [tasks, receipts] = await Promise.all([
       GET('/portal/my-tasks'),
-      GET('/portal/receipts').catch(() => []),
-      GET('/portal/cycles').catch(() => [])
+      GET('/portal/receipts').catch(() => [])
     ]);
-    renderMySignups(tasks, receipts);
-    renderAvailable(cyclesData, tasks);
-    renderUpcoming(cyclesData);
+    renderMyWork(tasks, receipts);
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
-    document.getElementById('my-signups-content').innerHTML = `<div class="empty">${e.message}</div>`;
+    document.getElementById('my-work-content').innerHTML = `<div class="empty">${e.message}</div>`;
   }
 }
 
-// ── My Sign-Ups ───────────────────────────────────────────────────────────────
-function renderMySignups(tasks, receipts) {
-  receipts = receipts || [];
+function renderMyWork(tasks, receipts) {
+  receipts  = receipts || [];
   _receipts = receipts;
 
   const active = tasks.filter(t => !t.was_released);
   if (!active.length) {
-    document.getElementById('my-signups-content').innerHTML =
-      '<div class="empty">You haven\'t signed up for any deliveries yet.</div>';
+    document.getElementById('my-work-content').innerHTML = `
+      <div class="empty">
+        No assignments yet.<br>
+        <span class="empty-cta" onclick="switchTab('signup')">Browse open slots →</span>
+      </div>`;
     return;
   }
 
-  const html = active.map(t => {
+  // Sort: active first (confirmed, not done), then done
+  const sorted = [
+    ...active.filter(t => t.status !== 'complete'),
+    ...active.filter(t => t.status === 'complete')
+  ];
+
+  const html = sorted.map(t => {
     const isDone      = t.status === 'complete';
-    const isConfirmed = t.status === 'confirmed';
-    const isPending   = t.status === 'claimed';
     const isDelivery  = t.task_type === 'delivery';
+    const isShopping  = t.task_type === 'shopping';
+    const roleLabel   = t.task_type.charAt(0).toUpperCase() + t.task_type.slice(1);
+    const receipt     = receipts.find(r => r.slot_id === t.id);
 
-    const statusDot = isDone      ? `<span style="color:#1a8754;font-weight:700;">✓ Done</span>`
-                    : isConfirmed ? `<span style="color:#1a8754;font-weight:700;">✓ Confirmed</span>`
-                    :               `<span style="color:#b45309;font-weight:700;">⏳ Pending order</span>`;
+    const statusChip = isDone
+      ? `<span class="work-card-status status-done">✓ Done</span>`
+      : `<span class="work-card-status status-confirmed">✓ Confirmed</span>`;
 
-    const addressLine = isDelivery && isConfirmed && t.address
-      ? `<div class="address-box" style="margin-top:8px;">📍 ${t.address}, ${t.city}</div>` : '';
+    // Address block — delivery only
+    const addressBlock = isDelivery && t.address
+      ? `<div class="work-card-address">
+           <div class="work-card-address-label">📍 Delivery Address</div>
+           ${t.address}, ${t.city || ''}
+         </div>` : '';
 
-    // Shopping list for confirmed shoppers
-    let itemsLine = '';
-    if (!isDelivery && isConfirmed && t.shopping_items && t.shopping_items.length) {
-      itemsLine = `<div style="margin-top:6px;font-size:12px;color:#555;">
-        🛒 ${t.shopping_items.map(i => `${i.name} ×${i.qty}`).join(' · ')}
-      </div>`;
+    // Shopping list — shopping only
+    const itemsBlock = isShopping && t.shopping_items && t.shopping_items.length
+      ? `<div class="work-card-items">
+           <div class="work-card-items-label">Shopping List</div>
+           ${t.shopping_items.map(i => `${i.name} <strong>×${i.qty}</strong>`).join('<br>')}
+         </div>` : '';
+
+    // Action buttons
+    let actionHtml = '';
+    if (!isDone) {
+      if (isShopping) {
+        const btnLabel = receipt ? '✏️  Update Receipt' : '📷  Submit Receipt';
+        const btnCls   = receipt ? 'btn-outline' : 'btn btn-green';
+        actionHtml = `<button class="${btnCls}" onclick="openReceiptModal('${t.id}')">${btnLabel}</button>`;
+        if (receipt) {
+          actionHtml += `<div class="receipt-submitted-note">✓ Receipt submitted — pending review</div>`;
+        }
+      } else if (isDelivery) {
+        actionHtml = `<button class="btn-outline" onclick="completeTask('${t.id}')">✓ Mark as Done</button>`;
+      }
     }
 
-    // Receipt button for shoppers
-    const receipt = receipts.find(r => r.slot_id === t.id);
-    let receiptBtn = '';
-    if (!isDelivery && isConfirmed) {
-      receiptBtn = receipt
-        ? `<button class="btn-outline btn-sm" style="font-size:11px;padding:3px 10px;" onclick="openReceiptModal('${t.id}')">✏️ Update Receipt</button>`
-        : `<button class="btn btn-green btn-sm" style="font-size:11px;padding:3px 10px;" onclick="openReceiptModal('${t.id}')">📷 Receipt</button>`;
-    }
+    const opacity = isDone ? 'opacity:0.6;' : '';
 
-    const markBtn = isDelivery && isConfirmed && !isDone
-      ? `<button class="btn-outline btn-sm" style="font-size:11px;padding:3px 10px;" onclick="completeTask('${t.id}')">Mark Done</button>` : '';
-
-    const borderColor = isDone ? '#ccc' : isConfirmed ? '#1a7a3c' : '#f0a500';
-
-    return `<div class="card" style="border-left:3px solid ${borderColor};">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-        <div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
-            <span class="badge badge-${isDelivery?'delivery':'shopping'}">${t.task_type}</span>
-            ${statusDot}
-          </div>
-          <div style="font-family:monospace;font-size:15px;font-weight:700;">${t.family_code || t.family_name}</div>
-          <div style="font-size:12px;color:var(--gray-4);margin-top:2px;">${t.cycle_title} · ${fmtDate(t.delivery_date_end)}</div>
-          ${itemsLine}
-          ${addressLine}
+    return `
+      <div class="work-card" style="${opacity}">
+        <div class="work-card-header">
+          <div class="work-card-role">${roleLabel}</div>
+          ${statusChip}
         </div>
-        <div style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;">${markBtn}${receiptBtn}</div>
-      </div>
-    </div>`;
+        <div class="work-card-body">
+          <div class="work-card-family">${t.family_code || t.family_name || '—'}</div>
+          <div class="work-card-meta">${t.cycle_title} · ${fmtDate(t.delivery_date_end)}</div>
+          ${itemsBlock}
+          ${addressBlock}
+        </div>
+        ${actionHtml ? `<div class="work-card-footer">${actionHtml}</div>` : ''}
+      </div>`;
   }).join('');
 
-  document.getElementById('my-signups-content').innerHTML = html;
+  document.getElementById('my-work-content').innerHTML = html;
 }
 
-// ── Active Deliveries ─────────────────────────────────────────────────────────
+// ── Sign Up Tab ───────────────────────────────────────────────────────────────
+async function refreshSignup() {
+  document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading…</div>';
+  try {
+    const [cyclesData, tasks] = await Promise.all([
+      GET('/portal/cycles').catch(() => []),
+      GET('/portal/my-tasks').catch(() => [])
+    ]);
+    renderAvailable(cyclesData, tasks);
+    renderUpcoming(cyclesData);
+  } catch(e) {
+    if (e.message.includes('expired')) { logout(); return; }
+    document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
 async function renderAvailable(cycles, myTasks) {
   const activeCycles = cycles.filter(c => c.status === 'open' || c.status === 'shopping');
   if (!activeCycles.length) {
-    document.getElementById('active-section-label').textContent = 'Active Deliveries';
+    document.getElementById('active-section-label').textContent = 'Active';
     document.getElementById('slots-content').innerHTML =
       '<div class="empty">No active delivery cycles right now.</div>';
     return;
   }
-  // Label with cycle date(s)
   const label = activeCycles.length === 1
-    ? `Active · ${fmtDate(activeCycles[0].delivery_date_start)}`
-    : `Active Deliveries`;
+    ? `${fmtDate(activeCycles[0].delivery_date_start)}`
+    : 'Active Cycles';
   document.getElementById('active-section-label').textContent = label;
-  document.getElementById('slots-content').innerHTML = '<div class="spinner">Loading…</div>';
+
   try {
     const results = await Promise.all(activeCycles.map(c => GET('/portal/families/' + c.id)));
     renderFamilySlots(results);
@@ -488,101 +549,6 @@ async function renderAvailable(cycles, myTasks) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('slots-content').innerHTML = `<div class="empty">${e.message}</div>`;
   }
-}
-
-// ── Upcoming Deliveries (accordion) ───────────────────────────────────────────
-const _upcomingCache = {};  // cycleId → families data (lazy loaded)
-
-function renderUpcoming(cycles) {
-  const upcoming = cycles.filter(c => c.status === 'upcoming');
-  const header   = document.getElementById('upcoming-section-header');
-  const wrap     = document.getElementById('upcoming-content');
-
-  if (!upcoming.length) { header.style.display = 'none'; wrap.innerHTML = ''; return; }
-  header.style.display = '';
-
-  wrap.innerHTML = upcoming.map((c, i) => `
-    <div class="card" style="padding:0;margin-bottom:8px;overflow:hidden;" id="upcoming-row-${c.id}">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;background:var(--gray-1);"
-           onclick="toggleUpcoming('${c.id}')">
-        <div>
-          <div style="font-size:14px;font-weight:700;">${c.title}</div>
-          <div style="font-size:12px;color:var(--gray-4);margin-top:2px;">${fmtDate(c.delivery_date_start)} · ${c.open_slots ?? '—'} open slots</div>
-        </div>
-        <span id="upcoming-icon-${c.id}" style="font-size:18px;font-weight:300;color:var(--gray-4);line-height:1;">+</span>
-      </div>
-      <div id="upcoming-families-${c.id}" style="display:none;"></div>
-    </div>`
-  ).join('');
-}
-
-async function toggleUpcoming(cycleId) {
-  const familiesEl = document.getElementById('upcoming-families-' + cycleId);
-  const iconEl     = document.getElementById('upcoming-icon-' + cycleId);
-  const isOpen     = familiesEl.style.display !== 'none';
-
-  if (isOpen) {
-    familiesEl.style.display = 'none';
-    iconEl.textContent = '+';
-    return;
-  }
-
-  iconEl.textContent = '−';
-  familiesEl.style.display = 'block';
-
-  // Already loaded — just show
-  if (_upcomingCache[cycleId]) {
-    renderUpcomingFamilies(cycleId, _upcomingCache[cycleId]);
-    return;
-  }
-
-  familiesEl.innerHTML = '<div class="spinner" style="padding:16px;">Loading…</div>';
-  try {
-    const data = await GET('/portal/families/' + cycleId);
-    _upcomingCache[cycleId] = data;
-    renderUpcomingFamilies(cycleId, data);
-  } catch(e) {
-    familiesEl.innerHTML = `<div class="empty">${e.message}</div>`;
-  }
-}
-
-function renderUpcomingFamilies(cycleId, data) {
-  const { families, task_types, cycle } = data;
-  const el = document.getElementById('upcoming-families-' + cycleId);
-  if (!families || !families.length) {
-    el.innerHTML = '<div class="empty" style="padding:12px;">No families yet.</div>';
-    return;
-  }
-  el.innerHTML = '<div style="border-top:0.5px solid var(--gray-2);">' +
-    families.map(fam => {
-      const taskBtns = task_types.map(tt => {
-        const mySlotId = fam.my_slots?.[tt.slug];
-        const takenBy  = fam.taken_by?.[tt.slug];
-        const myStatus = fam.my_status?.[tt.slug];
-        if (mySlotId) {
-          const isConfirmed = myStatus === 'confirmed';
-          const bg = isConfirmed ? 'var(--green)' : '#f0a500';
-          return `<button style="background:${bg};color:#fff;border:none;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);"
-            onclick="cancelSignup('${mySlotId}','${fam.id}')">
-            ${tt.label} ×</button>`;
-        }
-        if (takenBy) {
-          return `<span style="font-size:11px;padding:4px 8px;background:#f0f0f0;color:#555;border:1px solid #ddd;">
-            ${tt.label}: ${takenBy}</span>`;
-        }
-        return `<button style="background:transparent;color:var(--black);border:1px solid var(--black);padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);"
-          onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
-          ${tt.label}</button>`;
-      }).join('');
-
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:0.5px solid var(--gray-2);flex-wrap:wrap;gap:6px;">
-        <div>
-          <span style="font-family:monospace;font-size:14px;font-weight:700;">${fam.family_code || '—'}</span>
-          <span style="font-size:11px;color:var(--gray-4);margin-left:8px;">Size: ${fam.family_size || '?'}</span>
-        </div>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;">${taskBtns}</div>
-      </div>`;
-    }).join('') + '</div>';
 }
 
 function renderFamilySlots(results) {
@@ -601,31 +567,21 @@ function renderFamilySlots(results) {
     const { families, task_types, cycle } = data;
 
     if (multiCycle) {
-      html += `<div style="margin-top:${idx > 0 ? '24px' : '0'};margin-bottom:10px;padding:8px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:12px;font-weight:700;letter-spacing:.04em;">
-        📦 ${cycle.title} · ${fmtDate(cycle.delivery_date_start)}
+      html += `<div style="margin:${idx > 0 ? '20px' : '0'} 0 8px;padding:8px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;">
+        ${cycle.title} · ${fmtDate(cycle.delivery_date_start)}
       </div>`;
     }
-
-    html += families.map(fam => buildFamilyCard(fam, task_types, cycle)).join('');
+    html += families.map(fam => buildFamilyRow(fam, task_types, cycle)).join('');
   });
 
   document.getElementById('slots-content').innerHTML = html;
 }
 
-// ── Cycles (kept for compatibility — refreshAll handles loading now) ───────────
-async function loadCycles() {
-  // No-op: refreshAll() handles everything
-}
-
-// Build a single family card — used by renderMultipleCycles
-function buildFamilyCard(fam, task_types, cycle) {
-  const addressBox = fam.address
-    ? `<div class="address-box" style="margin-top:8px;">📍 ${fam.address}, ${fam.city}</div>` : '';
-
+function buildFamilyRow(fam, task_types, cycle) {
   const orderConfirmed = ['confirmed','submitted','delivered'].includes(fam.order_status);
-  const orderBadge = orderConfirmed
-    ? `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#e6f4ea;color:#1a7a3c;border-radius:3px;white-space:nowrap;">✓ Order placed</span>`
-    : `<span style="font-size:11px;font-weight:700;padding:3px 8px;background:#fff8e1;color:#b45309;border-radius:3px;white-space:nowrap;">⏳ No order yet</span>`;
+  const orderChip = orderConfirmed
+    ? `<span class="order-chip order-chip-yes">✓ Order</span>`
+    : `<span class="order-chip order-chip-no">⏳ No order</span>`;
 
   const taskBtns = task_types.map(tt => {
     const mySlotId = fam.my_slots?.[tt.slug];
@@ -633,54 +589,128 @@ function buildFamilyCard(fam, task_types, cycle) {
     const myStatus = fam.my_status?.[tt.slug];
 
     if (mySlotId) {
-      const isConfirmed = myStatus === 'confirmed';
-      const btnBg    = isConfirmed ? 'var(--green)' : '#f0a500';
-      const btnLabel = isConfirmed
-        ? `✓ ${tt.label} — claimed`
-        : `⏳ ${tt.label} — pending`;
-      const btnTitle = isConfirmed
-        ? 'You are confirmed for this slot'
-        : 'Slot claimed — pending confirmation';
-      return `<button
-        style="background:${btnBg};color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
-        title="${btnTitle}"
-        onclick="cancelSignup('${mySlotId}','${fam.id}')">
-        ${btnLabel} ×
+      const bg = 'var(--green)';
+      return `<button class="slot-btn slot-btn-mine" style="background:${bg};"
+        onclick="cancelSignup('${mySlotId}','${fam.id}')"
+        title="Click to cancel">
+        ✓ ${tt.label} ×
       </button>`;
     }
     if (takenBy) {
-      return `<div
-        style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;font-size:12px;font-weight:600;background:#f0f0f0;color:#555;border:1px solid #ddd;">
-        👤 ${tt.label} — ${takenBy}
-      </div>`;
+      return `<span class="slot-btn slot-btn-taken">${tt.label}: ${takenBy}</span>`;
     }
-    return `<button
-      style="background:transparent;color:var(--black);border:1px solid var(--black);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);display:flex;align-items:center;gap:6px;"
+    return `<button class="slot-btn slot-btn-open"
       onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
       ${tt.label}
     </button>`;
   }).join('');
 
   return `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-        <div style="min-width:0;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-            <div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--black);">${fam.family_code || '—'}</div>
-            ${orderBadge}
-          </div>
-          <div class="card-meta">Family size: ${fam.family_size || '?'}</div>
+    <div class="signup-card">
+      <div class="signup-card-left">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="signup-family-code">${fam.family_code || '—'}</span>
+          ${orderChip}
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">${taskBtns}</div>
+        <div class="signup-family-meta">Size: ${fam.family_size || '?'}</div>
       </div>
-      ${addressBox}
+      <div class="signup-btns">${taskBtns}</div>
     </div>`;
 }
 
+// ── Upcoming (accordion) ──────────────────────────────────────────────────────
+const _upcomingCache = {};
+
+function renderUpcoming(cycles) {
+  const upcoming = cycles.filter(c => c.status === 'upcoming');
+  const header   = document.getElementById('upcoming-section-header');
+  const wrap     = document.getElementById('upcoming-content');
+
+  if (!upcoming.length) { header.style.display = 'none'; wrap.innerHTML = ''; return; }
+  header.style.display = '';
+
+  wrap.innerHTML = upcoming.map(c => `
+    <div style="margin-bottom:8px;" id="upcoming-row-${c.id}">
+      <div class="cycle-header" onclick="toggleUpcoming('${c.id}')">
+        <div>
+          <div class="cycle-header-title">${c.title}</div>
+          <div class="cycle-header-meta">${fmtDate(c.delivery_date_start)} · ${c.open_slots ?? '—'} open slots</div>
+        </div>
+        <span class="cycle-toggle" id="upcoming-icon-${c.id}">+</span>
+      </div>
+      <div class="cycle-families-wrap" id="upcoming-families-${c.id}"></div>
+    </div>`
+  ).join('');
+}
+
+async function toggleUpcoming(cycleId) {
+  const familiesEl = document.getElementById('upcoming-families-' + cycleId);
+  const iconEl     = document.getElementById('upcoming-icon-' + cycleId);
+  const isOpen     = familiesEl.style.display !== 'none' && familiesEl.style.display !== '';
+
+  if (isOpen) {
+    familiesEl.style.display = 'none';
+    iconEl.textContent = '+';
+    return;
+  }
+  iconEl.textContent = '−';
+  familiesEl.style.display = 'block';
+
+  if (_upcomingCache[cycleId]) {
+    renderUpcomingFamilies(cycleId, _upcomingCache[cycleId]);
+    return;
+  }
+  familiesEl.innerHTML = '<div class="spinner" style="padding:16px;">Loading…</div>';
+  try {
+    const data = await GET('/portal/families/' + cycleId);
+    _upcomingCache[cycleId] = data;
+    renderUpcomingFamilies(cycleId, data);
+  } catch(e) {
+    familiesEl.innerHTML = `<div class="empty" style="padding:16px;">${e.message}</div>`;
+  }
+}
+
+function renderUpcomingFamilies(cycleId, data) {
+  const { families, task_types, cycle } = data;
+  const el = document.getElementById('upcoming-families-' + cycleId);
+  if (!families || !families.length) {
+    el.innerHTML = '<div class="empty" style="padding:16px 12px;">No families yet.</div>';
+    return;
+  }
+  el.innerHTML = families.map(fam => {
+    const taskBtns = task_types.map(tt => {
+      const mySlotId = fam.my_slots?.[tt.slug];
+      const takenBy  = fam.taken_by?.[tt.slug];
+      const myStatus = fam.my_status?.[tt.slug];
+      if (mySlotId) {
+        return `<button class="slot-btn slot-btn-mine" style="background:var(--green);"
+          onclick="cancelSignup('${mySlotId}','${fam.id}')">✓ ${tt.label} ×</button>`;
+      }
+      if (takenBy) {
+        return `<span class="slot-btn slot-btn-taken">${tt.label}: ${takenBy}</span>`;
+      }
+      return `<button class="slot-btn slot-btn-open"
+        onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">${tt.label}</button>`;
+    }).join('');
+
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--gray-2);flex-wrap:wrap;gap:6px;">
+        <div>
+          <span style="font-family:monospace;font-size:14px;font-weight:700;">${fam.family_code || '—'}</span>
+          <span style="font-size:11px;color:var(--gray-4);margin-left:8px;">Size: ${fam.family_size || '?'}</span>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">${taskBtns}</div>
+      </div>`;
+  }).join('');
+}
+
+// ── Signup / Cancel ───────────────────────────────────────────────────────────
 async function signUp(cycleId, familyId, taskType) {
   try {
     await POST('/portal/signup', { cycle_id: cycleId, family_id: familyId, task_types: [taskType] });
-    refreshAll();
+    // Refresh both sign-up and work tabs
+    refreshSignup();
+    silentRefreshWork();
   } catch(e) { alert(e.message); }
 }
 
@@ -688,36 +718,36 @@ async function cancelSignup(slotId, familyId) {
   if (!confirm('Cancel your sign-up for this task?')) return;
   try {
     await api('DELETE', '/portal/cancel/' + slotId);
-    refreshAll();
+    refreshSignup();
+    silentRefreshWork();
   } catch(e) { alert(e.message); }
 }
 
-// ── My Tasks ──────────────────────────────────────────────────────────────────
-let _receipts = [];
-
+// ── Mark Done ─────────────────────────────────────────────────────────────────
 async function completeTask(slotId) {
-  if (!confirm('Mark this task as complete?')) return;
+  if (!confirm('Mark this delivery as done?')) return;
   try {
     await POST('/portal/complete/' + slotId, {});
-    refreshAll();
+    refreshWork();
   } catch(e) { alert(e.message); }
 }
 
 // ── Receipt Modal ─────────────────────────────────────────────────────────────
-let _activeSlotId = null;
+let _activeSlotId    = null;
 let _uploadedFileUrl = null;
 
 function openReceiptModal(slotId) {
   _activeSlotId    = slotId;
   _uploadedFileUrl = null;
-  document.getElementById('r-store').value   = '';
-  document.getElementById('r-date').value    = new Date().toISOString().slice(0,10);
-  document.getElementById('r-amount').value  = '';
-  document.getElementById('r-file').value    = '';
+  document.getElementById('r-store').value  = '';
+  document.getElementById('r-date').value   = new Date().toISOString().slice(0,10);
+  document.getElementById('r-amount').value = '';
+  document.getElementById('r-file').value   = '';
   document.getElementById('r-file-preview').style.display = 'none';
-  document.getElementById('r-upload-label').textContent = '📷 Tap to upload receipt photo (JPG, PNG, PDF)';
-  document.getElementById('r-error').style.display = 'none';
-  document.getElementById('r-submit-btn').disabled = false;
+  document.getElementById('r-upload-label').textContent   = '📷 Tap to upload photo (JPG, PNG, PDF)';
+  document.getElementById('r-error').style.display        = 'none';
+  document.getElementById('r-submit-btn').disabled        = false;
+  document.getElementById('r-submit-btn').textContent     = 'Submit';
   document.getElementById('receipt-modal').classList.add('open');
 }
 
@@ -750,14 +780,13 @@ async function submitReceipt() {
   const file   = document.getElementById('r-file').files[0];
 
   errEl.style.display = 'none';
-  if (!store)          { errEl.textContent = 'Please enter the store name.'; errEl.style.display = 'block'; return; }
-  if (!date)           { errEl.textContent = 'Please enter the purchase date.'; errEl.style.display = 'block'; return; }
+  if (!store)                       { errEl.textContent = 'Please enter the store name.'; errEl.style.display = 'block'; return; }
+  if (!date)                        { errEl.textContent = 'Please enter the purchase date.'; errEl.style.display = 'block'; return; }
   if (isNaN(amount) || amount <= 0) { errEl.textContent = 'Please enter a valid amount.'; errEl.style.display = 'block'; return; }
 
   btn.disabled = true; btn.textContent = 'Uploading…';
 
   try {
-    // Step 1: upload photo if provided
     let fileUrl = null;
     if (file) {
       const fd = new FormData();
@@ -772,7 +801,6 @@ async function submitReceipt() {
       fileUrl = uploadData.file_url;
     }
 
-    // Step 2: submit / update receipt record
     btn.textContent = 'Submitting…';
     const res = await POST('/portal/receipts', {
       slot_id:       _activeSlotId,
@@ -783,24 +811,23 @@ async function submitReceipt() {
     });
 
     closeReceiptModal();
-    refreshAll();
-    const msg = res.updated
-      ? '✅ Receipt updated! The treasurer has been notified and will re-review your reimbursement.'
-      : '✅ Receipt submitted! The treasurer will review and process your reimbursement.';
-    alert(msg);
+    refreshWork();
+    alert(res.updated
+      ? '✅ Receipt updated. The treasurer has been notified.'
+      : '✅ Receipt submitted. The treasurer will review and process your reimbursement.');
   } catch(e) {
     errEl.textContent = e.message;
     errEl.style.display = 'block';
-    btn.disabled = false; btn.textContent = 'Submit Receipt';
+    btn.disabled = false; btn.textContent = 'Submit';
   }
 }
 
-// ── History ───────────────────────────────────────────────────────────────────
+// ── History Tab ───────────────────────────────────────────────────────────────
 async function loadHistory() {
   document.getElementById('history-content').innerHTML = '<div class="spinner">Loading…</div>';
   try {
     const data = await GET('/portal/history');
-    const s = data.stats;
+    const s    = data.stats;
 
     const statsHtml = `
       <div class="stat-row">
@@ -808,33 +835,30 @@ async function loadHistory() {
         <div class="stat-pill"><div class="stat-pill-num">${s.shopping}</div><div class="stat-pill-lbl">Shopping</div></div>
         <div class="stat-pill"><div class="stat-pill-num">${s.delivery}</div><div class="stat-pill-lbl">Deliveries</div></div>
         <div class="stat-pill"><div class="stat-pill-num">${s.cycles_served}</div><div class="stat-pill-lbl">Cycles</div></div>
-        <div class="stat-pill"><div class="stat-pill-num">${s.families_served}</div><div class="stat-pill-lbl">Families Served</div></div>
+        <div class="stat-pill"><div class="stat-pill-num">${s.families_served}</div><div class="stat-pill-lbl">Families</div></div>
       </div>`;
 
     if (!data.tasks.length) {
       document.getElementById('history-content').innerHTML =
-        statsHtml + '<div class="empty">No completed tasks yet. Complete a task to see your history here.</div>';
+        statsHtml + '<div class="empty">No completed tasks yet.</div>';
       return;
     }
 
     const tasksHtml = data.tasks.map(t => `
       <div class="history-row">
         <div class="history-row-left">
-          <div>
-            <span class="badge badge-${t.task_type}">${t.task_type}</span>
-            &nbsp;<strong>${t.cycle_title}</strong>
-          </div>
+          <div><span class="badge badge-${t.task_type}">${t.task_type}</span> &nbsp;<strong>${t.cycle_title}</strong></div>
           <div class="history-row-meta">
-            Family ID: ${t.family_id.slice(0,8)}… · Size: ${t.family_size || '?'}
-            ${t.completed_at ? ' · Done ' + fmtDate(t.completed_at) : ''}
+            Family ${t.family_id.slice(0,8)}… · Size: ${t.family_size || '?'}
+            ${t.completed_at ? ' · ' + fmtDate(t.completed_at) : ''}
           </div>
         </div>
-        <span class="badge badge-complete">✓ Complete</span>
+        <span class="badge badge-complete">✓ Done</span>
       </div>`).join('');
 
     document.getElementById('history-content').innerHTML =
-      `<div class="section-heading">Your Lifetime Stats</div>${statsHtml}
-       <div class="section-heading">Completed Tasks</div>${tasksHtml}`;
+      `<div class="section-divider" style="margin-bottom:16px;">Stats</div>${statsHtml}
+       <div class="section-divider" style="margin-bottom:16px;">Completed Tasks</div>${tasksHtml}`;
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('history-content').innerHTML = `<div class="empty">${e.message}</div>`;
@@ -852,7 +876,6 @@ function fmtDate(d) {
 if (TOKEN && VOL) {
   showApp();
 } else {
-  // No session — redirect to unified login page
   window.location.href = '/login';
 }
 </script>
