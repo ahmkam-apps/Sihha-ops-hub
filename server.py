@@ -6243,25 +6243,15 @@ def portal_my_tasks():
             # For confirmed shopping slots, include item list so shopper knows what to buy
             if row['status'] == 'confirmed':
                 items = db.execute(
-                    '''SELECT fi.name, bq.qty_s, bq.qty_m, bq.qty_l, fr.bundle_size
+                    '''SELECT fi.name, COALESCE(fri.quantity, 1) as qty
                        FROM food_requests fr
                        JOIN food_request_items fri ON fri.request_id = fr.id
-                       JOIN food_items fi ON fi.id = fri.item_id
-                       LEFT JOIN bundle_quantities bq ON bq.item_id = fi.id
-                       WHERE fr.cycle_id=? AND fr.family_id=?
+                       JOIN food_items fi ON fi.id = fri.food_item_id
+                       WHERE fr.cycle_id=? AND fr.family_id=? AND fri.selected=1
                        ORDER BY fi.name''',
                     (row['cycle_id'], row['family_id'])
                 ).fetchall()
-                shopping_items = []
-                for it in items:
-                    bundle = it['bundle_size'] or 'M'
-                    qty = it['qty_s'] if bundle == 'S' else it['qty_l'] if bundle == 'L' else it['qty_m']
-                    shopping_items.append({
-                        'name': it['name'],
-                        'qty': qty or 1,
-                        'bundle_size': bundle
-                    })
-                row['shopping_items'] = shopping_items
+                row['shopping_items'] = [{'name': it['name'], 'qty': it['qty']} for it in items]
             else:
                 row['shopping_items'] = None
         result.append(row)
@@ -6911,7 +6901,7 @@ def portal_signup():
     for task_type in task_types:
         # Already mine — skip silently
         if db.execute(
-            "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND claimed_by=? AND status='claimed'",
+            "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND claimed_by=? AND status IN ('claimed','confirmed')",
             (cycle_id, family_id, task_type, vol_id)
         ).fetchone():
             continue
@@ -6921,13 +6911,13 @@ def portal_signup():
             '''SELECT v.name FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.task_type=?
-                 AND vs.status='claimed' AND vs.claimed_by != ?''',
+                 AND vs.status IN ('claimed','confirmed') AND vs.claimed_by != ?''',
             (cycle_id, family_id, task_type, vol_id)
         ).fetchone()
         if taken:
             return jsonify({'error': f'{task_type.capitalize()} is already assigned to {taken["name"]}'}), 409
 
-        # Claim the existing open slot (created by _ensure_volunteer_slots)
+        # Claim and immediately confirm the slot — no coordinator approval step needed
         open_slot = db.execute(
             "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND status='open'",
             (cycle_id, family_id, task_type)
@@ -6935,14 +6925,14 @@ def portal_signup():
 
         if open_slot:
             db.execute(
-                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='claimed', updated_at=? WHERE id=?",
+                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='confirmed', updated_at=? WHERE id=?",
                 (vol_id, ts, ts, open_slot['id'])
             )
         else:
             # Safety fallback: no pre-created slot (old cycle or edge case) — insert one
             db.execute(
                 "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (str(uuid.uuid4()), cycle_id, family_id, task_type, cycle['delivery_date_start'], vol_id, ts, 'claimed', ts)
+                (str(uuid.uuid4()), cycle_id, family_id, task_type, cycle['delivery_date_start'], vol_id, ts, 'confirmed', ts)
             )
         claimed.append(task_type)
 
