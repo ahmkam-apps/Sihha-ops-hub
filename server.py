@@ -1466,10 +1466,18 @@ def require_auth(roles=None):
                 return jsonify({'error': 'Account inactive'}), 401
             if roles and session['role'] not in roles:
                 return jsonify({'error': 'Forbidden'}), 403
-            # Slide expiry
+            # Slide expiry — at most once per hour per session (audit 3.6).
+            # Previously this UPDATE+commit ran on EVERY authenticated request,
+            # a needless disk write per API call on SQLite.
             new_expiry = (datetime.utcnow() + timedelta(hours=SESSION_HOURS)).isoformat()
-            get_db().execute("UPDATE sessions SET expires_at=? WHERE token=?", (new_expiry, token))
-            get_db().commit()
+            # threshold guards small SESSION_HOURS values (never goes below half-life)
+            slide_threshold = (datetime.utcnow() + timedelta(
+                hours=max(SESSION_HOURS - 1, SESSION_HOURS * 0.5))).isoformat()
+            cur = get_db().execute(
+                "UPDATE sessions SET expires_at=? WHERE token=? AND expires_at < ?",
+                (new_expiry, token, slide_threshold))
+            if cur.rowcount:
+                get_db().commit()
             g.user = dict(session)
             return f(*args, **kwargs)
         return wrapper
@@ -2520,42 +2528,7 @@ def list_families():
     role = g.user['role']
     status = request.args.get('status')
     search = (request.args.get('search') or '').strip()
-    q = """
-        SELECT f.*,
-               (SELECT v.name
-                FROM volunteer_slots vs
-                JOIN volunteers v ON vs.claimed_by = v.id
-                WHERE vs.family_id = f.id
-                  AND vs.task_type = 'delivery'
-                  AND vs.claimed_by IS NOT NULL
-                ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_delivery_volunteer,
-               (SELECT v.name
-                FROM volunteer_slots vs
-                JOIN volunteers v ON vs.claimed_by = v.id
-                WHERE vs.family_id = f.id
-                  AND vs.task_type = 'shopping'
-                  AND vs.claimed_by IS NOT NULL
-                ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_shopping_volunteer,
-               (SELECT dc.delivery_date_start
-                FROM volunteer_slots vs
-                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
-                WHERE vs.family_id = f.id
-                  AND vs.task_type = 'delivery'
-                  AND vs.claimed_by IS NOT NULL
-                ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_delivery_date,
-               (SELECT dc.delivery_date_start
-                FROM volunteer_slots vs
-                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
-                WHERE vs.family_id = f.id
-                  AND vs.task_type = 'shopping'
-                  AND vs.claimed_by IS NOT NULL
-                ORDER BY vs.created_at DESC
-                LIMIT 1) AS last_shopping_date
-        FROM families f
-        WHERE 1=1"""
+    q = "SELECT f.* FROM families f WHERE 1=1"
     params = []
     if status == 'needs_wa':
         q += " AND f.status='active' AND (f.wa_phone IS NULL OR TRIM(f.wa_phone)='' OR f.wa_apikey IS NULL OR TRIM(f.wa_apikey)='')"
@@ -2565,6 +2538,26 @@ def list_families():
         q += " AND (f.name LIKE ? OR f.phone LIKE ? OR f.address LIKE ?)"; params += [f'%{search}%']*3
     q += " ORDER BY f.created_at DESC"
     rows = [dict(r) for r in db.execute(q, params).fetchall()]
+
+    # Last shopper/deliverer per family in ONE scan (audit 3.3 — replaces 4
+    # correlated subqueries per family row). Ordered ASC so the final overwrite
+    # per (family, task) is the most recently created claimed slot.
+    last_map = {}
+    for s in db.execute(
+        '''SELECT vs.family_id, vs.task_type, v.name AS vol_name,
+                  dc.delivery_date_start AS d_date
+           FROM volunteer_slots vs
+           JOIN volunteers v ON vs.claimed_by = v.id
+           JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+           WHERE vs.claimed_by IS NOT NULL AND vs.task_type IN ('shopping','delivery')
+           ORDER BY vs.created_at ASC'''
+    ).fetchall():
+        last_map[(s['family_id'], s['task_type'])] = (s['vol_name'], s['d_date'])
+    for r in rows:
+        dv = last_map.get((r['id'], 'delivery'), (None, None))
+        sv = last_map.get((r['id'], 'shopping'), (None, None))
+        r['last_delivery_volunteer'], r['last_delivery_date'] = dv
+        r['last_shopping_volunteer'], r['last_shopping_date'] = sv
 
     # Restrict PII fields for viewer role — full data only for admin/finance/treasurer
     if role == 'viewer':
@@ -2974,65 +2967,10 @@ def update_volunteer(vid):
 
     return jsonify(dict(db.execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone()))
 
-# ── Assignments ───────────────────────────────────────────────────────────────
-
-@app.route('/api/assignments', methods=['GET'])
-@require_auth()
-def list_assignments():
-    db = get_db()
-    status = request.args.get('status')
-    q = '''SELECT a.*, f.name as family_name, v.name as volunteer_name
-           FROM assignments a
-           LEFT JOIN families f ON a.family_id = f.id
-           LEFT JOIN volunteers v ON a.volunteer_id = v.id
-           WHERE 1=1'''
-    params = []
-    if status:
-        q += " AND a.status=?"; params.append(status)
-    # Volunteers only see their own assignments
-    if g.user.get('role') == 'volunteer':
-        vol = db.execute("SELECT id FROM volunteers WHERE email=?",
-                         (g.user.get('username'),)).fetchone()
-        if vol:
-            q += " AND a.volunteer_id=?"; params.append(vol['id'])
-    q += " ORDER BY a.due_date ASC, a.created_at DESC"
-    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
-
-@app.route('/api/assignments', methods=['POST'])
-@require_auth(roles=['admin'])
-def create_assignment():
-    data = request.json or {}
-    if not data.get('family_id'):
-        return jsonify({'error': 'family_id is required'}), 422
-    aid = str(uuid.uuid4())
-    get_db().execute(
-        '''INSERT INTO assignments
-           (id,family_id,volunteer_id,task_type,due_date,status,notes,created_by,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)''',
-        (aid, data['family_id'], data.get('volunteer_id'), data.get('task_type', 'shopping'),
-         data.get('due_date'), data.get('status', 'pending'), data.get('notes'),
-         g.user['user_id'], now())
-    )
-    get_db().commit()
-    return jsonify({'id': aid}), 201
-
-@app.route('/api/assignments/<aid>', methods=['PUT'])
-@require_auth(roles=['admin', 'volunteer'])
-def update_assignment(aid):
-    db = get_db()
-    row = db.execute("SELECT * FROM assignments WHERE id=?", (aid,)).fetchone()
-    if not row:
-        return jsonify({'error': 'Not found'}), 404
-    d = request.json or {}
-    db.execute(
-        '''UPDATE assignments SET volunteer_id=?,task_type=?,due_date=?,status=?,notes=?,updated_at=?
-           WHERE id=?''',
-        (d.get('volunteer_id', row['volunteer_id']), d.get('task_type', row['task_type']),
-         d.get('due_date', row['due_date']), d.get('status', row['status']),
-         d.get('notes', row['notes']), now(), aid)
-    )
-    db.commit()
-    return jsonify(dict(db.execute("SELECT * FROM assignments WHERE id=?", (aid,)).fetchone()))
+# ── Assignments routes removed 2026-06-11 (audit 3.4) ────────────────────────
+# Legacy /api/assignments CRUD deleted — zero frontend callers; superseded by
+# volunteer_slots (Phase 3C). The `assignments` table is retained (historical
+# data); drop it in a future migration once confirmed empty/unneeded.
 
 # ── Receipts ──────────────────────────────────────────────────────────────────
 
@@ -3739,11 +3677,6 @@ def update_bundle_size_rules():
 
 # ── Delivery Cycles ───────────────────────────────────────────────────────────
 
-def auto_update_cycle_statuses(db):
-    """No-op — cycles are now manually advanced (upcoming→shopping→delivered)."""
-    pass
-
-
 def _ensure_volunteer_slots(db, cycle_id, family_id):
     """Ensure open slots exist for a family in a cycle for all is_family_slot task types.
     Idempotent — SELECT-first to avoid duplicates. Creates open slots only if absent.
@@ -3845,7 +3778,6 @@ def _enroll_families_in_cycle(db, cycle_id, delivery_date_start):
 @require_auth()
 def list_delivery_cycles():
     db = get_db()
-    auto_update_cycle_statuses(db)
     status = request.args.get('status')
     q = "SELECT * FROM delivery_cycles WHERE 1=1"
     params = []
@@ -4052,6 +3984,20 @@ def get_orders():
             slot_map[fid] = {}
         slot_map[fid][s['task_type']] = s['vol_name']
 
+    # Batch item names for ALL orders in one query (audit 3.3 — was one query
+    # per order row)
+    items_map = {}
+    if orders:
+        ph = ','.join('?' * len(orders))
+        for r in db.execute(
+            f'''SELECT fri.request_id, fi.name FROM food_request_items fri
+                JOIN food_items fi ON fri.food_item_id = fi.id
+                WHERE fri.request_id IN ({ph}) AND fri.selected=1
+                ORDER BY fi.display_order''',
+            [o['id'] for o in orders]
+        ).fetchall():
+            items_map.setdefault(r['request_id'], []).append(r['name'])
+
     result = []
     for order in orders:
         o = dict(order)
@@ -4059,13 +4005,7 @@ def get_orders():
             continue
         if search and search not in o['family_name'].lower() and search not in (o['family_code'] or '').lower():
             continue
-        items = db.execute(
-            '''SELECT fi.name FROM food_request_items fri
-               JOIN food_items fi ON fri.food_item_id = fi.id
-               WHERE fri.request_id=? AND fri.selected=1
-               ORDER BY fi.display_order''', (o['id'],)
-        ).fetchall()
-        o['items'] = [i['name'] for i in items]
+        o['items'] = items_map.get(o['id'], [])
         fam_slots     = slot_map.get(o['family_id'], {})
         o['shopper']  = fam_slots.get('shopping')
         o['deliverer']= fam_slots.get('delivery')
@@ -4628,60 +4568,9 @@ def report_cycle_summary(cid):
     html = _print_page('Cycle Summary', subtitle, body, cycle['title'])
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
-# ── Cycle Assignments ─────────────────────────────────────────────────────────
-
-@app.route('/api/cycle-assignments', methods=['GET'])
-@require_auth()
-def list_cycle_assignments():
-    db = get_db()
-    cycle_id = request.args.get('cycle_id')
-    q = '''SELECT ca.*, v.name as volunteer_name, v.phone as volunteer_phone,
-                  f.name as family_name
-           FROM cycle_assignments ca
-           JOIN volunteers v ON ca.volunteer_id = v.id
-           LEFT JOIN families f ON ca.family_id = f.id
-           WHERE 1=1'''
-    params = []
-    if cycle_id:
-        q += " AND ca.cycle_id=?"; params.append(cycle_id)
-    q += " ORDER BY ca.task_type, ca.task_date, ca.created_at"
-    return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
-
-@app.route('/api/cycle-assignments', methods=['POST'])
-@require_auth(roles=['admin'])
-def create_cycle_assignment():
-    data = request.json or {}
-    if not data.get('cycle_id') or not data.get('volunteer_id') or not data.get('task_type'):
-        return jsonify({'error': 'cycle_id, volunteer_id, task_type required'}), 422
-    aid = str(uuid.uuid4())
-    get_db().execute(
-        '''INSERT INTO cycle_assignments
-           (id, cycle_id, volunteer_id, family_id, task_type, task_date, task_time, status, notes, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)''',
-        (aid, data['cycle_id'], data['volunteer_id'], data.get('family_id'),
-         data['task_type'], data.get('task_date'), data.get('task_time'),
-         'pending', data.get('notes'), now())
-    )
-    get_db().commit()
-    return jsonify({'id': aid}), 201
-
-@app.route('/api/cycle-assignments/<aid>', methods=['PUT'])
-@require_auth(roles=['admin'])
-def update_cycle_assignment(aid):
-    db = get_db()
-    row = db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()
-    if not row:
-        return jsonify({'error': 'Not found'}), 404
-    d = request.json or {}
-    db.execute(
-        '''UPDATE cycle_assignments SET volunteer_id=?, family_id=?, task_date=?,
-           task_time=?, status=?, notes=?, updated_at=? WHERE id=?''',
-        (d.get('volunteer_id', row['volunteer_id']), d.get('family_id', row['family_id']),
-         d.get('task_date', row['task_date']), d.get('task_time', row['task_time']),
-         d.get('status', row['status']), d.get('notes', row['notes']), now(), aid)
-    )
-    db.commit()
-    return jsonify(dict(db.execute("SELECT * FROM cycle_assignments WHERE id=?", (aid,)).fetchone()))
+# ── Cycle Assignments routes removed 2026-06-11 (audit 3.4) ──────────────────
+# Legacy /api/cycle-assignments CRUD deleted — zero frontend callers; superseded
+# by volunteer_slots. Table retained for historical data.
 
 @app.route('/login')
 def login_page():
@@ -5418,7 +5307,6 @@ def submit_food_order():
         return jsonify({'error': 'Forbidden'}), 403
 
     db = get_db()
-    auto_update_cycle_statuses(db)
 
     # Validate cycle is open
     cycle = db.execute(
@@ -5660,13 +5548,11 @@ def cancel_food_order():
                 (req['cycle_id'], family_id)
             )
 
-        # Log event BEFORE hard-delete so the event is committed to history
+        # Log event + hard-delete in ONE transaction (audit 3.7) — previously a
+        # crash between the two commits left slots released and the event logged
+        # while the order still existed. Events survive the delete (FK removed).
         _log_order_event(db, request_id, 'cancelled', actor='family',
                          payload={'days_until_delivery': days_until})
-        db.commit()
-
-        # Hard-delete the order row so the family can place a fresh order (same as admin cancel)
-        # NOTE: food_request_events are intentionally kept — they form the permanent audit trail
         db.execute("DELETE FROM food_request_items    WHERE request_id=?", (request_id,))
         db.execute("DELETE FROM order_change_requests WHERE request_id=?", (request_id,))
         db.execute("DELETE FROM food_requests         WHERE id=?",         (request_id,))
@@ -6146,15 +6032,12 @@ def admin_cancel_family_order(fid):
                 (req['cycle_id'], fid)
             )
 
-        # Log BEFORE deleting so the event is recorded
+        # Log event + hard-delete in ONE transaction (audit 3.7); events survive
+        # the delete (FK removed) and form the permanent audit trail
         _log_order_event(db, req['id'], 'cancelled', actor='admin',
                          payload={'cancelled_by': g.user['username'],
                                   'reason': reason or None,
                                   'prev_status': req['status']})
-        db.commit()
-
-        # Now hard-delete the order row so the family can place a fresh order
-        # NOTE: food_request_events are intentionally kept — they form the permanent audit trail
         db.execute("DELETE FROM food_request_items    WHERE request_id=?", (req['id'],))
         db.execute("DELETE FROM order_change_requests WHERE request_id=?", (req['id'],))
         db.execute("DELETE FROM food_requests         WHERE id=?",         (req['id'],))
@@ -7752,6 +7635,23 @@ def _daily_backup_job():
         log.error(f'Daily DB backup FAILED: {e}')
 
 
+def _purge_expired_sessions_job():
+    """Audit 3.6: delete expired admin/portal sessions nightly — previously they
+    accumulated forever (only per-token DELETE on explicit logout)."""
+    conn = make_conn()
+    try:
+        cutoff = datetime.utcnow().isoformat()
+        n1 = conn.execute("DELETE FROM sessions WHERE expires_at < ?", (cutoff,)).rowcount
+        n2 = conn.execute("DELETE FROM portal_sessions WHERE expires_at < ?", (cutoff,)).rowcount
+        conn.commit()
+        if n1 or n2:
+            log.info(f'Session purge: removed {n1} admin + {n2} portal expired sessions')
+    except Exception as e:
+        log.error(f'Session purge FAILED: {e}')
+    finally:
+        conn.close()
+
+
 def _daily_heartbeat_job():
     """Phase 0.4: daily ops digest to active admin users. Its arrival proves the
     scheduler and app are alive; its content surfaces silent failures (missing
@@ -7841,6 +7741,8 @@ try:
                        id='daily_db_backup', replace_existing=True)
     _scheduler.add_job(_daily_heartbeat_job, 'cron', hour=11, minute=0,
                        id='daily_heartbeat', replace_existing=True)
+    _scheduler.add_job(_purge_expired_sessions_job, 'cron', hour=6, minute=45,
+                       id='session_purge', replace_existing=True)
     _scheduler.start()
     log.info('APScheduler started — DB backup 07:30, email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00, heartbeat 11:00 UTC')
     # Take a backup immediately on deploy too (idempotent — skips if today's exists)
