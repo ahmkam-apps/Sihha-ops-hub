@@ -1277,11 +1277,13 @@ async function renderDashboard() {
         ...lineHistTotals,
         ...Array(projLabels.length).fill(null)
       ];
-      const projData = [
+      // Empty-DB guard: with zero donation history Array(length-1) was Array(-1)
+      // → RangeError ("Array length must be a positive integer of safe magnitude")
+      const projData = lineHistLabels.length ? [
         ...Array(lineHistLabels.length - 1).fill(null),
         lineLastTotal,          // bridge — same as last actual point
         ...projVals
-      ];
+      ] : [];
 
       // Average line across actual months only
       const avgVal = lineHistTotals.length
