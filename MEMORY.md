@@ -404,11 +404,11 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 |---|------|-------|--------|
 | 3.1 | Tests for finance domain | ✅ DONE 2026-06-11 — 43 tests added (receipts, approval→reimbursement auto-create, payments, donations + export, finance summary math, portal receipt flow). Suite: 157 passed. Found + fixed 4 prod bugs: payment-sent email never fired (SELECT phone vs vol['email']), receipt submit never auto-completed slot (stale 'claimed' guard), negative amounts accepted, invalid payment_method → 500. Remaining oddity (documented, not fixed): GET /api/receipts readable by any authenticated role | ✅ |
 | 3.2 | Add ~6 missing indexes | ✅ DONE 2026-06-10 — 8 added: `families(phone)`, `volunteer_slots(family_id)`, `receipts(slot_id/volunteer_id/cycle_id)`, `sessions(expires_at)`, `donations(cycle_id)`, `reminder_log(slot_id,sent_to)` | ✅ |
-| 3.3 | Batch N+1 queries | `get_orders` (per-row items query), `list_families` (4 subqueries/row), eligibility check | 🔲 |
-| 3.4 | Delete dead code | `/api/assignments` + `/api/cycle-assignments` routes (0 frontend callers), `assignments`/`cycle_assignments`/`stripe_transactions`/`wix_donations` tables, volunteer.html + order.html files | 🔲 |
+| 3.3 | Batch N+1 queries | ✅ DONE 2026-06-11 — `get_orders` items batched into one IN-query; `list_families` 4 correlated subqueries/row replaced with single slot scan. Eligibility-check loop left as-is (family-facing critical path, defer until measured) | ✅ |
+| 3.4 | Delete dead code | ✅ DONE 2026-06-11 — `/api/assignments` (3) + `/api/cycle-assignments` (3) routes deleted, `auto_update_cycle_statuses` no-op removed, volunteer.html + order.html dropped from git tree (redirects remain). Tables (`assignments`, `cycle_assignments`, `stripe_transactions`, `wix_donations`) retained — drop in a future migration | ✅ |
 | 3.5 | gunicorn `--preload` | ✅ DONE 2026-06-10 — Procfile + railway.json. bootstrap_db + APScheduler now run ONCE in the gunicorn master (verified: single "APScheduler started" log line). Migration races and double-job execution eliminated; reminder_log guards remain as defense | ✅ |
-| 3.6 | Session hygiene | Purge expired sessions (grows unbounded); slide expiry only when >1h elapsed (currently a write+commit on every request) | 🔲 |
-| 3.7 | Transaction discipline | 0 rollbacks, 81 scattered commits; wrap multi-step mutations (cancel flow) in single transaction | 🔲 |
+| 3.6 | Session hygiene | ✅ DONE 2026-06-11 — nightly purge job (06:45 UTC, sessions + portal_sessions); expiry slide throttled to at most hourly per session (was a write per request) | ✅ |
+| 3.7 | Transaction discipline | ✅ DONE 2026-06-11 (key flows) — family cancel + admin cancel now single-transaction (event log + deletes atomic). Remaining multi-commit functions are benign (branch-exclusive or idempotent follow-ons). Bonus fix: dashboard RangeError on empty donations table (Array(-1) in projection chart) | ✅ |
 
 ### ⚪ Phase 4 — Ongoing / structural
 
