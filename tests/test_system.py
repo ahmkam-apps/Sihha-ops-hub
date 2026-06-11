@@ -1520,3 +1520,626 @@ class TestFoodItemPricing:  # renamed from TestFoodCatalog — duplicate name sh
             'category_id': self.cat_id,
         })
         assert res.status_code == 422
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 18 — FINANCE DOMAIN: RECEIPTS, REIMBURSEMENTS, DONATIONS, SUMMARY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_role_headers(client, auth_headers, role):
+    """Create a user with the given role and return Bearer auth headers for it.
+    Passes an explicit password + must_change_password=0 so login returns a full
+    session token immediately (no set-password dance)."""
+    uname = f'{role}_{uuid.uuid4().hex[:6]}'
+    res = client.post('/api/users', headers=auth_headers,
+                      json={'username': uname, 'role': role,
+                            'password': 'RolePass1!', 'must_change_password': 0})
+    assert res.status_code == 201, f'{role} user create failed: {res.data}'
+    login = client.post('/api/auth/login',
+                        json={'username': uname, 'password': 'RolePass1!'})
+    assert login.status_code == 200, f'{role} login failed: {login.data}'
+    return {'Authorization': f'Bearer {login.get_json()["token"]}'}
+
+
+class TestReceipts:
+    """Admin receipt creation (with/without cycle_id), list joins, and role gates."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth):
+        self.client = client
+        self.auth = auth
+        tag = uuid.uuid4().hex[:6]
+        phone = f'585600{uuid.uuid4().hex[:4]}'
+        fam = client.post('/api/families', headers=auth,
+                          json={'name': f'Receipt Fam {tag}', 'phone': phone,
+                                'family_size': 3, 'status': 'active'}).get_json()
+        self.family_id = fam['id']
+        self.family_data = fam
+        vol = client.post('/api/volunteers', headers=auth,
+                          json={'name': f'Receipt Vol {tag}',
+                                'phone': f'5856{uuid.uuid4().int % 1000000:06d}',
+                                'role': 'shopper', 'status': 'active'}).get_json()
+        self.volunteer_id = vol['id']
+        self.volunteer_name = f'Receipt Vol {tag}'
+        cycle = client.post('/api/delivery-cycles', headers=auth,
+                            json=_cycle_payload()).get_json()
+        self.cycle_id = cycle['id']
+        self.cycle_title = cycle['title']
+
+    def _create_receipt(self, **overrides):
+        payload = {'volunteer_id': self.volunteer_id, 'family_id': self.family_id,
+                   'store': 'Aldi', 'purchase_date': '2026-06-01', 'amount': 84.50}
+        payload.update(overrides)
+        res = self.client.post('/api/receipts', headers=self.auth, json=payload)
+        assert res.status_code == 201, f'Receipt create failed: {res.data}'
+        return res.get_json()['id']
+
+    def _find_receipt(self, rid):
+        rows = self.client.get('/api/receipts', headers=self.auth).get_json()
+        return next((r for r in rows if r['id'] == rid), None)
+
+    def test_create_receipt_basic(self):
+        rid = self._create_receipt()
+        row = self._find_receipt(rid)
+        assert row is not None
+        assert row['status'] == 'pending'
+        assert row['amount'] == pytest.approx(84.50)
+        assert row['store'] == 'Aldi'
+
+    def test_create_receipt_with_cycle_id_resolves_cycle(self):
+        rid = self._create_receipt(cycle_id=self.cycle_id)
+        row = self._find_receipt(rid)
+        assert row['resolved_cycle_id'] == self.cycle_id
+        assert row['cycle_title'] == self.cycle_title
+
+    def test_create_receipt_without_cycle_id_has_no_cycle(self):
+        rid = self._create_receipt()
+        row = self._find_receipt(rid)
+        assert row['resolved_cycle_id'] is None
+        assert row['cycle_title'] is None
+
+    def test_list_receipts_joins_family_and_volunteer_names(self):
+        rid = self._create_receipt()
+        row = self._find_receipt(rid)
+        assert row['volunteer_name'] == self.volunteer_name
+        assert row['family_name'].startswith('Receipt Fam')
+
+    def test_list_receipts_status_filter(self):
+        rid = self._create_receipt()
+        pending = self.client.get('/api/receipts?status=pending', headers=self.auth).get_json()
+        assert any(r['id'] == rid for r in pending)
+        approved = self.client.get('/api/receipts?status=approved', headers=self.auth).get_json()
+        assert not any(r['id'] == rid for r in approved)
+
+    def test_receipts_require_auth(self, client):
+        assert client.get('/api/receipts').status_code == 401
+        assert client.post('/api/receipts', json={'amount': 10}).status_code == 401
+        assert client.put('/api/receipts/some-id', json={'status': 'approved'}).status_code == 401
+
+    def test_viewer_can_list_but_not_create_receipts(self, client, auth):
+        viewer = _make_role_headers(client, auth, 'viewer')
+        # GET has no role restriction (any authenticated user)
+        assert client.get('/api/receipts', headers=viewer).status_code == 200
+        # POST is admin/volunteer only
+        res = client.post('/api/receipts', headers=viewer,
+                          json={'volunteer_id': self.volunteer_id, 'amount': 10})
+        assert res.status_code == 403
+        # PUT is admin/finance/treasurer only
+        rid = self._create_receipt()
+        assert client.put(f'/api/receipts/{rid}', headers=viewer,
+                          json={'status': 'approved'}).status_code == 403
+
+    def test_family_role_cannot_create_receipt(self, client):
+        token = _get_family_token(self.client, self.family_data)
+        assert token, 'family login flow failed'
+        res = client.post('/api/receipts',
+                          headers={'Authorization': f'Bearer {token}'},
+                          json={'amount': 10})
+        assert res.status_code == 403
+
+    def test_update_receipt_not_found(self, client, auth):
+        res = client.put('/api/receipts/nonexistent-id', headers=auth,
+                         json={'status': 'approved'})
+        assert res.status_code == 404
+
+    def test_zero_amount_accepted_negative_rejected(self):
+        # Fixed 2026-06-11: negative amounts now rejected with 422 (zero stays
+        # allowed — a fully comped shop is legitimate).
+        rid_zero = self._create_receipt(amount=0)
+        assert self._find_receipt(rid_zero)['amount'] == 0
+        res = self.client.post('/api/receipts', headers=self.auth,
+                               json={'volunteer_id': self.volunteer_id, 'store': 'Neg Mart',
+                                     'purchase_date': '2026-06-03', 'amount': -12.50})
+        assert res.status_code == 422
+
+    def test_non_numeric_amount_rejected(self):
+        res = self.client.post('/api/receipts', headers=self.auth,
+                               json={'volunteer_id': self.volunteer_id, 'store': 'NaN Mart',
+                                     'purchase_date': '2026-06-03', 'amount': 'abc'})
+        assert res.status_code == 422
+
+
+class TestReceiptApprovalFlow:
+    """THE key money flow: PUT /api/receipts/<rid> status=approved must auto-create
+    exactly one pending reimbursement with correct amount/volunteer/receipt linkage."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth):
+        self.client = client
+        self.auth = auth
+        vol = client.post('/api/volunteers', headers=auth,
+                          json={'name': f'Approval Vol {uuid.uuid4().hex[:6]}',
+                                'phone': f'5858{uuid.uuid4().int % 1000000:06d}',
+                                'role': 'shopper', 'status': 'active'}).get_json()
+        self.volunteer_id = vol['id']
+
+    def _create_receipt(self, amount=72.30):
+        res = self.client.post('/api/receipts', headers=self.auth,
+                               json={'volunteer_id': self.volunteer_id,
+                                     'store': 'Costco', 'purchase_date': '2026-06-02',
+                                     'amount': amount})
+        assert res.status_code == 201
+        return res.get_json()['id']
+
+    def _reimbursements_for(self, rid, headers=None):
+        rows = self.client.get('/api/reimbursements',
+                               headers=headers or self.auth).get_json()
+        return [r for r in rows if r['receipt_id'] == rid]
+
+    def test_approve_creates_pending_reimbursement(self, client, auth):
+        rid = self._create_receipt(amount=72.30)
+        res = client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        assert res.status_code == 200
+        assert res.get_json()['status'] == 'approved'
+        reimbs = self._reimbursements_for(rid)
+        assert len(reimbs) == 1, 'Approval must create exactly one reimbursement'
+        rb = reimbs[0]
+        assert rb['amount'] == pytest.approx(72.30)
+        assert rb['volunteer_id'] == self.volunteer_id
+        assert rb['status'] == 'pending'
+        assert rb['approved_by'], 'approved_by must record the approving user'
+
+    def test_approve_twice_does_not_duplicate_reimbursement(self, client, auth):
+        rid = self._create_receipt()
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        assert len(self._reimbursements_for(rid)) == 1
+
+    def test_reject_does_not_create_reimbursement(self, client, auth):
+        rid = self._create_receipt()
+        res = client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'rejected'})
+        assert res.status_code == 200
+        assert res.get_json()['status'] == 'rejected'
+        assert self._reimbursements_for(rid) == []
+
+    def test_finance_role_can_approve(self, client, auth):
+        finance = _make_role_headers(client, auth, 'finance')
+        rid = self._create_receipt(amount=15.00)
+        res = client.put(f'/api/receipts/{rid}', headers=finance, json={'status': 'approved'})
+        assert res.status_code == 200
+        reimbs = self._reimbursements_for(rid, headers=finance)
+        assert len(reimbs) == 1
+        assert reimbs[0]['amount'] == pytest.approx(15.00)
+
+    def test_negative_receipt_rejected_at_creation(self, client, auth):
+        # Fixed 2026-06-11: negative amounts can no longer enter the chain,
+        # so negative reimbursements are impossible via the API.
+        res = client.post('/api/receipts', headers=auth,
+                          json={'volunteer_id': self.volunteer_id, 'store': 'Neg Mart',
+                                'purchase_date': '2026-06-03', 'amount': -30.00})
+        assert res.status_code == 422
+
+
+class TestReimbursements:
+    """Reimbursement list role gates + payment update flow."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth):
+        self.client = client
+        self.auth = auth
+        vol = client.post('/api/volunteers', headers=auth,
+                          json={'name': f'Reimb Vol {uuid.uuid4().hex[:6]}',
+                                'phone': f'5859{uuid.uuid4().int % 1000000:06d}',
+                                'email': f'reimb_{uuid.uuid4().hex[:6]}@test.sihha.org',
+                                'role': 'shopper', 'status': 'active'}).get_json()
+        self.volunteer_id = vol['id']
+        rec = client.post('/api/receipts', headers=auth,
+                          json={'volunteer_id': self.volunteer_id, 'store': 'Walmart',
+                                'purchase_date': '2026-06-03', 'amount': 60.00}).get_json()
+        self.receipt_id = rec['id']
+        approve = client.put(f'/api/receipts/{self.receipt_id}', headers=auth,
+                             json={'status': 'approved'})
+        assert approve.status_code == 200
+        self.reimb_id = next(r['id'] for r in
+                             client.get('/api/reimbursements', headers=auth).get_json()
+                             if r['receipt_id'] == self.receipt_id)
+
+    def _get_reimb(self):
+        rows = self.client.get('/api/reimbursements', headers=self.auth).get_json()
+        return next(r for r in rows if r['id'] == self.reimb_id)
+
+    def test_list_includes_volunteer_and_receipt_info(self):
+        rb = self._get_reimb()
+        assert rb['volunteer_name'].startswith('Reimb Vol')
+        assert rb['store'] == 'Walmart'
+        assert rb['receipt_amount'] == pytest.approx(60.00)
+
+    def test_list_allowed_for_finance_and_treasurer(self, client, auth):
+        for role in ('finance', 'treasurer'):
+            headers = _make_role_headers(client, auth, role)
+            assert client.get('/api/reimbursements', headers=headers).status_code == 200
+
+    def test_list_forbidden_for_viewer_and_volunteer(self, client, auth):
+        viewer = _make_role_headers(client, auth, 'viewer')
+        assert client.get('/api/reimbursements', headers=viewer).status_code == 403
+        vol_token = _get_volunteer_token(client, self.volunteer_id, auth)
+        assert vol_token, 'volunteer login flow failed'
+        res = client.get('/api/reimbursements',
+                         headers={'Authorization': f'Bearer {vol_token}'})
+        assert res.status_code == 403
+
+    def test_list_requires_auth(self, client):
+        assert client.get('/api/reimbursements').status_code == 401
+        assert client.put(f'/api/reimbursements/{self.reimb_id}',
+                          json={'status': 'paid'}).status_code == 401
+
+    def test_mark_paid_persists_payment_fields(self, client, auth):
+        res = client.put(f'/api/reimbursements/{self.reimb_id}', headers=auth,
+                         json={'status': 'paid', 'payment_method': 'zelle',
+                               'payment_ref': 'TX-12345'})
+        assert res.status_code == 200
+        rb = self._get_reimb()
+        assert rb['status'] == 'paid'
+        assert rb['payment_method'] == 'zelle'
+        assert rb['payment_ref'] == 'TX-12345'
+        assert rb['paid_date'], 'paid_date must be auto-set when marked paid'
+
+    def test_invalid_payment_method_rejected_with_422(self, client, auth):
+        # Fixed 2026-06-11: app-level whitelist validation returns 422 with a
+        # helpful message instead of letting the DB CHECK constraint 500.
+        res = client.put(f'/api/reimbursements/{self.reimb_id}', headers=auth,
+                         json={'status': 'approved', 'payment_method': 'paypal'})
+        assert res.status_code == 422
+        assert 'payment method' in res.get_json()['error'].lower()
+        rb = self._get_reimb()
+        assert rb['status'] == 'pending', 'rejected update must not persist anything'
+        assert rb['payment_method'] is None
+
+    def test_already_paid_second_update_stays_consistent(self, client, auth):
+        client.put(f'/api/reimbursements/{self.reimb_id}', headers=auth,
+                   json={'status': 'paid', 'payment_method': 'venmo',
+                         'payment_ref': 'VN-1'})
+        first = self._get_reimb()
+        res = client.put(f'/api/reimbursements/{self.reimb_id}', headers=auth,
+                         json={'status': 'paid', 'notes': 'double-checked'})
+        assert res.status_code == 200
+        second = self._get_reimb()
+        assert second['status'] == 'paid'
+        assert second['payment_method'] == 'venmo'
+        assert second['payment_ref'] == 'VN-1'
+        assert second['paid_date'] == first['paid_date']
+        assert second['notes'] == 'double-checked'
+        rows = [r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                if r['receipt_id'] == self.receipt_id]
+        assert len(rows) == 1, 'still exactly one reimbursement for the receipt'
+
+    def test_update_nonexistent_reimbursement_404(self, client, auth):
+        res = client.put('/api/reimbursements/nonexistent-id', headers=auth,
+                         json={'status': 'paid'})
+        assert res.status_code == 404
+
+
+class TestDonations:
+    """Manual donation CRUD, Excel export, and role gates."""
+
+    def test_create_and_list_manual_donation(self, client, auth):
+        donor = f'Donor {uuid.uuid4().hex[:6]}'
+        res = client.post('/api/donations', headers=auth,
+                          json={'donor_name': donor, 'amount': 250.00,
+                                'type': 'cash', 'date': '2026-06-01',
+                                'source': 'manual', 'notes': 'Ramadan drive'})
+        assert res.status_code == 201
+        did = res.get_json()['id']
+        rows = client.get('/api/donations', headers=auth).get_json()
+        row = next((r for r in rows if r['id'] == did), None)
+        assert row is not None
+        assert row['donor_name'] == donor
+        assert row['amount'] == pytest.approx(250.00)
+        assert row['type'] == 'cash'
+
+    def test_donations_require_auth(self, client):
+        assert client.get('/api/donations').status_code == 401
+        assert client.post('/api/donations', json={'amount': 5}).status_code == 401
+        assert client.get('/api/donations/export').status_code == 401
+
+    def test_viewer_forbidden_on_donations(self, client, auth):
+        viewer = _make_role_headers(client, auth, 'viewer')
+        assert client.get('/api/donations', headers=viewer).status_code == 403
+        assert client.post('/api/donations', headers=viewer,
+                           json={'amount': 5}).status_code == 403
+        assert client.get('/api/donations/export', headers=viewer).status_code == 403
+
+    def test_finance_can_create_and_list(self, client, auth):
+        finance = _make_role_headers(client, auth, 'finance')
+        res = client.post('/api/donations', headers=finance,
+                          json={'donor_name': 'Finance Donor', 'amount': 10.00,
+                                'type': 'check', 'date': '2026-06-02'})
+        assert res.status_code == 201
+        assert client.get('/api/donations', headers=finance).status_code == 200
+
+    def test_export_returns_xlsx(self, client, auth):
+        # Ensure at least one donation exists
+        client.post('/api/donations', headers=auth,
+                    json={'donor_name': 'Export Donor', 'amount': 33.00,
+                          'type': 'cash', 'date': '2026-06-03'})
+        res = client.get('/api/donations/export', headers=auth)
+        assert res.status_code == 200
+        assert res.content_type.startswith(
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        assert res.data[:2] == b'PK', 'xlsx payload must be a zip archive'
+
+    def test_delete_donation_role_gates(self, client, auth):
+        # DELETE is admin/treasurer only — finance is excluded
+        did = client.post('/api/donations', headers=auth,
+                          json={'donor_name': 'Delete Me', 'amount': 1.00,
+                                'type': 'cash', 'date': '2026-06-04'}).get_json()['id']
+        finance = _make_role_headers(client, auth, 'finance')
+        assert client.delete(f'/api/donations/{did}', headers=finance).status_code == 403
+        treasurer = _make_role_headers(client, auth, 'treasurer')
+        assert client.delete(f'/api/donations/{did}', headers=treasurer).status_code == 200
+        rows = client.get('/api/donations', headers=auth).get_json()
+        assert not any(r['id'] == did for r in rows)
+
+    def test_sync_wix_without_api_key_returns_400(self, client, auth, monkeypatch):
+        monkeypatch.delenv('WIX_API_KEY', raising=False)
+        res = client.post('/api/donations/sync-wix', headers=auth)
+        assert res.status_code == 400
+        assert 'WIX_API_KEY' in res.get_json()['error']
+
+    def test_sync_wix_forbidden_for_finance(self, client, auth):
+        # sync-wix is admin/treasurer only
+        finance = _make_role_headers(client, auth, 'finance')
+        assert client.post('/api/donations/sync-wix', headers=finance).status_code == 403
+
+
+class TestFinanceSummary:
+    """GET /api/finance/summary — totals arithmetic and per-cycle breakdown.
+    Uses before/after deltas because the session-scoped DB accumulates rows
+    from other test classes."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth):
+        self.client = client
+        self.auth = auth
+        vol = client.post('/api/volunteers', headers=auth,
+                          json={'name': f'Summary Vol {uuid.uuid4().hex[:6]}',
+                                'phone': f'5851{uuid.uuid4().int % 1000000:06d}',
+                                'role': 'shopper', 'status': 'active'}).get_json()
+        self.volunteer_id = vol['id']
+        cycle = client.post('/api/delivery-cycles', headers=auth,
+                            json=_cycle_payload()).get_json()
+        self.cycle_id = cycle['id']
+
+    def _create_receipt(self, amount):
+        res = self.client.post('/api/receipts', headers=self.auth,
+                               json={'volunteer_id': self.volunteer_id,
+                                     'cycle_id': self.cycle_id, 'store': 'Aldi',
+                                     'purchase_date': '2026-06-05', 'amount': amount})
+        assert res.status_code == 201
+        return res.get_json()['id']
+
+    def _summary(self):
+        res = self.client.get('/api/finance/summary', headers=self.auth)
+        assert res.status_code == 200
+        return res.get_json()
+
+    def test_totals_and_per_cycle_math(self, client, auth):
+        before = self._summary()['totals']
+
+        # Two donations: 100.00 + 50.25
+        for amt in (100.00, 50.25):
+            client.post('/api/donations', headers=auth,
+                        json={'donor_name': 'Summary Donor', 'amount': amt,
+                              'type': 'cash', 'date': '2026-06-05'})
+
+        # Receipt 1: 40.00 → approved → reimbursement paid
+        r1 = self._create_receipt(40.00)
+        client.put(f'/api/receipts/{r1}', headers=auth, json={'status': 'approved'})
+        reimb1 = next(r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                      if r['receipt_id'] == r1)
+        paid = client.put(f'/api/reimbursements/{reimb1["id"]}', headers=auth,
+                          json={'status': 'paid', 'payment_method': 'zelle'})
+        assert paid.status_code == 200
+
+        # Receipt 2: 25.00 → approved → reimbursement stays pending
+        r2 = self._create_receipt(25.00)
+        client.put(f'/api/receipts/{r2}', headers=auth, json={'status': 'approved'})
+
+        after = self._summary()
+        t, b = after['totals'], before
+        assert t['donations'] - b['donations'] == pytest.approx(150.25)
+        assert t['receipts_submitted'] - b['receipts_submitted'] == pytest.approx(65.00)
+        assert t['reimbursed'] - b['reimbursed'] == pytest.approx(40.00)
+        assert t['pending'] - b['pending'] == pytest.approx(25.00)
+        # Balance invariant: donations minus paid reimbursements
+        assert t['balance'] == pytest.approx(t['donations'] - t['reimbursed'])
+
+        # Per-cycle breakdown for our fresh cycle
+        cyc = next(c for c in after['cycles'] if c['id'] == self.cycle_id)
+        assert cyc['receipt_count'] == 2
+        assert cyc['receipts_total'] == pytest.approx(65.00)
+        assert cyc['reimbursed_total'] == pytest.approx(40.00)
+        assert cyc['pending_total'] == pytest.approx(25.00)
+
+    def test_rejected_receipts_excluded_from_summary(self, client, auth):
+        before = self._summary()['totals']
+        rid = self._create_receipt(99.99)
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'rejected'})
+        after = self._summary()
+        assert after['totals']['receipts_submitted'] == pytest.approx(
+            before['receipts_submitted'])
+        cyc = next(c for c in after['cycles'] if c['id'] == self.cycle_id)
+        assert cyc['receipt_count'] == 0
+        assert cyc['receipts_total'] == pytest.approx(0)
+
+    def test_summary_shape_and_role_gates(self, client, auth):
+        data = self._summary()
+        assert set(data['totals'].keys()) == {
+            'donations', 'receipts_submitted', 'reimbursed', 'pending', 'balance'}
+        assert isinstance(data['cycles'], list)
+        if data['cycles']:
+            assert {'id', 'title', 'cycle_status', 'receipt_count',
+                    'receipts_total', 'reimbursed_total',
+                    'pending_total'} <= set(data['cycles'][0].keys())
+        viewer = _make_role_headers(client, auth, 'viewer')
+        assert client.get('/api/finance/summary', headers=viewer).status_code == 403
+        assert client.get('/api/finance/summary').status_code == 401
+
+
+class TestPortalReceiptFlow:
+    """Volunteer portal receipt submission: auto-reimbursement, resubmission,
+    slot ownership, and the paid→receipt-approved linkage."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, client, auth, wa_mock):
+        self.client = client
+        self.auth = auth
+
+        # Family with a confirmed order in an open cycle
+        phone = f'585700{uuid.uuid4().hex[:4]}'
+        fam = client.post('/api/families', headers=auth,
+                          json={'name': f'PortalRcpt Fam {phone}', 'phone': phone,
+                                'address': '9 Oak St', 'city': 'Rochester',
+                                'family_size': 4, 'status': 'active'}).get_json()
+        self.family_id = fam['id']
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam)}'}
+
+        cycle = client.post('/api/delivery-cycles', headers=auth,
+                            json=_cycle_payload(status='open')).get_json()
+        self.cycle_id = cycle['id']
+
+        client.post('/api/food-order', headers=fam_headers,
+                    json={'family_id': self.family_id, 'cycle_id': self.cycle_id,
+                          'selected_items': []})
+        client.post(f'/api/delivery-cycles/{self.cycle_id}/generate-slots', headers=auth)
+
+        # Shopper volunteer with a portal session who claims the shopping slot
+        vol_phone = f'5852{uuid.uuid4().int % 1000000:06d}'
+        vol = client.post('/api/volunteers', headers=auth,
+                          json={'name': f'PortalRcpt Vol {vol_phone}', 'phone': vol_phone,
+                                'email': f'prv_{vol_phone}@test.sihha.org',
+                                'role': 'shopper', 'status': 'active'}).get_json()
+        self.volunteer_id = vol['id']
+        token = _get_volunteer_token(client, self.volunteer_id, auth)
+        assert token, 'volunteer portal login failed'
+        self.portal = {'Authorization': f'Bearer {token}'}
+
+        signup = client.post('/api/portal/signup', headers=self.portal,
+                             json={'cycle_id': self.cycle_id,
+                                   'family_id': self.family_id,
+                                   'task_types': ['shopping']})
+        assert signup.status_code == 201, f'Signup failed: {signup.data}'
+        tasks = client.get('/api/portal/my-tasks', headers=self.portal).get_json()
+        self.slot_id = next(t['id'] for t in tasks
+                            if t['task_type'] == 'shopping'
+                            and t['family_id'] == self.family_id)
+
+    def _submit_receipt(self, amount=33.33, **overrides):
+        payload = {'slot_id': self.slot_id, 'amount': amount,
+                   'store': 'Trader Joes', 'purchase_date': '2026-06-06'}
+        payload.update(overrides)
+        return self.client.post('/api/portal/receipts', headers=self.portal, json=payload)
+
+    def test_portal_submit_creates_receipt_and_pending_reimbursement(self, client, auth):
+        res = self._submit_receipt(amount=33.33)
+        assert res.status_code == 201
+        data = res.get_json()
+        assert data['receipt_id'] and data['reimbursement_id']
+
+        # Receipt carries the family from the slot
+        receipts = client.get('/api/receipts', headers=auth).get_json()
+        rec = next(r for r in receipts if r['id'] == data['receipt_id'])
+        assert rec['family_id'] == self.family_id
+        assert rec['status'] == 'pending'
+        assert rec['amount'] == pytest.approx(33.33)
+
+        # Auto-created reimbursement linked correctly
+        reimbs = [r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                  if r['receipt_id'] == data['receipt_id']]
+        assert len(reimbs) == 1
+        assert reimbs[0]['volunteer_id'] == self.volunteer_id
+        assert reimbs[0]['amount'] == pytest.approx(33.33)
+        assert reimbs[0]['status'] == 'pending'
+
+    def test_portal_resubmit_same_slot_updates_in_place(self, client, auth):
+        first = self._submit_receipt(amount=33.33).get_json()
+        res = self._submit_receipt(amount=44.00)
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data['updated'] is True
+        assert data['receipt_id'] == first['receipt_id'], 'must update, not duplicate'
+
+        reimbs = [r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                  if r['receipt_id'] == first['receipt_id']]
+        assert len(reimbs) == 1, 'resubmission must not create a second reimbursement'
+        assert reimbs[0]['amount'] == pytest.approx(44.00)
+        assert reimbs[0]['status'] == 'pending'
+
+    def test_portal_lists_own_receipt_with_reimbursement_status(self, client):
+        submitted = self._submit_receipt(amount=21.00).get_json()
+        rows = client.get('/api/portal/receipts', headers=self.portal).get_json()
+        row = next((r for r in rows if r['id'] == submitted['receipt_id']), None)
+        assert row is not None
+        assert row['receipt_status'] == 'pending'
+        assert row['reimbursement_id'] == submitted['reimbursement_id']
+        assert row['reimbursement_status'] == 'pending'
+
+    def test_submit_with_someone_elses_slot_returns_404(self, client, auth):
+        other_phone = f'5853{uuid.uuid4().int % 1000000:06d}'
+        other = client.post('/api/volunteers', headers=auth,
+                            json={'name': f'Other Vol {other_phone}', 'phone': other_phone,
+                                  'email': f'ov_{other_phone}@test.sihha.org',
+                                  'role': 'shopper', 'status': 'active'}).get_json()
+        other_token = _get_volunteer_token(client, other['id'], auth)
+        res = client.post('/api/portal/receipts',
+                          headers={'Authorization': f'Bearer {other_token}'},
+                          json={'slot_id': self.slot_id, 'amount': 10.00, 'store': 'X'})
+        assert res.status_code == 404
+
+    def test_submit_without_slot_id_allowed(self, client, auth):
+        res = self._submit_receipt(amount=5.00, slot_id=None)
+        assert res.status_code == 201
+        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json()
+                   if r['id'] == res.get_json()['receipt_id'])
+        assert rec['family_id'] is None
+        assert rec['slot_id'] is None
+
+    def test_slot_auto_completed_on_receipt_submit(self, client, auth):
+        # Fixed 2026-06-11: receipt submission completes the shopping slot.
+        # (The old guard only matched status='claimed', which no longer occurs
+        # since the 2026-06-09 auto-confirm redesign — it now covers 'confirmed'.)
+        res = self._submit_receipt(amount=12.00)
+        assert res.status_code == 201
+        slots = client.get(f'/api/volunteer-slots?cycle_id={self.cycle_id}',
+                           headers=auth).get_json()
+        slot = next(s for s in slots if s['id'] == self.slot_id)
+        assert slot['status'] == 'complete', \
+            'Submitting a receipt IS the completion signal for a shopping slot'
+        assert slot.get('completed_at'), 'completed_at must be stamped'
+
+    def test_paying_reimbursement_marks_pending_receipt_approved(self, client, auth):
+        submitted = self._submit_receipt(amount=18.75).get_json()
+        res = client.put(f'/api/reimbursements/{submitted["reimbursement_id"]}',
+                         headers=auth,
+                         json={'status': 'paid', 'payment_method': 'venmo',
+                               'payment_ref': 'VN-99'})
+        assert res.status_code == 200
+        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json()
+                   if r['id'] == submitted['receipt_id'])
+        assert rec['status'] == 'approved', \
+            'Paying a reimbursement must mark its pending receipt approved'
+
+    def test_portal_receipts_require_portal_auth(self, client):
+        assert client.get('/api/portal/receipts').status_code == 401
+        assert client.post('/api/portal/receipts',
+                           json={'amount': 1}).status_code == 401

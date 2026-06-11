@@ -3060,6 +3060,12 @@ def list_receipts():
 @require_auth(roles=['admin', 'volunteer'])
 def create_receipt():
     data = request.json or {}
+    if data.get('amount') is not None:
+        try:
+            if float(data['amount']) < 0:
+                return jsonify({'error': 'Amount cannot be negative'}), 422
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid amount'}), 422
     rid = str(uuid.uuid4())
     db = get_db()
     db.execute(
@@ -3207,6 +3213,11 @@ def update_reimbursement(rid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+    # Validate up front — previously an invalid method hit the DB CHECK constraint
+    # and surfaced as a generic 500
+    _VALID_PAYMENT_METHODS = ('venmo', 'zelle', 'check', 'cash', 'bank_transfer', 'cheque', 'other')
+    if d.get('payment_method') is not None and d['payment_method'] not in _VALID_PAYMENT_METHODS:
+        return jsonify({'error': f'Invalid payment method. Use one of: {", ".join(_VALID_PAYMENT_METHODS)}'}), 422
     new_status = d.get('status', row['status'])
     paid_date  = d.get('paid_date', row['paid_date']) or (now()[:10] if new_status == 'paid' else row['paid_date'])
     db.execute(
@@ -3230,8 +3241,8 @@ def update_reimbursement(rid):
     if new_status == 'paid' and row['status'] != 'paid':
         try:
             vol = db.execute(
-                "SELECT name, phone FROM volunteers WHERE id=?", (row['volunteer_id'],)
-            ).fetchone()
+                "SELECT name, email FROM volunteers WHERE id=?", (row['volunteer_id'],)
+            ).fetchone()  # was SELECT phone — vol['email'] raised IndexError, silently killing this notification
             if vol and vol['email']:
                 method = d.get('payment_method', row['payment_method']) or 'bank transfer'
                 ref    = d.get('payment_ref', row['payment_ref'])
@@ -6490,7 +6501,12 @@ def portal_submit_receipt():
         if not slot:
             return jsonify({'error': 'Shopping slot not found or not yours'}), 404
 
-    amount = float(data.get('amount') or 0)
+    try:
+        amount = float(data.get('amount') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid amount'}), 422
+    if amount < 0:
+        return jsonify({'error': 'Amount cannot be negative'}), 422
     store  = (data.get('store') or '').strip()
     pdate  = data.get('purchase_date') or now()[:10]
     furl   = data.get('file_url')
@@ -6558,10 +6574,13 @@ def portal_submit_receipt():
         (reimb_id, rid, vol_id, amount, 'pending', now())
     )
 
-    # Auto-complete the slot — submitting receipt IS the completion signal
+    # Auto-complete the slot — submitting receipt IS the completion signal.
+    # Covers 'confirmed' too: since the 2026-06-09 auto-confirm redesign, slots go
+    # straight to 'confirmed', so the old 'claimed'-only guard silently no-op'd.
     if slot_id:
         db.execute(
-            "UPDATE volunteer_slots SET status='complete', completed_at=?, updated_at=? WHERE id=? AND status='claimed'",
+            "UPDATE volunteer_slots SET status='complete', completed_at=?, updated_at=? "
+            "WHERE id=? AND status IN ('claimed','confirmed')",
             (now(), now(), slot_id)
         )
 

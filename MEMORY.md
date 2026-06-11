@@ -373,7 +373,7 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 | # | Item | Notes | Status |
 |---|------|-------|--------|
 | 0.1 | **Daily DB backup job** | ✅ DONE 2026-06-09 — `_daily_backup_job()` in server.py: SQLite online-backup API → `data/backups/sihaa-YYYYMMDD.db`, keeps 14, runs 07:30 UTC + once on deploy, idempotent across workers. Uploads folder NOT yet included (covered by 0.2) | ✅ |
-| 0.2 | **Off-site backup copy** | ✅ BUILT 2026-06-10 — daily gzipped snapshot emailed after backup; **⚠️ ACTIVATION REQUIRED: set `BACKUP_EMAIL` env var in Railway** (recipient inbox). Auto-warns if DB outgrows the 10MB email cap → then move to S3/B2 | ⚠️ env |
+| 0.2 | **Off-site backup copy** | ✅ DONE & VERIFIED 2026-06-11 — `BACKUP_EMAIL=info@sihha.org` set in Railway prod; first snapshot email received (79 KB gz). Arrives daily ~07:30 UTC. Auto-warns if DB outgrows the 10MB email cap → then move to S3/B2 | ✅ |
 | 0.3 | **Staging environment** | Every push to master deploys straight to PROD. `origin/staging` branch exists on GitHub — check if wired to a Railway service. Otherwise add one, or adopt pre-deploy checklist | 🔲 |
 | 0.4 | **Heartbeat / monitoring** | ✅ DONE 2026-06-10 — `_daily_heartbeat_job()` 11:00 UTC: emails active admins backup status/freshness, active cycle + orders + open slots, 24h notification count, pending queues. Requires admin users to have email addresses set | ✅ |
 
@@ -402,7 +402,7 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 | # | Item | Notes | Status |
 |---|------|-------|--------|
-| 3.1 | Tests for finance domain | Receipts, reimbursement auto-creation, donations, Wix sync, finance summary — currently ZERO tests on money paths (~31% route coverage overall) | 🔲 |
+| 3.1 | Tests for finance domain | ✅ DONE 2026-06-11 — 43 tests added (receipts, approval→reimbursement auto-create, payments, donations + export, finance summary math, portal receipt flow). Suite: 157 passed. Found + fixed 4 prod bugs: payment-sent email never fired (SELECT phone vs vol['email']), receipt submit never auto-completed slot (stale 'claimed' guard), negative amounts accepted, invalid payment_method → 500. Remaining oddity (documented, not fixed): GET /api/receipts readable by any authenticated role | ✅ |
 | 3.2 | Add ~6 missing indexes | ✅ DONE 2026-06-10 — 8 added: `families(phone)`, `volunteer_slots(family_id)`, `receipts(slot_id/volunteer_id/cycle_id)`, `sessions(expires_at)`, `donations(cycle_id)`, `reminder_log(slot_id,sent_to)` | ✅ |
 | 3.3 | Batch N+1 queries | `get_orders` (per-row items query), `list_families` (4 subqueries/row), eligibility check | 🔲 |
 | 3.4 | Delete dead code | `/api/assignments` + `/api/cycle-assignments` routes (0 frontend callers), `assignments`/`cycle_assignments`/`stripe_transactions`/`wix_donations` tables, volunteer.html + order.html files | 🔲 |
