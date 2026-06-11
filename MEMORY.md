@@ -374,7 +374,7 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 |---|------|-------|--------|
 | 0.1 | **Daily DB backup job** | ✅ DONE 2026-06-09 — `_daily_backup_job()` in server.py: SQLite online-backup API → `data/backups/sihaa-YYYYMMDD.db`, keeps 14, runs 07:30 UTC + once on deploy, idempotent across workers. Uploads folder NOT yet included (covered by 0.2) | ✅ |
 | 0.2 | **Off-site backup copy** | ✅ DONE & VERIFIED 2026-06-11 — `BACKUP_EMAIL=info@sihha.org` set in Railway prod; first snapshot email received (79 KB gz). Arrives daily ~07:30 UTC. Auto-warns if DB outgrows the 10MB email cap → then move to S3/B2 | ✅ |
-| 0.3 | **Staging environment** | Every push to master deploys straight to PROD. `origin/staging` branch exists on GitHub — check if wired to a Railway service. Otherwise add one, or adopt pre-deploy checklist | 🔲 |
+| 0.3 | **Staging environment** | ✅ DONE & VERIFIED 2026-06-11 — Railway staging service deploys from `staging` branch: https://dev-staging-sihha-production.up.railway.app — own DB (`sihaa_staging.db`, fresh), ADMIN_PASSWORD set. **Deploy protocol: push to `staging` → verify → fast-forward same commit to `master`.** ⚠️ staging has a live SENDGRID_API_KEY — keep staging data synthetic or remove the key | ✅ |
 | 0.4 | **Heartbeat / monitoring** | ✅ DONE 2026-06-10 — `_daily_heartbeat_job()` 11:00 UTC: emails active admins backup status/freshness, active cycle + orders + open slots, 24h notification count, pending queues. Requires admin users to have email addresses set | ✅ |
 
 ### 🔴 Phase 1 — Critical fixes from code audit (2026-06-09) — ~2h total

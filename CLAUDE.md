@@ -29,9 +29,12 @@
 - **Excel export:** openpyxl 3.1.5
 - **Hosting:** Railway (production), GitHub remote: `ahmkam-apps/Sihha-ops-hub`
 
-### Public URL
-**`https://sihha-ops-hub-production.up.railway.app`**
-(Also referenced as `https://ops.sihha.org` in some notification messages — confirm which is canonical)
+### Public URLs
+**PROD:** `https://sihha-ops-hub-production.up.railway.app` (deploys from `master`)
+**STAGING:** `https://dev-staging-sihha-production.up.railway.app` (deploys from `staging` branch; own DB `sihaa_staging.db`; synthetic data only — it has a live SendGrid key)
+(`https://ops.sihha.org` also referenced in some notification messages — confirm which is canonical)
+
+**Deploy protocol (since 2026-06-11):** push to `staging` → verify there → fast-forward the SAME commit to `master`. Never push untested changes straight to master.
 
 ### Environment variables (set in Railway dashboard)
 | Variable | Purpose |
