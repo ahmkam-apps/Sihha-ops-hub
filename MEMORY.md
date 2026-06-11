@@ -415,11 +415,11 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 | Item | Notes | Status |
 |------|-------|--------|
 | Split bootstrap_db (1,300 lines) into schema / versioned migrations / seeds + `schema_version` table | | 🔲 |
-| Extract shared `public/js/api.js` + `base.css` (api() wrapper duplicated verbatim; font/CSS block in 11/15 files; family.html ↔ my-order.html share 888 identical lines) | No build step needed | 🔲 |
+| Extract shared `public/js/api.js` + `base.css` | ✅ DONE 2026-06-11 — `public/css/base.css` (fonts + reset, 7 pages) and `public/js/shared.js` (`esc`, `escJs`, `makeApi` factory; index + portal wired). `/css/` + `/js/` routes added; sw.js cache → v6. family↔my-order page merge NOT done (escHtml semantics differ — deferred) | ✅ |
 | Status string constants (`'confirmed'` ×62 inline; inconsistent `status IN (...)` lists are latent bugs) | | 🔲 |
 | Log every silent `except: pass` (25 sites); standardize error envelope on `{'error': ...}`; stop echoing exception text (cancel route) | | 🔲 |
-| Remove/strip `/api/admin/db-debug` traceback leak; `secrets.token_urlsafe` for session tokens; reject temp_tokens in require_auth | | 🔲 |
-| Consolidate start command (currently in Procfile + railway.json + nixpacks.toml); delete repo cruft (`master`, root `sihaa.db`, pytest cache dirs) | | 🔲 |
+| Remove/strip `/api/admin/db-debug` traceback leak; `secrets.token_urlsafe` for session tokens; reject temp_tokens in require_auth | ✅ DONE 2026-06-11 — all three + `GET /api/receipts` tightened to admin/finance/treasurer. Temp tokens now `tmp_`-prefixed, rejected by require_auth, accepted only by set-password | ✅ |
+| Consolidate start command; delete repo cruft | ✅ DONE 2026-06-11 — Procfile + 0-byte `master` dropped from git tree (railway.json is the single start-command source); pytest caches gitignored | ✅ |
 | Update stale docs: CLAUDE.md (writable_schema hack removed; portal login is 410; volunteer.html/order.html are dead redirects) | | 🔲 |
 
 ### 🟡 Pre-existing backlog (carried forward)

@@ -9,6 +9,8 @@ __pycache__/
 *.db-shm
 venv/
 .venv/
+.pytest_cache/
+pytest-cache-files*/
 
 # nixpacks.toml stays ignored — committing it previously caused "No module named pip"
 # build failures on Railway. Python version is pinned via .python-version instead

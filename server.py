@@ -1,4 +1,5 @@
 import os
+import secrets
 import sqlite3
 import uuid
 import logging
@@ -1459,6 +1460,10 @@ def require_auth(roles=None):
             if not auth.startswith('Bearer '):
                 return jsonify({'error': 'Unauthorized'}), 401
             token = auth[7:]
+            if token.startswith('tmp_'):
+                # Temp tokens (must-change-password flow) are only valid for
+                # /api/auth/set-password — never for general API access
+                return jsonify({'error': 'Password change required. Complete it before using the app.'}), 401
             session = get_session(token)
             if not session:
                 return jsonify({'error': 'Session expired or invalid'}), 401
@@ -1840,7 +1845,9 @@ def login():
 
     # Issue a short-lived temp token for must_change_password flow
     if must_change:
-        temp_token = str(uuid.uuid4())
+        # 'tmp_' prefix lets require_auth reject temp tokens — they are ONLY
+        # valid for /api/auth/set-password (audit: temp token was a full session)
+        temp_token = 'tmp_' + secrets.token_urlsafe(32)
         expires_at = (datetime.utcnow() + timedelta(minutes=30)).isoformat()
         db.execute(
             "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
@@ -1855,7 +1862,7 @@ def login():
                      'name': user['name'], 'role': user['role']}
         })
 
-    token = str(uuid.uuid4())
+    token = secrets.token_urlsafe(32)  # CSPRNG session token (was uuid4)
     expires_at = (datetime.utcnow() + timedelta(hours=SESSION_HOURS)).isoformat()
     db.execute(
         "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
@@ -1931,7 +1938,7 @@ def set_password():
     db.execute("DELETE FROM sessions WHERE token=?", (temp_token,))
 
     # Issue a full session
-    token = str(uuid.uuid4())
+    token = secrets.token_urlsafe(32)  # CSPRNG session token (was uuid4)
     expires_at = (datetime.utcnow() + timedelta(hours=SESSION_HOURS)).isoformat()
     db.execute(
         "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
@@ -2975,8 +2982,9 @@ def update_volunteer(vid):
 # ── Receipts ──────────────────────────────────────────────────────────────────
 
 @app.route('/api/receipts', methods=['GET'])
-@require_auth()
-def list_receipts():
+@require_auth(roles=['admin', 'finance', 'treasurer'])  # audit: was open to any
+def list_receipts():                                    # authenticated role
+
     db = get_db()
     status = request.args.get('status')
     q = '''SELECT r.*, f.name as family_name, v.name as volunteer_name,
@@ -4932,6 +4940,14 @@ def manifest_volunteer():
 @app.route('/icons/<path:filename>')
 def pwa_icons(filename):
     return send_from_directory('public/icons', filename)
+
+@app.route('/css/<path:filename>')
+def shared_css(filename):
+    return send_from_directory('public/css', filename)
+
+@app.route('/js/<path:filename>')
+def shared_js(filename):
+    return send_from_directory('public/js', filename)
 
 # ── Public Food Order (no auth) ───────────────────────────────────────────────
 
@@ -7350,8 +7366,8 @@ def db_debug():
             'upcoming_insert_test': 'OK' if test_error is None else f'FAILED: {test_error}'
         })
     except Exception as e:
-        import traceback
-        return jsonify({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}), 500
+        log.exception('db-debug failed')  # traceback goes to logs, never to the client
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 def _send_family_confirmation_reminders():
     """7 days before delivery: email all active families with a link to /family portal.

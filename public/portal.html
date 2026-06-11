@@ -11,19 +11,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Sihha Volunteer">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/css/base.css">
 <style>
-  @font-face {
-    font-family: 'AreaExtrabold';
-    src: url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2');
-    font-weight: 800; font-style: normal;
-  }
-  @font-face {
-    font-family: 'AreaNormal';
-    src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
-    font-weight: 400; font-style: normal;
-  }
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
     --black: #111111; --white: #ffffff; --off-white: #f6f6f6;
     --gray-1: #f0f0f0; --gray-2: #e0e0e0; --gray-3: #c0c0c0;
@@ -338,24 +327,16 @@
   </div>
 </div>
 
+<script src="/js/shared.js"></script>
 <script>
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
-const BASE = '';
-function esc(s){return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 let TOKEN = localStorage.getItem('portalToken') || localStorage.getItem('portal_token');
 let VOL   = JSON.parse(localStorage.getItem('portalVolunteer') || localStorage.getItem('portal_vol') || 'null');
 
 // ── API ───────────────────────────────────────────────────────────────────────
-async function api(method, path, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
-  if (body !== undefined) opts.body = JSON.stringify(body);
-  const res  = await fetch(BASE + '/api' + path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
-}
+// shared.js makeApi — body sent whenever !== undefined (legacy portal.html behavior)
+const api = makeApi(() => TOKEN, true);
 const GET  = p => api('GET', p);
 const POST = (p, b) => api('POST', p, b);
 

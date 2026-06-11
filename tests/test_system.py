@@ -1616,18 +1616,20 @@ class TestReceipts:
         assert client.post('/api/receipts', json={'amount': 10}).status_code == 401
         assert client.put('/api/receipts/some-id', json={'status': 'approved'}).status_code == 401
 
-    def test_viewer_can_list_but_not_create_receipts(self, client, auth):
+    def test_viewer_fully_locked_out_of_receipts(self, client, auth):
+        # Tightened 2026-06-11: GET now requires admin/finance/treasurer —
+        # receipts expose volunteer names + amounts, not viewer material.
         viewer = _make_role_headers(client, auth, 'viewer')
-        # GET has no role restriction (any authenticated user)
-        assert client.get('/api/receipts', headers=viewer).status_code == 200
-        # POST is admin/volunteer only
+        assert client.get('/api/receipts', headers=viewer).status_code == 403
         res = client.post('/api/receipts', headers=viewer,
                           json={'volunteer_id': self.volunteer_id, 'amount': 10})
         assert res.status_code == 403
-        # PUT is admin/finance/treasurer only
         rid = self._create_receipt()
         assert client.put(f'/api/receipts/{rid}', headers=viewer,
                           json={'status': 'approved'}).status_code == 403
+        # finance role retains read access
+        finance = _make_role_headers(client, auth, 'finance')
+        assert client.get('/api/receipts', headers=finance).status_code == 200
 
     def test_family_role_cannot_create_receipt(self, client):
         token = _get_family_token(self.client, self.family_data)

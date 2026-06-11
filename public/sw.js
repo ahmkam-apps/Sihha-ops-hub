@@ -1,6 +1,6 @@
-// Sihha Service Worker — v5
-const CACHE = 'sihaa-v5';
-const PAGES = ['/family', '/portal', '/intake', '/volunteer'];
+// Sihha Service Worker — v6
+const CACHE = 'sihaa-v6';
+const PAGES = ['/family', '/portal', '/intake', '/volunteer', '/css/base.css', '/js/shared.js'];
 
 // ── Install: pre-cache public pages ──────────────────────────────────────────
 self.addEventListener('install', e => {
