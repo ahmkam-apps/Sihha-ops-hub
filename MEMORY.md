@@ -1,6 +1,8 @@
 # SIHAA Food Charity — Operations Hub Memory
 
-_Last updated: 2026-06-11 — **AUDIT REMEDIATION COMPLETE.** Phases 0–3 fully done + Phase 4 high-value items, all deployed to prod (final commit `2201810`). Sequence: `252d986` (backup job + Phase 1) → `c8db8d2` (Phase 2 hardening) → `937097d` (43 finance tests + 4 bug fixes) → `4fcc631`/`20725e4` (Phase 3: dead code, sessions, transactions, N+1, empty-DB dashboard fix) → `2201810` (Phase 4 lite: shared base.css/shared.js, secrets tokens, tmp_ temp-token scoping, receipts gate, Procfile removed). Test suite: 157 passed / 2 skipped. Staging-first deploy protocol in effect and exercised. Off-site backup verified to info@sihha.org; heartbeat 11:00 UTC. Phase 4 remainder (versioned migrations, status constants, exception logging, error envelope, family↔my-order merge) in backlog below — low priority. Manual items: CI 3.10→3.11 via GitHub UI (PAT lacks workflow scope); consider removing SENDGRID_API_KEY from staging. ⚠️ Sections below the backlog date from 2026-05-02 and are partially stale; CLAUDE.md is the authoritative current reference._
+_Last updated: 2026-06-11 — **AUDIT REMEDIATION COMPLETE.** Phases 0–3 fully done + Phase 4 high-value items, all deployed to prod (final commit `2201810`). Sequence: `252d986` (backup job + Phase 1) → `c8db8d2` (Phase 2 hardening) → `937097d` (43 finance tests + 4 bug fixes) → `4fcc631`/`20725e4` (Phase 3: dead code, sessions, transactions, N+1, empty-DB dashboard fix) → `2201810` (Phase 4 lite: shared base.css/shared.js, secrets tokens, tmp_ temp-token scoping, receipts gate, Procfile removed). Test suite: 157 passed / 2 skipped. Staging-first deploy protocol in effect and exercised. Off-site backup verified to info@sihha.org; heartbeat 11:00 UTC. Phase 4 remainder (versioned migrations, status constants, exception logging, error envelope, family↔my-order merge) in backlog below — low priority. Manual items: CI 3.10→3.11 via GitHub UI (PAT lacks workflow scope); consider removing SENDGRID_API_KEY from staging._
+
+_**2026-06-15 reconciliation (verified against code):** ops.sihha.org is now **LIVE**; Twilio/SMS **fully removed** — all notifications go via SendGrid email (sender `info@sihha.org`); APScheduler runs **8 jobs** (7 daily + a new **hourly Wix donation sync**: `/api/donations/sync-wix` + `_sync_wix_donations_job`, deployed commit `eef0d62`); all GitHub PATs were **revoked** — auth is via macOS Keychain, never embed a token in a URL. The Infrastructure / Tech-Stack / Scheduler-Jobs tables below are corrected to match. ⚠️ Some deep sections still date from 2026-05-02; treat CLAUDE.md as the authoritative current reference._
 
 ---
 
@@ -20,9 +22,10 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 
 | Item | Value |
 |------|-------|
-| Live URL | https://sihha-ops-hub-production.up.railway.app |
+| Live URL (prod) | **https://ops.sihha.org** (+ https://sihha-ops-hub-production.up.railway.app) |
+| Staging URL | https://dev-staging-sihha-production.up.railway.app (deploys from `staging` branch) |
 | GitHub Repo | https://github.com/ahmkam-apps/Sihha-ops-hub.git |
-| Hosting | Railway (auto-deploys from GitHub master) |
+| Hosting | Railway (auto-deploys: `master` → prod, `staging` → staging) |
 | Admin Login | admin / (set via ADMIN_PASSWORD env var in Railway) |
 | Public Intake | /intake |
 | Public Volunteer Signup | /volunteer |
@@ -41,10 +44,9 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 | Railway Volume | ✅ LIVE | Mounted at `/app/data` |
 | DB_PATH env var | ✅ Set | `/app/data/sihaa.db` |
 | ADMIN_PASSWORD env var | ✅ Set | Synced to DB on every deploy |
-| APP_URL env var | ⚠️ Should be set | Used for SMS confirmation links: `https://sihha-ops-hub-production.up.railway.app` |
-| GitHub token | stored in Railway env — do not commit | Active |
-| Old token | stored separately — revoke when convenient | 🔲 Revoke |
-| Custom subdomain | 🔲 Pending | ops.sihaa.org → Railway |
+| APP_URL env var | ⚠️ Should be set | Used for confirmation links: `https://ops.sihha.org` (SMS removed — links now emailed) |
+| GitHub auth | macOS Keychain (`credential.helper osxkeychain`) | ✅ All PATs revoked 2026-06-15 — never embed a token in the remote URL |
+| Custom subdomain | ✅ LIVE | ops.sihha.org → Railway |
 | Wix buttons | 🔲 Pending | "Get Help" → /intake, "Volunteer" → /volunteer |
 | Stripe MCP plugin | 🔲 Pending | Phase 4D reconciliation |
 | Rashid treasurer account | 🔲 Pending | Add email address for treasurer notifications |
@@ -60,10 +62,10 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 | WSGI | Gunicorn 2 workers |
 | Frontend | Vanilla JS, single-file HTML SPAs |
 | Auth | Bearer token, DB-persisted sessions |
-| SMS | Twilio — all family + volunteer notifications |
-| Scheduling | APScheduler (3 daily jobs) |
+| SMS | ❌ Removed — Twilio fully stripped (otp_tokens table + /api/auth/otp routes remain but are vestigial) |
+| Scheduling | APScheduler — 8 jobs (7 daily + hourly Wix donation sync) |
 | Charts | Chart.js 4.4.1 (CDN) |
-| Email | SendGrid (SENDGRID_API_KEY env var) — treasurer notifications |
+| Email | SendGrid (SENDGRID_API_KEY env var) — ALL notifications; sender `info@sihha.org` |
 
 ---
 
@@ -178,14 +180,18 @@ reminder_log    ← idempotency guard for WA volunteer reminders
 
 ---
 
-## Scheduler Jobs (APScheduler — daily, idempotent)
+## Scheduler Jobs (APScheduler — runs in each gunicorn worker; idempotent)
 
-| Job ID | Time (UTC) | What it does |
+| Job ID | Schedule (UTC) | What it does |
 |--------|-----------|--------------|
-| `daily_reminders` | 08:00 | WA reminder to volunteers with delivery slots 2 days out |
-| `family_opt_in_notifications` | 09:00 | T-7 before delivery: creates food_requests + sends WA opt-in link to each active family |
-| `family_cutoff_skip` | 09:30 | T-5 before delivery: marks all `pending_confirmation` requests as `skipped` |
-| `auto_release_unconfirmed_slots` | 10:00 | 3 days before delivery: releases `claimed` slots where family has NOT placed order; WA to volunteer; idempotent via reminder_log |
+| `session_purge` | daily 06:45 | Purge expired `sessions` + `portal_sessions` |
+| `daily_db_backup` | daily 07:30 (+ on deploy) | SQLite online-backup → `data/backups/`, keep 14; off-site copy emailed (`BACKUP_EMAIL`) |
+| `daily_reminders` | daily 08:00 | Email reminder to volunteers with delivery slots 2 days out |
+| `family_opt_in_notifications` | daily 09:00 | T-7 before delivery: creates food_requests + emails opt-in link to each active family |
+| `family_cutoff_skip` | daily 09:30 | T-5 before delivery: marks all `pending_confirmation` requests as `skipped` |
+| `auto_release_unconfirmed_slots` | daily 10:00 | 3 days before delivery: releases `claimed` slots with no family order; emails volunteer; idempotent via reminder_log |
+| `daily_heartbeat` | daily 11:00 | Emails active admins: backup freshness, active cycle/orders/open slots, 24h notification count, pending queues |
+| `wix_donation_sync` | **hourly (:00)** | Pulls PAID Wix donation orders into `donations` (dedup by Wix order id); no-op if `WIX_API_KEY` unset — added 2026-06-15 |
 
 ---
 
@@ -426,11 +432,11 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 | Item | Notes | Status |
 |------|-------|--------|
-| Phase 4D: Financial reconciliation | Stripe + bank CSV import, donation matching | 🔲 |
-| Revoke old GitHub token | Stored separately — do not commit token strings | 🔲 |
-| ops.sihaa.org DNS → Railway | Custom subdomain | 🔲 |
+| Phase 4D: Financial reconciliation | **Wix donation sync ✅ DONE 2026-06-15** (hourly job + `/api/donations/sync-wix`). Stripe + bank CSV import + matching still pending | ◑ |
+| Revoke old GitHub token | ✅ DONE 2026-06-15 — all PATs revoked; auth via macOS Keychain, no token in URL | ✅ |
+| ops.sihha.org DNS → Railway | ✅ DONE — custom subdomain LIVE | ✅ |
 | Wix buttons | "Get Help" → /intake, "Volunteer" → /volunteer | 🔲 |
-| Donate-stats widget on Wix | iframe embed | 🔲 |
+| Donate-stats widget on Wix | iframe embed (`/donate-stats` + widget-progress fundraising bar) | 🔲 |
 | Notification triggers (now via SendGrid email — Twilio/SMS fully removed) | Intake received, family activated, volunteer approved, T-5 skipped, delivery on its way | 🔲 |
 
 ---
@@ -501,20 +507,20 @@ May 9-10, May 23-24, Jun 6-7, Jun 20-21, Jul 4-5, Jul 18-19, Aug 1-2, Aug 15-16,
 
 ---
 
-## GitHub Push Process
+## GitHub Push / Deploy Process
 
-Use the clean-clone workaround (avoids lock file issues in sandbox):
+Canonical local clone: `~/Documents/Claude/Projects/RAILWAY_Sihha-Ops-Hub/Sihha-ops-hub` (real git, on `master`).
+
+- Claude edits files there directly (the Cowork mount blocks git plumbing, but file edits work). Claude **never pushes** — it hands over a patch when a change spans many files.
+- The **user runs all git from their own Terminal** (where git works), authenticated via macOS Keychain — **no token in the URL**.
+- **Deploy protocol (staging-first):** push to `staging` → verify → fast-forward the same commit to `master`. Railway auto-deploys `master` to prod (Wait-for-CI gate ≈ 1 min, then build ~1–2 min).
 
 ```bash
-cd /tmp && rm -rf sihaa-push && \
-git clone https://ghp_<TOKEN>@github.com/ahmkam-apps/Sihha-ops-hub.git sihaa-push && \
-cp "/sessions/.../mnt/Ops Hub -App/sihaa-ops-hub/public/portal.html" /tmp/sihaa-push/public/portal.html && \
-cd /tmp/sihaa-push && \
-git config user.email "ahmerkam@icloud.com" && git config user.name "AK" && \
-git add <files> && git commit -m "message" && git push origin master
+cd ~/Documents/Claude/Projects/RAILWAY_Sihha-Ops-Hub/Sihha-ops-hub
+git add <files> && git commit -m "message"
+git push origin staging      # deploys to dev-staging-sihha — verify first
+git checkout master && git merge staging && git push origin master
 ```
-
-Token is embedded in the remote URL. Railway auto-deploys from master (~2 min).
 
 ---
 
