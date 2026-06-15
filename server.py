@@ -3326,10 +3326,21 @@ def delete_donation(did):
     db.commit()
     return jsonify({'ok': True})
 
-@app.route('/api/donations/sync-wix', methods=['POST'])
-@require_auth(roles=['admin', 'treasurer'])
-def sync_wix_donations():
-    """Pull all PAID donation orders from Wix eCommerce API and upsert into donations table."""
+class WixSyncError(Exception):
+    """Raised by the Wix sync core for config/API errors. Carries an HTTP status and
+    the number imported before the failure so callers can report partial progress."""
+    def __init__(self, message, status=502, imported=0):
+        super().__init__(message)
+        self.message  = message
+        self.status   = status
+        self.imported = imported
+
+
+def _sync_wix_donations_core(db):
+    """Pull all PAID donation orders from the Wix eCommerce API and upsert into the
+    donations table (deduped by Wix order id). Returns {'imported': int, 'skipped': int}.
+    Raises WixSyncError on missing config or Wix API errors. Safe for both request
+    context (pass get_db()) and scheduler jobs (pass make_conn())."""
     try:
         import urllib.request as _req
         import urllib.error as _ureq
@@ -3339,9 +3350,7 @@ def sync_wix_donations():
         site_id = os.environ.get('WIX_SITE_ID', '038c9d97-1ce8-4495-982b-37591dce50ee').strip()
 
         if not api_key:
-            return jsonify({'error': 'WIX_API_KEY not configured in environment variables'}), 400
-
-        db = get_db()
+            raise WixSyncError('WIX_API_KEY not configured in environment variables', status=400)
 
         # Anonymize any previously synced full names (one-time cleanup)
         # Detects unabbreviated names: no period, source='wix', more than one word
@@ -3394,10 +3403,10 @@ def sync_wix_donations():
             except _ureq.HTTPError as e:
                 body_text = e.read().decode('utf-8', errors='replace')
                 log.error(f'Wix HTTPError {e.code}: {body_text}')
-                return jsonify({'error': f'Wix API {e.code}: {body_text[:200]}', 'imported': imported}), 502
+                raise WixSyncError(f'Wix API {e.code}: {body_text[:200]}', status=502, imported=imported)
             except Exception as e:
                 log.error(f'Wix request error: {e}')
-                return jsonify({'error': f'Wix request error: {str(e)}', 'imported': imported}), 502
+                raise WixSyncError(f'Wix request error: {str(e)}', status=502, imported=imported)
 
             orders = result.get('orders', [])
             for order in orders:
@@ -3464,11 +3473,45 @@ def sync_wix_donations():
             if not cursor or not orders:
                 break
 
-        return jsonify({'ok': True, 'imported': imported, 'skipped_duplicates': skipped})
+        return {'imported': imported, 'skipped': skipped}
 
+    except WixSyncError:
+        raise
     except Exception as e:
-        log.error(f'sync_wix_donations unhandled error: {e}', exc_info=True)
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        log.error(f'sync_wix_donations_core unhandled error: {e}', exc_info=True)
+        raise WixSyncError(f'Server error: {str(e)}', status=500, imported=0)
+
+
+@app.route('/api/donations/sync-wix', methods=['POST'])
+@require_auth(roles=['admin', 'treasurer'])
+def sync_wix_donations():
+    """Manual trigger: sync Wix donations now. The hourly scheduler calls the same core."""
+    try:
+        result = _sync_wix_donations_core(get_db())
+        return jsonify({'ok': True, 'imported': result['imported'],
+                        'skipped_duplicates': result['skipped']})
+    except WixSyncError as e:
+        return jsonify({'error': e.message, 'imported': e.imported}), e.status
+
+
+def _sync_wix_donations_job():
+    """Hourly scheduler job — sync Wix donations using a standalone DB connection.
+    No-op when WIX_API_KEY is unset so non-configured deploys stay quiet. Idempotent:
+    the core dedupes by Wix order id, so running in each gunicorn worker is safe."""
+    if not os.environ.get('WIX_API_KEY', '').strip():
+        return
+    conn = make_conn()
+    try:
+        result = _sync_wix_donations_core(conn)
+        if result['imported']:
+            log.info(f"Wix hourly sync: imported {result['imported']} new donation(s), "
+                     f"skipped {result['skipped']} duplicate(s)")
+    except WixSyncError as e:
+        log.error(f'Wix hourly sync failed ({e.status}): {e.message}')
+    except Exception as e:
+        log.error(f'Wix hourly sync unhandled error: {e}', exc_info=True)
+    finally:
+        conn.close()
 
 # ── Food Categories ───────────────────────────────────────────────────────────
 
@@ -7759,8 +7802,10 @@ try:
                        id='daily_heartbeat', replace_existing=True)
     _scheduler.add_job(_purge_expired_sessions_job, 'cron', hour=6, minute=45,
                        id='session_purge', replace_existing=True)
+    _scheduler.add_job(_sync_wix_donations_job, 'cron', minute=0,
+                       id='wix_donation_sync', replace_existing=True)
     _scheduler.start()
-    log.info('APScheduler started — DB backup 07:30, email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00, heartbeat 11:00 UTC')
+    log.info('APScheduler started — Wix donation sync hourly (:00); DB backup 07:30, email reminders 08:00, family opt-in 09:00, cutoff 09:30, auto-release slots 10:00, heartbeat 11:00 UTC')
     # Take a backup immediately on deploy too (idempotent — skips if today's exists)
     _daily_backup_job()
 except ImportError:
