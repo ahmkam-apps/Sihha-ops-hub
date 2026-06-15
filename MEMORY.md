@@ -203,7 +203,7 @@ reminder_log    ← idempotency guard for WA volunteer reminders
 
 ## Family Self-Service Portal (`/family` → `family.html`) — Current State ✅
 
-- Login: **username/password** — a `role='family'` user linked to the family via `linked_id` → Bearer token in `sessions`. ⚠️ Old phone-based lookup + OTP are **removed** (routes return 410). NOTE: `family.html` frontend still calls the dead phone/OTP routes — **frontend follow-up needed** (see audit flag).
+- Login: **username/password via `/login`** — a `role='family'` user (linked to the family via `linked_id`) gets a Bearer token stored as `familyToken`; family.html sends it on `/api/food-order/check`. **Verified working end-to-end** (login.html routes by role → stores familyToken → /family consumes it). Old phone/OTP routes return 410; family.html still contains the OTP functions but they are **dead stubs** (labeled "no longer used" — redirect to /login before firing). Harmless; optional cleanup only.
 - **Two tabs: "My Deliveries" | "History"**
 
 ### My Deliveries tab
