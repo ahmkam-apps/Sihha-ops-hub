@@ -2,7 +2,7 @@
 
 _Last updated: 2026-06-11 — **AUDIT REMEDIATION COMPLETE.** Phases 0–3 fully done + Phase 4 high-value items, all deployed to prod (final commit `2201810`). Sequence: `252d986` (backup job + Phase 1) → `c8db8d2` (Phase 2 hardening) → `937097d` (43 finance tests + 4 bug fixes) → `4fcc631`/`20725e4` (Phase 3: dead code, sessions, transactions, N+1, empty-DB dashboard fix) → `2201810` (Phase 4 lite: shared base.css/shared.js, secrets tokens, tmp_ temp-token scoping, receipts gate, Procfile removed). Test suite: 157 passed / 2 skipped. Staging-first deploy protocol in effect and exercised. Off-site backup verified to info@sihha.org; heartbeat 11:00 UTC. Phase 4 remainder (versioned migrations, status constants, exception logging, error envelope, family↔my-order merge) in backlog below — low priority. Manual items: CI 3.10→3.11 via GitHub UI (PAT lacks workflow scope); consider removing SENDGRID_API_KEY from staging._
 
-_**2026-06-15 reconciliation (verified against code):** ops.sihha.org is now **LIVE**; Twilio/SMS **fully removed** — all notifications go via SendGrid email (sender `info@sihha.org`); APScheduler runs **8 jobs** (7 daily + a new **hourly Wix donation sync**: `/api/donations/sync-wix` + `_sync_wix_donations_job`, deployed commit `eef0d62`); all GitHub PATs were **revoked** — auth is via macOS Keychain, never embed a token in a URL. The Infrastructure / Tech-Stack / Scheduler-Jobs tables below are corrected to match. ⚠️ Some deep sections still date from 2026-05-02; treat CLAUDE.md as the authoritative current reference._
+_**2026-06-15 reconciliation (verified against code):** ops.sihha.org is now **LIVE**; Twilio/SMS **fully removed** — all notifications go via SendGrid email (prod sender `info@sihha.org` via `NOTIFY_FROM_EMAIL` env; code default `ops@sihha.org`); APScheduler runs **8 jobs** (7 daily + a new **hourly Wix donation sync**: `/api/donations/sync-wix` + `_sync_wix_donations_job`, deployed commit `eef0d62`); all GitHub PATs were **revoked** — auth is via macOS Keychain, never embed a token in a URL. The Infrastructure / Tech-Stack / Scheduler-Jobs tables below are corrected to match. ⚠️ Some deep sections still date from 2026-05-02; treat CLAUDE.md as the authoritative current reference._
 
 ---
 
@@ -62,10 +62,10 @@ Manages: family intake, volunteer coordination, food shopping/delivery cycles, b
 | WSGI | Gunicorn 2 workers |
 | Frontend | Vanilla JS, single-file HTML SPAs |
 | Auth | Bearer token, DB-persisted sessions |
-| SMS | ❌ Removed — Twilio fully stripped (otp_tokens table + /api/auth/otp routes remain but are vestigial) |
+| SMS | ❌ Removed — Twilio fully stripped; `/api/otp/*` + `/api/portal/login` return **410**; `otp_tokens` + `portal_sessions` tables dead |
 | Scheduling | APScheduler — 8 jobs (7 daily + hourly Wix donation sync) |
 | Charts | Chart.js 4.4.1 (CDN) |
-| Email | SendGrid (SENDGRID_API_KEY env var) — ALL notifications; sender `info@sihha.org` |
+| Email | SendGrid (SENDGRID_API_KEY env var) — ALL notifications; prod sender `info@sihha.org` (via `NOTIFY_FROM_EMAIL` env; **code default is `ops@sihha.org`**) |
 
 ---
 
@@ -93,8 +93,11 @@ sihaa-ops-hub/
 ## Full Data Model
 
 ```
-users (admin system users — roles: admin | volunteer | finance | treasurer | viewer)
+users (system users — roles: admin | volunteer | finance | treasurer | viewer | family)
   NOTE: "coordinator" and "admin" are the same role — no distinction
+  NOTE: family + volunteer PORTAL users are rows here too (role='family' / 'volunteer'),
+        linked to their family/volunteer record via linked_id + linked_type.
+        Auth = username/password → Bearer token in `sessions` (NOT phone-based anymore)
 
 sessions (admin bearer tokens)
 portal_sessions (volunteer portal tokens — phone-based login, 48hr expiry)
@@ -102,8 +105,10 @@ portal_sessions (volunteer portal tokens — phone-based login, 48hr expiry)
 families
   ├── wa_phone, wa_apikey   ← CallMeBot (still in DB schema, but removed from all admin UI — WA stripped)
   ├── family_code           ← unique: last 6 phone digits + bundle letter (e.g. "398540-M")
+  ├── bundle_size, pending_bundle_size  ← S/M/L; pending_* drives request/approve-bundle-change routes
+  ├── email                 ← login credentials + notifications
   ├── city, family_size, children_count, income_range, frequency  ← all editable in admin
-  └── status: pending | active | inactive | paused
+  └── status: pending | active | inactive   (⚠️ 'paused' was migrated → inactive and removed from the CHECK)
 
 volunteers
   ├── wa_phone, wa_apikey   ← CallMeBot (still in DB schema, removed from all admin UI — WA stripped)
@@ -132,8 +137,9 @@ food_request_items  ← one row per food_item per food_request
   └── selected: 0 | 1
 
 food_request_events  ← append-only audit log per order
-  ├── event_type: confirmed | items_edited | cancelled | auto_skipped | admin_override
-  │              | change_requested | change_approved | change_rejected | change_retracted | order_reset
+  ├── event_type: confirmed | items_edited | admin_edit_items | cancelled | auto_skipped | admin_override
+  │              | change_requested | change_approved | change_rejected | change_retracted
+  │              (⚠️ 'order_reset' is NOT emitted anywhere — removed; code uses 'admin_edit_items')
   └── actor: family | admin | scheduler | system
 
 order_change_requests  ← family-submitted item change requests, one active per order at a time
@@ -197,7 +203,7 @@ reminder_log    ← idempotency guard for WA volunteer reminders
 
 ## Family Self-Service Portal (`/family` → `family.html`) — Current State ✅
 
-- Phone-based login (fuzzy phone number lookup)
+- Login: **username/password** — a `role='family'` user linked to the family via `linked_id` → Bearer token in `sessions`. ⚠️ Old phone-based lookup + OTP are **removed** (routes return 410). NOTE: `family.html` frontend still calls the dead phone/OTP routes — **frontend follow-up needed** (see audit flag).
 - **Two tabs: "My Deliveries" | "History"**
 
 ### My Deliveries tab
@@ -208,7 +214,7 @@ reminder_log    ← idempotency guard for WA volunteer reminders
   - **Shopping, no order**: locked note ("Shopping in progress")
   - **Upcoming, no order**: "Coming soon" note
 - Notes field on initial order (optional, stored in `food_requests.family_notes`)
-- Cancel: direct (≥24h before delivery), releases volunteer slots, WA to coordinators + volunteers
+- Cancel: direct (must be **≥1 day before the delivery date** — calendar-day, Central time), releases volunteer slots, emails coordinators + volunteers
 - Request Change: approval-gated, one pending at a time, retractable
 - After any action: refreshes full state from API
 - Shows **volunteer assignment strip** at bottom: shopper + deliverer names with ✓ confirmed / ⏳ pending status
@@ -284,7 +290,7 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📋 Change
 
 ## Volunteer Portal (`/portal` → `portal.html`) — Current State ✅
 
-- Login: phone number → 48hr session token
+- Login: **username/password** — a `role='volunteer'` user linked to the volunteer → Bearer token in `sessions`. ⚠️ Phone-only login + OTP **removed** (`/api/portal/login`, `/api/otp/*` → 410); `portal_sessions` + `otp_tokens` tables are now dead.
 - **Two tabs: "Deliveries" (default) | "History"**
 
 ### Deliveries tab — two sections on one page
@@ -323,12 +329,14 @@ Dashboard → Deliveries → Families → Volunteers → Finance → 📋 Change
 
 ## Key API Routes
 
-### Family (no auth — phone or family_id based)
-- `GET /api/food-order/check?phone=` — eligibility check, returns full order state + `can_request_change` + `pending_change_request`
+### Family (`require_family_auth` — username/password Bearer token)
+- `GET /api/food-order/check?phone=` — eligibility check, returns full order state + `can_request_change` + `pending_change_request` (still takes a phone param)
 - `POST /api/food-order` — confirm order (initial submission)
-- `POST /api/food-order/cancel` — direct cancel (no approval, ≥24h before delivery)
+- `PUT /api/food-order/items` — family edits items on an existing order
+- `POST /api/food-order/cancel` — direct cancel (no approval; must be **≥1 day before the delivery date**, Central time)
 - `POST /api/family-request` — submit item change request with notes
-- `DELETE /api/family-request/<id>/retract` — retract pending request
+- `POST /api/family-request/<id>/retract` — retract pending request (method is **POST**, not DELETE)
+- `POST /api/families/<fid>/request-bundle-change` + `/approve-bundle-change` — bundle-size change flow (uses `pending_bundle_size`)
 
 ### Admin (require_auth)
 - `GET /api/admin/change-requests?status=pending|all` — request inbox
@@ -564,7 +572,7 @@ git checkout master && git merge staging && git push origin master
 - Bundle size never shown to families as S/M/L
 - Family addresses: delivery volunteers only, revealed only after slot is claimed
 - One food request per family per cycle
-- Portal login: phone must match active volunteer record
+- Portal login: username/password (volunteer/family-role user linked to the record); phone-only login + OTP removed
 - No reimbursement without admin approval
 - Families opt-in per cycle — no auto-inclusion
 - Shopping list = confirmed families only (status='confirmed')
