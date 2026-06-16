@@ -5,6 +5,8 @@
 > **Code audit 2026-06-09:** full security/architecture audit completed. Prioritized remediation backlog (Phase 0 operational → Phase 4 structural) lives in `MEMORY.md → Active Backlog`. Check it before starting work.
 >
 > **Remediation status (2026-06-11): COMPLETE through Phase 3 + Phase 4 high-value items** (final commit `2201810`). Everything from the 2026-06-10 note, plus: off-site backup email (`BACKUP_EMAIL` env, verified), heartbeat digest 11:00 UTC, staging-first deploys, finance test suite (157 total tests), dead legacy routes removed, session purge 06:45 UTC + hourly expiry slide, atomic cancel flows, N+1 batching in get_orders/list_families, shared `public/js/shared.js` (`esc`/`escJs`/`makeApi`) + `public/css/base.css` — **use these for all new pages/interpolations**, `secrets.token_urlsafe` sessions, `tmp_`-prefixed temp tokens (rejected by require_auth; only set-password accepts), receipts list gated to admin/finance/treasurer, Procfile gone (railway.json owns the start command). Remaining low-priority Phase 4 items in `MEMORY.md → Active Backlog`.
+>
+> **2026-06-15 session:** Shipped **hourly Wix donation sync** (`_sync_wix_donations_core` / `_sync_wix_donations_job` + `POST /api/donations/sync-wix`; runs at minute 0 each hour; no-op without `WIX_API_KEY`; commit `eef0d62`) — scheduler now runs **8 jobs**. Reconciled `MEMORY.md` against the code (auth model, schema, routes, cancel rule; commit `70c766a`, pushed). **Verified family login works end-to-end** (username/password via `/login` → Bearer `familyToken`; OTP/phone login are dead 410 stubs in family.html — harmless). Canonical domain is **https://ops.sihha.org** (live). **Open items:** Wix-site buttons (Get Help→/intake, Volunteer→/volunteer), donate-stats widget embed on Wix, Phase 4D bank/Stripe reconciliation. Auth/notification facts below were corrected this session.
 
 ---
 
@@ -14,9 +16,9 @@
 
 ### What it does
 - Manages families, volunteers, delivery cycles, food requests, and reimbursements
-- Provides a public family intake form, a volunteer sign-up form, and a phone-authenticated volunteer portal
+- Provides a public family intake form, a volunteer sign-up form, and username/password-authenticated family + volunteer portals (phone/OTP login removed — those routes return 410)
 - Manages a food catalog (items + bundle sizes S/M/L) and generates shopping lists per cycle
-- Families receive WhatsApp opt-in links 7 days before delivery; they confirm/skip/customize bundles
+- Families receive email opt-in links 7 days before delivery; they confirm/skip/customize bundles (WhatsApp/SMS fully removed)
 - Tracks receipts submitted by volunteers and handles reimbursement approval + payment notifications
 - Syncs donation data from Wix eCommerce API; exposes a donation-stats widget for embedding in Wix
 
@@ -30,9 +32,8 @@
 - **Hosting:** Railway (production), GitHub remote: `ahmkam-apps/Sihha-ops-hub`
 
 ### Public URLs
-**PROD:** `https://sihha-ops-hub-production.up.railway.app` (deploys from `master`)
+**PROD:** `https://ops.sihha.org` (live canonical custom domain) + `https://sihha-ops-hub-production.up.railway.app` (both deploy from `master`)
 **STAGING:** `https://dev-staging-sihha-production.up.railway.app` (deploys from `staging` branch; own DB `sihaa_staging.db`; synthetic data only — it has a live SendGrid key)
-(`https://ops.sihha.org` also referenced in some notification messages — confirm which is canonical)
 
 **Deploy protocol (since 2026-06-11):** push to `staging` → verify there → fast-forward the SAME commit to `master`. Never push untested changes straight to master.
 
