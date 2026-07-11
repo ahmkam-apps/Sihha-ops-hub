@@ -58,8 +58,11 @@ NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
 # ever pre-fill the form; a treasurer/admin still approves before any money moves.
 ANTHROPIC_API_KEY       = os.environ.get('ANTHROPIC_API_KEY', '')
 RECEIPT_PARSE_MODEL     = os.environ.get('RECEIPT_PARSE_MODEL', 'claude-haiku-4-5-20251001')
-ENABLE_RECEIPT_PARSING  = os.environ.get('ENABLE_RECEIPT_PARSING', '').strip().lower() in ('1', 'true', 'yes', 'on')
-# Only actually call the API when BOTH the flag is on AND a key is present.
+# Auto-read is ON by default whenever an API key is present — you only set
+# ENABLE_RECEIPT_PARSING to a falsey value (0/false/no/off) to turn it OFF. This
+# avoids the footgun of setting the key but forgetting a separate enable flag.
+ENABLE_RECEIPT_PARSING  = os.environ.get('ENABLE_RECEIPT_PARSING', '').strip().lower() not in ('0', 'false', 'no', 'off')
+# Only actually call the API when parsing is enabled AND a key is present.
 RECEIPT_PARSING_ACTIVE  = ENABLE_RECEIPT_PARSING and bool(ANTHROPIC_API_KEY)
 
 # Twilio removed — all notifications via SendGrid email
@@ -3352,13 +3355,12 @@ def receipt_parse_diagnostics():
     except Exception:
         info['heic_support'] = False
     if not RECEIPT_PARSING_ACTIVE:
-        missing = []
-        if not ENABLE_RECEIPT_PARSING:
-            missing.append('ENABLE_RECEIPT_PARSING=1')
         if not ANTHROPIC_API_KEY:
-            missing.append('ANTHROPIC_API_KEY')
-        info['test'] = {'ok': False, 'reason': 'Auto-read is OFF. Set ' + ' and '.join(missing) +
-                        ' in Railway, then redeploy.'}
+            reason = 'Auto-read is OFF: no ANTHROPIC_API_KEY set in Railway. Add it and redeploy.'
+        else:
+            reason = 'Auto-read is OFF: ENABLE_RECEIPT_PARSING is set to a disabling value ' \
+                     '(0/false/no/off). Remove it (or set 1) and redeploy.'
+        info['test'] = {'ok': False, 'reason': reason}
         return jsonify(info)
     import urllib.request as _req, urllib.error as _uerr, json as _json
     body = {'model': RECEIPT_PARSE_MODEL, 'max_tokens': 16,
