@@ -10,10 +10,16 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__, static_folder='public')
+# Railway terminates TLS at a single reverse proxy that appends the real client IP
+# to X-Forwarded-For. Trust exactly ONE hop (x_for=1) so request.remote_addr is the
+# real client and cannot be spoofed by a client-supplied X-Forwarded-For (audit P1.5:
+# login-throttle bypass). Do NOT raise x_for above 1 — that would re-open the spoof.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
 # CORS restricted to known origins (audit 2.3) — override with CORS_ORIGINS env var
 # (comma-separated) if domains change. Same-origin SPA/iframe traffic is unaffected
 # by CORS; this only blocks third-party sites from scripting the API.
@@ -461,6 +467,9 @@ def bootstrap_db():
         "CREATE INDEX IF NOT EXISTS idx_sessions_expires  ON sessions(expires_at)",
         # donations: per-cycle finance summary
         "CREATE INDEX IF NOT EXISTS idx_donations_cycle   ON donations(cycle_id)",
+        # donations: Wix sync dedupes by reference_id (wix order id) on every page —
+        # without this it's an O(orders×donations) scan that worsens as history grows (audit P1.7)
+        "CREATE INDEX IF NOT EXISTS idx_donations_ref     ON donations(reference_id)",
         # reminder_log: idempotency guards query by (slot_id, sent_to)
         "CREATE INDEX IF NOT EXISTS idx_rl_slot_sent      ON reminder_log(slot_id, sent_to)",
     ]:
@@ -1433,6 +1442,48 @@ def bootstrap_db():
     # Runs on every boot — idempotent, bails immediately if already correct
     _ensure_treasurer_role(conn)
 
+    # ── audit P1.9: one ACTIVE volunteer slot per (cycle, family, task_type) ──
+    # Placed at the END of bootstrap so it runs AFTER volunteer_slots is created and
+    # rebuilt by the migrations above (the early index-loop runs before the table
+    # exists on a fresh DB). _ensure_volunteer_slots was SELECT-then-INSERT with no
+    # DB constraint, so two concurrent requests could each create a duplicate open
+    # slot for the same family+task → two volunteers claim different rows and both
+    # get confirmations. Step 1: cancel redundant UNCLAIMED ('open') duplicates only
+    # (never auto-cancel a volunteer's claim). Step 2: add a partial UNIQUE index so
+    # the DB rejects the duplicate INSERT and the race can no longer produce two.
+    try:
+        dup_groups = conn.execute(
+            "SELECT cycle_id, family_id, task_type FROM volunteer_slots "
+            "WHERE status!='cancelled' "
+            "GROUP BY cycle_id, family_id, task_type HAVING COUNT(*)>1"
+        ).fetchall()
+        for gr in dup_groups:
+            rows = conn.execute(
+                "SELECT id, status, claimed_by FROM volunteer_slots "
+                "WHERE cycle_id=? AND family_id=? AND task_type=? AND status!='cancelled' "
+                "ORDER BY CASE status WHEN 'confirmed' THEN 0 WHEN 'complete' THEN 1 "
+                "                     WHEN 'claimed' THEN 2 ELSE 3 END, "
+                "(claimed_by IS NULL), created_at",
+                (gr['cycle_id'], gr['family_id'], gr['task_type'])
+            ).fetchall()
+            # Keep rows[0] (highest-progress / owned / oldest); cancel the rest ONLY
+            # if they are unclaimed 'open' slots. Any surviving claimed duplicate is
+            # left for manual review (the unique index is then skipped-and-logged
+            # rather than silently dropping someone's claim).
+            for extra in rows[1:]:
+                if extra['status'] == 'open' and not extra['claimed_by']:
+                    conn.execute("UPDATE volunteer_slots SET status='cancelled', updated_at=? WHERE id=?",
+                                 (now(), extra['id']))
+    except Exception as _e:
+        log.warning(f'volunteer_slots duplicate cleanup skipped: {_e}')
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_vs_active_slot "
+            "ON volunteer_slots(cycle_id, family_id, task_type) WHERE status!='cancelled'"
+        )
+    except Exception as _e:
+        log.warning(f'Active-slot unique index skipped (duplicate CLAIMED slots need manual review): {_e}')
+
     conn.commit()
     conn.close()
     final_size_kb = os.path.getsize(abs_db) / 1024
@@ -1760,16 +1811,16 @@ def _email_send(to_email, subject, text_body, attachment=None):
         return False
 
 def _notify_treasurers(db, subject, message):
-    """Notify all active treasurer users via email.
+    """Notify all active treasurer users via email — fired in a background thread
+    so the N blocking SendGrid sends never freeze the request path (audit P1.6).
     Used for new reimbursement requests, receipt submissions, etc."""
     treasurers = db.execute(
         "SELECT name, email FROM users WHERE role='treasurer' AND active=1"
     ).fetchall()
-    for t in treasurers:
-        if t['email']:
-            _email_send(t['email'], subject, message)
     if not treasurers:
         log.info('No active treasurers found to notify.')
+        return
+    _email_notify_async([(t['email'], subject, message) for t in treasurers if t['email']])
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -1782,27 +1833,43 @@ def health():
 # Failed-login throttle (audit 2.2). In-memory per worker — with 2 workers the
 # effective cap is ~2x the threshold, still a hard stop for online guessing.
 _LOGIN_FAILS = {}            # (ip, username) -> [utc datetimes of recent failures]
-LOGIN_MAX_FAILS  = 5
-LOGIN_WINDOW_MIN = 15
+_LOGIN_FAILS_USER = {}       # username -> [utc datetimes] — IP-independent ceiling
+LOGIN_MAX_FAILS       = 5    # per (ip, username)
+LOGIN_MAX_FAILS_USER  = 20   # absolute per-username cap across ALL IPs (audit P1.5)
+LOGIN_WINDOW_MIN      = 15
 
 def _client_ip():
-    # Railway sits behind a proxy — first hop of X-Forwarded-For is the client
-    fwd = request.headers.get('X-Forwarded-For', '')
-    return (fwd.split(',')[0].strip() if fwd else request.remote_addr) or '?'
+    # ProxyFix (x_for=1) has already set request.remote_addr to the real client IP
+    # from the last trusted proxy hop, so X-Forwarded-For can no longer be spoofed
+    # to rotate the throttle key. Read remote_addr directly.
+    return request.remote_addr or '?'
+
+def _recent(store, key):
+    cutoff = datetime.utcnow() - timedelta(minutes=LOGIN_WINDOW_MIN)
+    recent = [t for t in store.get(key, []) if t > cutoff]
+    if recent:
+        store[key] = recent
+    else:
+        store.pop(key, None)
+    return recent
 
 def _login_blocked(key):
-    cutoff = datetime.utcnow() - timedelta(minutes=LOGIN_WINDOW_MIN)
-    recent = [t for t in _LOGIN_FAILS.get(key, []) if t > cutoff]
-    if recent:
-        _LOGIN_FAILS[key] = recent
-    else:
-        _LOGIN_FAILS.pop(key, None)
-    return len(recent) >= LOGIN_MAX_FAILS
+    # key = (ip, username). Blocked if EITHER the per-IP window OR the absolute
+    # per-username window is exceeded — the username ceiling defeats distributed
+    # brute force that rotates source IPs.
+    username = key[1]
+    per_ip   = len(_recent(_LOGIN_FAILS, key)) >= LOGIN_MAX_FAILS
+    per_user = len(_recent(_LOGIN_FAILS_USER, username)) >= LOGIN_MAX_FAILS_USER
+    return per_ip or per_user
 
 def _login_failed(key):
     if len(_LOGIN_FAILS) > 10000:   # bound memory under abuse
         _LOGIN_FAILS.clear()
-    _LOGIN_FAILS.setdefault(key, []).append(datetime.utcnow())
+    if len(_LOGIN_FAILS_USER) > 10000:
+        _LOGIN_FAILS_USER.clear()
+    now_utc = datetime.utcnow()
+    _LOGIN_FAILS.setdefault(key, []).append(now_utc)
+    _LOGIN_FAILS_USER.setdefault(key[1], []).append(now_utc)
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -1824,7 +1891,8 @@ def login():
     if not user or not check_password_hash(user['password_hash'], password):
         _login_failed(throttle_key)
         return jsonify({'error': 'Invalid credentials'}), 401
-    _LOGIN_FAILS.pop(throttle_key, None)  # success — reset the counter
+    _LOGIN_FAILS.pop(throttle_key, None)       # success — reset per-IP counter
+    _LOGIN_FAILS_USER.pop(username.lower(), None)  # …and the per-username ceiling
 
     # Update last login timestamp
     db.execute("UPDATE users SET last_login_at=? WHERE id=?", (now(), user['id']))
@@ -3390,6 +3458,7 @@ def _sync_wix_donations_core(db):
         skipped  = 0
 
         while True:
+            page_imported = 0
             body = {'search': {'cursorPaging': {'limit': 100}},
                     'sort': [{'fieldName': 'createdDate', 'order': 'DESC'}]}
             if cursor:
@@ -3464,8 +3533,19 @@ def _sync_wix_donations_core(db):
                      'wix', wix_order_id, product, now())
                 )
                 imported += 1
+                page_imported += 1
 
             db.commit()
+
+            # Early-exit (audit P1.7): orders come newest-first (createdDate DESC),
+            # and imports form a contiguous newest-first prefix — so once a full page
+            # of 100 orders yields ZERO new imports, everything older is already
+            # imported and there is nothing left to find. The full 100-order page acts
+            # as a look-behind buffer against an order whose payment flips to PAID late.
+            # Without this, the hourly job re-walked all history every run.
+            if orders and page_imported == 0:
+                log.info(f'Wix sync early-exit: page of {len(orders)} orders yielded 0 new imports')
+                break
 
             # Next page
             meta   = result.get('metadata', {})
@@ -3756,6 +3836,10 @@ def _ensure_volunteer_slots(db, cycle_id, family_id):
                     (str(uuid.uuid4()), cycle_id, family_id, task_type, task_date, 'open', now())
                 )
                 created += 1
+        except sqlite3.IntegrityError:
+            # uq_vs_active_slot (audit P1.9): a concurrent request already created the
+            # active slot in the SELECT→INSERT window. Not an error — just not ours.
+            log.info(f'_ensure_volunteer_slots: {task_type} slot for family {family_id} already created concurrently')
         except Exception as e:
             log.warning(f'_ensure_volunteer_slots: could not create {task_type} slot for family {family_id}: {e}')
     return created
@@ -4693,20 +4777,18 @@ def public_intake():
         )
     except Exception as _e:
         log.warning(f'Intake notify failed: {_e}')
-    # Send confirmation email to family if email provided
+    # Send confirmation email to family if email provided — async so a slow
+    # SendGrid response can't freeze this UNAUTHENTICATED public handler (audit P1.6).
     fam_email = (data.get('email') or '').strip()
     if fam_email:
-        try:
-            _email_send(fam_email, 'We received your Sihha application',
-                f"Assalamu Alaikum {data['name']},\n\n"
-                f"Thank you for applying to the Sihha Food Program.\n\n"
-                f"We have received your application and will review it within 48 hours. "
-                f"Once approved, you will receive a separate email with your login credentials.\n\n"
-                f"If you have any questions, please contact your coordinator.\n\n"
-                f"— Sihha Food Program"
-            )
-        except Exception as _e:
-            log.warning(f'Intake confirmation email failed: {_e}')
+        _email_notify_async([(fam_email, 'We received your Sihha application',
+            f"Assalamu Alaikum {data['name']},\n\n"
+            f"Thank you for applying to the Sihha Food Program.\n\n"
+            f"We have received your application and will review it within 48 hours. "
+            f"Once approved, you will receive a separate email with your login credentials.\n\n"
+            f"If you have any questions, please contact your coordinator.\n\n"
+            f"— Sihha Food Program"
+        )])
     return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
 
 @app.route('/api/volunteer-signup', methods=['POST'])
@@ -4749,21 +4831,19 @@ def public_volunteer_signup():
         )
     except Exception as _e:
         log.warning(f'Volunteer signup notify failed: {_e}')
-    # Send confirmation email to volunteer if email provided
+    # Send confirmation email to volunteer if email provided — async so a slow
+    # SendGrid response can't freeze this UNAUTHENTICATED public handler (audit P1.6).
     vol_email = (data.get('email') or '').strip()
     if vol_email:
-        try:
-            _email_send(vol_email, 'Thank you for signing up to volunteer with Sihha',
-                f"Assalamu Alaikum {data['name']},\n\n"
-                f"Thank you for signing up to volunteer with the Sihha Food Program!\n\n"
-                f"We have received your application and will review it shortly. "
-                f"Once approved, you will receive a separate email with your login credentials "
-                f"for the volunteer portal.\n\n"
-                f"JazakAllah Khair for your generosity!\n\n"
-                f"— Sihha Food Program"
-            )
-        except Exception as _e:
-            log.warning(f'Volunteer signup confirmation email failed: {_e}')
+        _email_notify_async([(vol_email, 'Thank you for signing up to volunteer with Sihha',
+            f"Assalamu Alaikum {data['name']},\n\n"
+            f"Thank you for signing up to volunteer with the Sihha Food Program!\n\n"
+            f"We have received your application and will review it shortly. "
+            f"Once approved, you will receive a separate email with your login credentials "
+            f"for the volunteer portal.\n\n"
+            f"JazakAllah Khair for your generosity!\n\n"
+            f"— Sihha Food Program"
+        )])
     return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
 
 # ── Static Pages ──────────────────────────────────────────────────────────────
@@ -7784,10 +7864,19 @@ def _daily_heartbeat_job():
 bootstrap_db()
 
 # ── APScheduler: daily 8am UTC reminder job ───────────────────────────────────
-# Runs in each gunicorn worker, but reminder_log idempotency prevents double-sends.
+# Runs ONCE in the gunicorn master (started with --preload), NOT per worker — the
+# jobs are registered at import time and --preload imports the module a single time
+# in the master before forking. reminder_log idempotency remains as defense-in-depth.
+# job_defaults (audit P1.8): APScheduler's default misfire_grace_time is 1 second, so
+# any delay (a redeploy landing on a cron time, GC/IO stall) would SILENTLY skip that
+# run entirely — dropping a day's reminders/backup. 3600s grace lets a delayed job
+# still fire within the hour; coalesce collapses multiple missed runs into one.
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
-    _scheduler = BackgroundScheduler(timezone='UTC')
+    _scheduler = BackgroundScheduler(
+        timezone='UTC',
+        job_defaults={'misfire_grace_time': 3600, 'coalesce': True},
+    )
     _scheduler.add_job(_send_reminders_job, 'cron', hour=8, minute=0,
                        id='daily_reminders', replace_existing=True)
     _scheduler.add_job(_send_family_confirmation_reminders, 'cron', hour=9, minute=0,
