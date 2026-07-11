@@ -66,6 +66,10 @@
 </div>
 
 <script>
+// XSS escaping — same helpers as /js/shared.js (kept inline: this page is standalone)
+function esc(s){return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function escJs(s){return esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));}
+
 const token = location.pathname.split('/').pop();
 let reqData  = null;
 
@@ -106,13 +110,13 @@ function render() {
     </div>` : '';
 
   const itemsHTML = Object.entries(cats).map(([cat, items]) => `
-    <div class="category-label">${cat}</div>
+    <div class="category-label">${esc(cat)}</div>
     ${items.map(item => `
-      <label class="item-row ${item.selected ? '' : 'unchecked'}" id="row-${item.id}">
-        <input type="checkbox" id="chk-${item.id}" ${item.selected ? 'checked' : ''}
-               onchange="toggleItem('${item.id}', this.checked)">
-        <span class="item-name">${item.name}</span>
-        <span class="item-qty">${item.quantity || ''} ${item.unit || ''}</span>
+      <label class="item-row ${item.selected ? '' : 'unchecked'}" id="row-${esc(item.id)}">
+        <input type="checkbox" id="chk-${esc(item.id)}" ${item.selected ? 'checked' : ''}
+               onchange="toggleItem('${escJs(item.id)}', this.checked)">
+        <span class="item-name">${esc(item.name)}</span>
+        <span class="item-qty">${esc(item.quantity || '')} ${esc(item.unit || '')}</span>
       </label>`).join('')}
   `).join('');
 
@@ -122,11 +126,11 @@ function render() {
       <div class="card-title">Delivery Details</div>
       <div class="info-row">
         <span class="info-label">Family</span>
-        <span class="info-value">${r.family_name} ${statusBadge}</span>
+        <span class="info-value">${esc(r.family_name)} ${statusBadge}</span>
       </div>
       <div class="info-row">
         <span class="info-label">Cycle</span>
-        <span class="info-value">${r.cycle_title}</span>
+        <span class="info-value">${esc(r.cycle_title)}</span>
       </div>
       <div class="info-row">
         <span class="info-label">Delivery Date</span>
@@ -134,7 +138,7 @@ function render() {
       </div>
       <div class="info-row">
         <span class="info-label">Bundle Size</span>
-        <span class="info-value">${{S:'Small',M:'Medium',L:'Large'}[r.bundle_size] || r.bundle_size}</span>
+        <span class="info-value">${{S:'Small',M:'Medium',L:'Large'}[r.bundle_size] || esc(r.bundle_size)}</span>
       </div>
     </div>
 
@@ -148,7 +152,7 @@ function render() {
 
     <div class="card">
       <div class="card-title">Notes (optional)</div>
-      <textarea class="note-field" id="notes" placeholder="Dietary changes, special requests, or anything we should know…">${r.notes || ''}</textarea>
+      <textarea class="note-field" id="notes" placeholder="Dietary changes, special requests, or anything we should know…">${esc(r.notes || '')}</textarea>
     </div>
 
     <button class="btn btn-confirm" onclick="confirm()">✓ Yes, I Want This Delivery</button>
@@ -214,7 +218,7 @@ function showError(data) {
   document.getElementById('app').innerHTML = `
     <div class="card" style="text-align:center;padding:30px 20px;">
       <div style="font-size:32px;margin-bottom:10px;">⚠️</div>
-      <p style="color:#c00;font-size:15px;">${data.error || 'Something went wrong.'}</p>
+      <p style="color:#c00;font-size:15px;">${esc(data.error || 'Something went wrong.')}</p>
     </div>`;
 }
 

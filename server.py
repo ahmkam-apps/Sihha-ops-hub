@@ -2347,7 +2347,7 @@ def public_donate_stats():
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard/stats')
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def dashboard_stats():
     db = get_db()
     this_month = datetime.utcnow().strftime('%Y-%m')
@@ -2642,7 +2642,7 @@ def create_family():
     return jsonify(fam), 201
 
 @app.route('/api/families/<fid>', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_family(fid):
     row = get_db().execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
     return (jsonify(dict(row)) if row else (jsonify({'error': 'Not found'}), 404))
@@ -2859,7 +2859,7 @@ def approve_bundle_change(fid):
 # ── Volunteers ────────────────────────────────────────────────────────────────
 
 @app.route('/api/volunteers', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_volunteers():
     db = get_db()
     status = request.args.get('status')
@@ -2896,7 +2896,7 @@ def create_volunteer():
     return jsonify(dict(get_db().execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone())), 201
 
 @app.route('/api/volunteers/<vid>', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_volunteer(vid):
     row = get_db().execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone()
     return (jsonify(dict(row)) if row else (jsonify({'error': 'Not found'}), 404))
@@ -3516,7 +3516,7 @@ def _sync_wix_donations_job():
 # ── Food Categories ───────────────────────────────────────────────────────────
 
 @app.route('/api/food-categories', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_food_categories():
     rows = get_db().execute(
         "SELECT * FROM food_categories ORDER BY display_order, name"
@@ -3568,7 +3568,7 @@ def delete_food_category(cid):
 # ── Food Items ────────────────────────────────────────────────────────────────
 
 @app.route('/api/food-items', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_food_items():
     db = get_db()
     active_only = request.args.get('active') == '1'
@@ -3656,7 +3656,7 @@ def update_food_item(iid):
 # ── Bundle Quantities ─────────────────────────────────────────────────────────
 
 @app.route('/api/bundle-quantities', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_bundle_quantities():
     db = get_db()
     item_id = request.args.get('item_id')
@@ -3698,7 +3698,7 @@ def update_bundle_quantities():
 # ── Bundle Size Rules ─────────────────────────────────────────────────────────
 
 @app.route('/api/bundle-size-rules', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_bundle_size_rules():
     rows = get_db().execute(
         "SELECT * FROM bundle_size_rules ORDER BY min_household"
@@ -3826,7 +3826,7 @@ def _enroll_families_in_cycle(db, cycle_id, delivery_date_start):
     return enrolled
 
 @app.route('/api/delivery-cycles', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_delivery_cycles():
     db = get_db()
     status = request.args.get('status')
@@ -3972,7 +3972,7 @@ def update_delivery_cycle(cid):
     return jsonify(dict(db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cid,)).fetchone()))
 
 @app.route('/api/orders', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_orders():
     """Orders module: returns orders for a cycle enriched with volunteer slot info.
     Supports status=no_order to return active families without an order."""
@@ -4065,7 +4065,7 @@ def get_orders():
 
 
 @app.route('/api/delivery-cycles/<cid>/orders', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_cycle_orders(cid):
     db = get_db()
     orders = db.execute(
@@ -4279,7 +4279,7 @@ def manual_confirm_family(fid):
                     'slots_created': slots_created, 'slots_confirmed': slots_confirmed}), 201
 
 @app.route('/api/delivery-cycles/<cid>/shopping-list', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def get_cycle_shopping_list(cid):
     db = get_db()
     # Get all selected items across all orders for this cycle, with bundle quantities
@@ -4323,7 +4323,7 @@ def get_cycle_shopping_list(cid):
 # ── Volunteer Activity Report ─────────────────────────────────────────────────
 
 @app.route('/api/reports/volunteer-activity', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def report_volunteer_activity():
     """Per-volunteer lifetime stats: tasks completed, shopping/delivery breakdown,
     cycles participated in, unique families served, last active date."""
@@ -4428,7 +4428,7 @@ def _print_page(title, subtitle, body_html, cycle_title=''):
 
 
 @app.route('/api/reports/shopping-list/<cid>', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def report_shopping_list(cid):
     """Printable shopping list — returns HTML page, browser prints to PDF."""
     from collections import defaultdict
@@ -4528,7 +4528,7 @@ def report_shopping_list(cid):
 
 
 @app.route('/api/reports/cycle-summary/<cid>', methods=['GET'])
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def report_cycle_summary(cid):
     """Printable cycle summary — returns HTML page, browser prints to PDF."""
     db = get_db()
@@ -6213,7 +6213,7 @@ def edit_food_order_items():
             '''SELECT v.id, v.name, v.email, vs.task_type
                FROM volunteer_slots vs JOIN volunteers v ON vs.claimed_by=v.id
                WHERE vs.cycle_id=? AND vs.family_id=? AND vs.status IN ('claimed','confirmed') AND vs.task_type='shopping' ''',
-            (req['cycle_id'], family['id'])
+            (req['cycle_id'], family_id)
         ).fetchall()
         vol_email_sends = [
             (v['email'],
@@ -6226,7 +6226,7 @@ def edit_food_order_items():
         ]
         _email_notify_async(vol_email_sends)
 
-    log.info(f'Family {family["id"]} edited items for order {request_id}: +{added} -{removed}')
+    log.info(f'Family {family_id} edited items for order {request_id}: +{added} -{removed}')
     return jsonify({'ok': True, 'added': added, 'removed': removed,
                     'message': 'Your order has been updated.'})
 
@@ -6565,7 +6565,7 @@ def portal_list_receipts():
 # ── History Endpoints ─────────────────────────────────────────────────────────
 
 @app.route('/api/families/<fid>/history')
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def family_history(fid):
     """Per-cycle order history for a family. Includes items and volunteer info."""
     db = get_db()
@@ -6643,7 +6643,7 @@ def family_history(fid):
 
 
 @app.route('/api/volunteers/<vid>/history')
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def volunteer_history(vid):
     """Task history for a volunteer: lifetime stats + per-task log."""
     db = get_db()
@@ -6751,7 +6751,7 @@ def generate_cycle_slots(cid):
     return jsonify({'ok': True, 'slots_created': created, 'slots_total': total_slots, 'total_requests': len(requests)})
 
 @app.route('/api/volunteer-slots')
-@require_auth()
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_volunteer_slots():
     db = get_db()
     cycle_id = request.args.get('cycle_id')

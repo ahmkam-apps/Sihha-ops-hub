@@ -417,6 +417,67 @@ class TestFoodOrders:
         assert submitted is not None
         assert submitted.get('order') is not None
 
+    def test_edit_order_items(self, client):
+        """Regression (audit 2026-07-11): PUT /api/food-order/items raised
+        NameError (`family` undefined → 500 after commit) whenever a family
+        edited items. Verify the edit succeeds and reports the diff."""
+        check = client.get('/api/food-order/check', headers=self.family_headers).get_json()
+        open_cycle = next((c for c in check.get('cycles', []) if c.get('can_place_order')
+                           or c.get('order')), None)
+        if not open_cycle:
+            pytest.skip('No open cycle available')
+
+        # Collect selectable item ids (one per exclusion group)
+        seen_groups, item_ids = set(), []
+        for cat in open_cycle.get('items_for_selection', []):
+            for i in cat['items']:
+                g = i.get('group_id')
+                if g and g in seen_groups:
+                    continue
+                if g:
+                    seen_groups.add(g)
+                item_ids.append(i['id'])
+        if len(item_ids) < 2:
+            pytest.skip('Not enough selectable items')
+
+        # Ensure an order exists (may already exist from earlier tests in this class)
+        order = open_cycle.get('order')
+        if order is None:
+            res = client.post('/api/food-order',
+                              headers=self.family_headers,
+                              json={'family_id': self.family_id,
+                                    'cycle_id':  open_cycle['id'],
+                                    'selected_items': item_ids[:2]})
+            assert res.status_code == 201
+            check = client.get('/api/food-order/check', headers=self.family_headers).get_json()
+            order = next(c for c in check['cycles'] if c['id'] == open_cycle['id'])['order']
+        assert order is not None
+
+        # Edit: drop to a single (different) item → forces added/removed diff,
+        # which is the code path that hit the NameError
+        res = client.put('/api/food-order/items',
+                         headers=self.family_headers,
+                         json={'request_id': order['id'],
+                               'selected_item_ids': [item_ids[1]]})
+        assert res.status_code == 200, res.get_json()
+        data = res.get_json()
+        assert data['ok'] is True
+        assert isinstance(data['added'], list) and isinstance(data['removed'], list)
+
+    def test_family_session_cannot_read_staff_endpoints(self, client):
+        """Regression (audit 2026-07-11): staff read endpoints used bare
+        @require_auth(), letting family/volunteer sessions read any family's
+        PII by id (IDOR). They must now return 403 for non-staff roles."""
+        for path in (f'/api/families/{self.family_id}',
+                     f'/api/families/{self.family_id}/history',
+                     '/api/volunteers',
+                     '/api/orders',
+                     '/api/dashboard/stats',
+                     '/api/delivery-cycles',
+                     '/api/volunteer-slots'):
+            res = client.get(path, headers=self.family_headers)
+            assert res.status_code == 403, f'{path} → {res.status_code} (expected 403)'
+
     def test_bundle_size_small_for_tiny_family(self, client, auth):
         phone = f'585201{uuid.uuid4().hex[:4]}'
         res = client.post('/api/families', headers=auth,
