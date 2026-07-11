@@ -3136,13 +3136,14 @@ _RECEIPT_PARSE_PROMPT = (
 
 
 def _prepare_receipt_image(image_bytes, ext):
-    """Return (base64_str, media_type) ready for the vision API, or None if the file
-    can't be used (e.g. a PDF, or HEIC with no decoder available). Converts HEIC→JPEG
-    and downscales large phone photos to keep the request small and cheap."""
+    """Return (base64_str, media_type, block_type) ready for the API, or None if the
+    file can't be used. block_type is 'document' for PDFs (Claude reads PDFs natively)
+    or 'image' for photos. Converts HEIC→JPEG and downscales large phone photos."""
     import base64 as _b64
     ext = (ext or '').lower().lstrip('.')
     if ext == 'pdf':
-        return None  # v1 parses images only; PDFs fall back to manual entry
+        # Claude reads PDFs directly via a base64 document block — no conversion.
+        return _b64.b64encode(image_bytes).decode('ascii'), 'application/pdf', 'document'
     try:
         from PIL import Image
         try:
@@ -3162,13 +3163,13 @@ def _prepare_receipt_image(image_bytes, ext):
             img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)))
         buf = _io.BytesIO()
         img.save(buf, format='JPEG', quality=80)
-        return _b64.b64encode(buf.getvalue()).decode('ascii'), 'image/jpeg'
+        return _b64.b64encode(buf.getvalue()).decode('ascii'), 'image/jpeg', 'image'
     except Exception as e:
         # PIL missing or decode failed — try sending common web formats as-is.
         if ext in ('jpg', 'jpeg'):
-            return _b64.b64encode(image_bytes).decode('ascii'), 'image/jpeg'
+            return _b64.b64encode(image_bytes).decode('ascii'), 'image/jpeg', 'image'
         if ext == 'png':
-            return _b64.b64encode(image_bytes).decode('ascii'), 'image/png'
+            return _b64.b64encode(image_bytes).decode('ascii'), 'image/png', 'image'
         log.warning(f'_prepare_receipt_image: could not prepare .{ext} image ({e})')
         return None
 
@@ -3210,8 +3211,8 @@ def _parse_receipt_image_ex(image_bytes, filename):
     ext = filename.rsplit('.', 1)[-1] if '.' in filename else ''
     prepared = _prepare_receipt_image(image_bytes, ext)
     if not prepared:
-        return None, f'could not decode a .{ext or "?"} image (HEIC needs the plugin; PDFs are not read)'
-    b64, media_type = prepared
+        return None, f'could not decode a .{ext or "?"} file (HEIC needs the plugin)'
+    b64, media_type, block_type = prepared
     import urllib.request as _req, urllib.error as _uerr, json as _json
     body = {
         'model': RECEIPT_PARSE_MODEL,
@@ -3219,7 +3220,7 @@ def _parse_receipt_image_ex(image_bytes, filename):
         'messages': [{
             'role': 'user',
             'content': [
-                {'type': 'image', 'source': {'type': 'base64', 'media_type': media_type, 'data': b64}},
+                {'type': block_type, 'source': {'type': 'base64', 'media_type': media_type, 'data': b64}},
                 {'type': 'text', 'text': _RECEIPT_PARSE_PROMPT},
             ],
         }],
