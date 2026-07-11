@@ -3288,62 +3288,99 @@ async function renderFinanceSummary() {
   document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const data = await GET('/finance/summary');
-    const t = data.totals;
-    const cycles = data.cycles;
+    const [data, an] = await Promise.all([GET('/finance/summary'), GET('/receipts/analytics')]);
+    const t = data.totals, cycles = data.cycles;
 
-    const hasCycleData = cycles.some(c => c.receipt_count > 0);
+    const card = (label, val, color, sub) => `
+      <div class="stat-card" style="border-left:4px solid ${color}">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value" style="color:${color}">${fmtMoney(val)}</div>
+        ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px">${sub}</div>` : ''}
+      </div>`;
+    const bar = (label, val, max, color) => `
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px">
+        <div style="width:120px;color:var(--gray-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(label)}">${esc(label)}</div>
+        <div style="flex:1;background:#f0f0f0;border-radius:4px;height:16px">
+          <div style="width:${Math.max(2, 100*val/max)}%;background:${color};height:100%;border-radius:4px"></div>
+        </div>
+        <div style="width:82px;text-align:right;font-weight:600">${fmtMoney(val)}</div>
+      </div>`;
+    const storeMax = Math.max(1, ...an.by_store.map(x => x.total));
+    const monthMax = Math.max(1, ...an.by_month.map(x => x.total));
 
     document.getElementById('content').innerHTML = `
       <div style="display:flex;flex-direction:column;gap:20px">
 
-        <!-- Overall stats -->
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
-          <div class="stat-card" style="border-left:4px solid #1a8754">
-            <div class="stat-label">Total Raised</div>
-            <div class="stat-value" style="color:#1a8754">${fmtMoney(t.donations)}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
+          ${card('Income (donations)', t.income, '#1a8754')}
+          ${card('Committed (approved)', t.committed, '#2980b9', `${t.approved_count} receipts`)}
+          ${card('Paid out', t.paid_out, '#c0392b')}
+          ${card('Owed to volunteers', t.outstanding_payable, '#e67e22', 'approved, unpaid')}
+          ${card('Cash balance', t.cash_balance, '#146c43', 'income − paid out')}
+          ${card('Pending review', t.pending_review, '#8a8a8a', `${t.pending_count} receipts`)}
+        </div>
+
+        <div class="table-card">
+          <div class="table-header"><span class="table-title">Per-cycle spend</span></div>
+          <table>
+            <thead><tr><th>Cycle</th><th>Date</th><th>Approved</th><th>Committed</th><th>Paid</th><th>Outstanding</th></tr></thead>
+            <tbody>
+              ${cycles.some(c => c.approved_count > 0) ? cycles.map(c => `
+                <tr style="${c.approved_count===0?'opacity:0.4':''}">
+                  <td><strong>${esc(c.title)}</strong></td>
+                  <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)}</td>
+                  <td style="text-align:center">${c.approved_count||0}</td>
+                  <td><strong>${fmtMoney(c.committed_total)}</strong></td>
+                  <td style="color:#1a8754">${fmtMoney(c.paid_total)}</td>
+                  <td style="color:${c.outstanding_total>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(c.outstanding_total)}</td>
+                </tr>`).join('')
+              : '<tr class="empty-row"><td colspan="6">No approved receipts yet</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+          <div class="table-card">
+            <div class="table-header"><span class="table-title">Spend by store</span></div>
+            <div style="padding:12px 16px">
+              ${an.by_store.length ? an.by_store.slice(0,10).map(s => bar(s.store, s.total, storeMax, '#2980b9')).join('')
+                : '<div style="color:var(--gray-4);font-size:12px">No approved receipts yet</div>'}
+            </div>
           </div>
-          <div class="stat-card" style="border-left:4px solid #c0392b">
-            <div class="stat-label">Total Spent</div>
-            <div class="stat-value" style="color:#c0392b">${fmtMoney(t.reimbursed)}</div>
-          </div>
-          <div class="stat-card" style="border-left:4px solid #2980b9">
-            <div class="stat-label">Balance</div>
-            <div class="stat-value" style="color:#2980b9">${fmtMoney(t.balance)}</div>
-          </div>
-          <div class="stat-card" style="border-left:4px solid #e67e22">
-            <div class="stat-label">Pending Reimbursement</div>
-            <div class="stat-value" style="color:#e67e22">${fmtMoney(t.pending)}</div>
-          </div>
-          <div class="stat-card" style="border-left:4px solid var(--gray-3)">
-            <div class="stat-label">Receipts Submitted</div>
-            <div class="stat-value">${fmtMoney(t.receipts_submitted)}</div>
+          <div class="table-card">
+            <div class="table-header"><span class="table-title">Spend by volunteer</span></div>
+            <table>
+              <thead><tr><th>Volunteer</th><th>Spent</th><th>Owed</th><th>#</th></tr></thead>
+              <tbody>
+                ${an.by_volunteer.length ? an.by_volunteer.map(v => `
+                  <tr><td>${esc(v.volunteer_name)}</td><td><strong>${fmtMoney(v.total)}</strong></td>
+                  <td style="color:${v.owed>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(v.owed)}</td>
+                  <td style="text-align:center">${v.count}</td></tr>`).join('')
+                : '<tr class="empty-row"><td colspan="4">None yet</td></tr>'}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        <!-- Per-cycle breakdown -->
-        <div class="table-card">
-          <div class="table-header">
-            <span class="table-title">Per-Cycle Breakdown</span>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+          <div class="table-card">
+            <div class="table-header"><span class="table-title">Monthly spend</span></div>
+            <div style="padding:12px 16px">
+              ${an.by_month.length ? an.by_month.map(m => bar(m.month, m.total, monthMax, '#1a8754')).join('')
+                : '<div style="color:var(--gray-4);font-size:12px">No data yet</div>'}
+            </div>
           </div>
-          <table>
-            <thead><tr>
-              <th>Cycle</th><th>Date</th><th>Receipts</th>
-              <th>Submitted</th><th>Reimbursed</th><th>Pending</th>
-            </tr></thead>
-            <tbody>
-              ${hasCycleData ? cycles.filter(c => c.receipt_count > 0 || true).map(c => `
-                <tr style="${c.receipt_count===0?'opacity:0.45':''}">
-                  <td><strong>${esc(c.title)}</strong></td>
-                  <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)}</td>
-                  <td style="text-align:center">${c.receipt_count||0}</td>
-                  <td><strong>${fmtMoney(c.receipts_total)}</strong></td>
-                  <td style="color:#1a8754">${fmtMoney(c.reimbursed_total)}</td>
-                  <td style="color:${c.pending_total>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(c.pending_total)}</td>
-                </tr>`).join('')
-              : '<tr class="empty-row"><td colspan="6">No receipts recorded yet</td></tr>'}
-            </tbody>
-          </table>
+          <div class="table-card">
+            <div class="table-header"><span class="table-title">Top items purchased</span></div>
+            <table>
+              <thead><tr><th>Item</th><th>Total</th><th>#</th></tr></thead>
+              <tbody>
+                ${an.top_items.length ? an.top_items.slice(0,15).map(i => `
+                  <tr><td>${esc(i.name)}</td><td>${fmtMoney(i.total)}</td><td style="text-align:center">${i.count}</td></tr>`).join('')
+                : '<tr class="empty-row"><td colspan="3">No line items yet</td></tr>'}
+              </tbody>
+            </table>
+          </div>
         </div>
 
       </div>`;

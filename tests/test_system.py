@@ -2020,40 +2020,43 @@ class TestFinanceSummary:
 
         after = self._summary()
         t, b = after['totals'], before
-        assert t['donations'] - b['donations'] == pytest.approx(150.25)
-        assert t['receipts_submitted'] - b['receipts_submitted'] == pytest.approx(65.00)
-        assert t['reimbursed'] - b['reimbursed'] == pytest.approx(40.00)
-        assert t['pending'] - b['pending'] == pytest.approx(25.00)
-        # Balance invariant: donations minus paid reimbursements
-        assert t['balance'] == pytest.approx(t['donations'] - t['reimbursed'])
+        assert t['income'] - b['income'] == pytest.approx(150.25)
+        # both receipts approved → committed +65; r1 paid, r2 still owed
+        assert t['committed'] - b['committed'] == pytest.approx(65.00)
+        assert t['paid_out'] - b['paid_out'] == pytest.approx(40.00)
+        assert t['outstanding_payable'] - b['outstanding_payable'] == pytest.approx(25.00)
+        # ledger reconciles + cash math
+        assert t['committed'] == pytest.approx(t['paid_out'] + t['outstanding_payable'])
+        assert t['cash_balance'] == pytest.approx(t['income'] - t['paid_out'])
 
         # Per-cycle breakdown for our fresh cycle
         cyc = next(c for c in after['cycles'] if c['id'] == self.cycle_id)
-        assert cyc['receipt_count'] == 2
-        assert cyc['receipts_total'] == pytest.approx(65.00)
-        assert cyc['reimbursed_total'] == pytest.approx(40.00)
-        assert cyc['pending_total'] == pytest.approx(25.00)
+        assert cyc['approved_count'] == 2
+        assert cyc['committed_total'] == pytest.approx(65.00)
+        assert cyc['paid_total'] == pytest.approx(40.00)
+        assert cyc['outstanding_total'] == pytest.approx(25.00)
 
     def test_rejected_receipts_excluded_from_summary(self, client, auth):
         before = self._summary()['totals']
         rid = self._create_receipt(99.99)
         client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'rejected'})
         after = self._summary()
-        assert after['totals']['receipts_submitted'] == pytest.approx(
-            before['receipts_submitted'])
+        # rejected → never committed, and not counted as pending review
+        assert after['totals']['committed'] == pytest.approx(before['committed'])
+        assert after['totals']['pending_review'] == pytest.approx(before['pending_review'])
         cyc = next(c for c in after['cycles'] if c['id'] == self.cycle_id)
-        assert cyc['receipt_count'] == 0
-        assert cyc['receipts_total'] == pytest.approx(0)
+        assert cyc['approved_count'] == 0
+        assert cyc['committed_total'] == pytest.approx(0)
 
     def test_summary_shape_and_role_gates(self, client, auth):
         data = self._summary()
         assert set(data['totals'].keys()) == {
-            'donations', 'receipts_submitted', 'reimbursed', 'pending', 'balance'}
+            'income', 'pending_review', 'committed', 'paid_out', 'outstanding_payable',
+            'cash_balance', 'available', 'pending_count', 'approved_count'}
         assert isinstance(data['cycles'], list)
         if data['cycles']:
-            assert {'id', 'title', 'cycle_status', 'receipt_count',
-                    'receipts_total', 'reimbursed_total',
-                    'pending_total'} <= set(data['cycles'][0].keys())
+            assert {'id', 'title', 'cycle_status', 'approved_count',
+                    'committed_total', 'paid_total', 'outstanding_total'} <= set(data['cycles'][0].keys())
         viewer = _make_role_headers(client, auth, 'viewer')
         assert client.get('/api/finance/summary', headers=viewer).status_code == 403
         assert client.get('/api/finance/summary').status_code == 401
@@ -2113,26 +2116,25 @@ class TestPortalReceiptFlow:
         payload.update(overrides)
         return self.client.post('/api/portal/receipts', headers=self.portal, json=payload)
 
-    def test_portal_submit_creates_receipt_and_pending_reimbursement(self, client, auth):
+    def test_portal_submit_creates_pending_receipt_no_payable_yet(self, client, auth):
+        # New flow: submission creates a PENDING receipt only — the payable
+        # (reimbursement) is created later, at approval. Nothing owed yet.
         res = self._submit_receipt(amount=33.33)
         assert res.status_code == 201
         data = res.get_json()
-        assert data['receipt_id'] and data['reimbursement_id']
+        assert data['receipt_id']
+        assert data['reimbursement_id'] is None
 
-        # Receipt carries the family from the slot
         receipts = client.get('/api/receipts', headers=auth).get_json()
         rec = next(r for r in receipts if r['id'] == data['receipt_id'])
         assert rec['family_id'] == self.family_id
         assert rec['status'] == 'pending'
         assert rec['amount'] == pytest.approx(33.33)
 
-        # Auto-created reimbursement linked correctly
+        # No reimbursement exists until a treasurer/admin approves the receipt.
         reimbs = [r for r in client.get('/api/reimbursements', headers=auth).get_json()
                   if r['receipt_id'] == data['receipt_id']]
-        assert len(reimbs) == 1
-        assert reimbs[0]['volunteer_id'] == self.volunteer_id
-        assert reimbs[0]['amount'] == pytest.approx(33.33)
-        assert reimbs[0]['status'] == 'pending'
+        assert reimbs == []
 
     def test_portal_resubmit_same_slot_updates_in_place(self, client, auth):
         first = self._submit_receipt(amount=33.33).get_json()
@@ -2142,11 +2144,13 @@ class TestPortalReceiptFlow:
         assert data['updated'] is True
         assert data['receipt_id'] == first['receipt_id'], 'must update, not duplicate'
 
-        reimbs = [r for r in client.get('/api/reimbursements', headers=auth).get_json()
-                  if r['receipt_id'] == first['receipt_id']]
-        assert len(reimbs) == 1, 'resubmission must not create a second reimbursement'
-        assert reimbs[0]['amount'] == pytest.approx(44.00)
-        assert reimbs[0]['status'] == 'pending'
+        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json()
+                   if r['id'] == first['receipt_id'])
+        assert rec['amount'] == pytest.approx(44.00)
+        assert rec['status'] == 'pending'
+        # Still no payable — not approved yet.
+        assert [r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                if r['receipt_id'] == first['receipt_id']] == []
 
     def test_portal_lists_own_receipt_with_reimbursement_status(self, client):
         submitted = self._submit_receipt(amount=21.00).get_json()
@@ -2154,8 +2158,8 @@ class TestPortalReceiptFlow:
         row = next((r for r in rows if r['id'] == submitted['receipt_id']), None)
         assert row is not None
         assert row['receipt_status'] == 'pending'
-        assert row['reimbursement_id'] == submitted['reimbursement_id']
-        assert row['reimbursement_status'] == 'pending'
+        assert row['reimbursement_id'] is None      # no payable until approved
+        assert row['reimbursement_status'] is None
 
     def test_submit_with_someone_elses_slot_returns_404(self, client, auth):
         other_phone = f'5853{uuid.uuid4().int % 1000000:06d}'
@@ -2190,17 +2194,19 @@ class TestPortalReceiptFlow:
             'Submitting a receipt IS the completion signal for a shopping slot'
         assert slot.get('completed_at'), 'completed_at must be stamped'
 
-    def test_paying_reimbursement_marks_pending_receipt_approved(self, client, auth):
+    def test_approve_then_pay_flow(self, client, auth):
+        # New flow: submit (pending) → admin approves (creates payable) → pay it.
         submitted = self._submit_receipt(amount=18.75).get_json()
-        res = client.put(f'/api/reimbursements/{submitted["reimbursement_id"]}',
-                         headers=auth,
-                         json={'status': 'paid', 'payment_method': 'venmo',
-                               'payment_ref': 'VN-99'})
-        assert res.status_code == 200
-        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json()
-                   if r['id'] == submitted['receipt_id'])
-        assert rec['status'] == 'approved', \
-            'Paying a reimbursement must mark its pending receipt approved'
+        rid = submitted['receipt_id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        reimb = next(r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                     if r['receipt_id'] == rid)
+        assert reimb['status'] == 'pending' and reimb['amount'] == pytest.approx(18.75)
+        paid = client.put(f'/api/reimbursements/{reimb["id"]}', headers=auth,
+                          json={'status': 'paid', 'payment_method': 'venmo', 'payment_ref': 'VN-99'})
+        assert paid.status_code == 200
+        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json() if r['id'] == rid)
+        assert rec['status'] == 'approved'   # stays approved after payment
 
     def test_portal_receipts_require_portal_auth(self, client):
         assert client.get('/api/portal/receipts').status_code == 401
@@ -2296,6 +2302,35 @@ class TestReceiptParsing:
         det = client.get('/api/receipts/' + rid, headers=auth).get_json()
         assert 'items' in det and len(det['items']) == 1
         assert det['items'][0]['name'] == 'Milk'
+
+    def test_analytics_rolls_up_approved_spend(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Analytics Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': vid, 'amount': 900, 'store': 'BJs Analytics', 'purchase_date': '2026-05-04',
+            'parsed': {'store': 'BJs Analytics', 'total': 900, 'confidence': 0.9,
+                       'line_items': [{'name': 'ZzUniqueItem', 'qty': 1, 'unit_price': 900, 'line_total': 900}]},
+        }).get_json()['id']
+        # Only counts once APPROVED
+        an0 = client.get('/api/receipts/analytics', headers=auth).get_json()
+        assert not any(s['store'] == 'BJs Analytics' for s in an0['by_store'])
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        an = client.get('/api/receipts/analytics', headers=auth).get_json()
+        store = next(s for s in an['by_store'] if s['store'] == 'BJs Analytics')
+        assert store['total'] == pytest.approx(900)
+        assert any(i['name'].lower() == 'zzuniqueitem' for i in an['top_items'])
+        assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
+                   for v in an['by_volunteer'])
+
+    def test_unapprove_removes_unpaid_payable(self, client, auth):
+        rid = client.post('/api/receipts', headers=auth, json={'amount': 10, 'store': 'X'}).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        assert [r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                if r['receipt_id'] == rid]  # payable exists
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'pending'})
+        assert [r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                if r['receipt_id'] == rid] == []  # payable removed
 
     def test_edit_assigns_volunteer_and_recomputes_mismatch(self, client, auth):
         vid = client.post('/api/volunteers', headers=auth, json={

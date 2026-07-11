@@ -3534,7 +3534,8 @@ def update_receipt(rid):
             (new_amount, pick('volunteer_id'), now(), rid)
         )
 
-    # Auto-create reimbursement when receipt is approved (first time).
+    # Approval is the single point money is committed: create the payable (unpaid)
+    # exactly once when the receipt first becomes 'approved'.
     if d.get('status') == 'approved' and row['status'] != 'approved':
         existing = db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone()
         if not existing:
@@ -3545,6 +3546,9 @@ def update_receipt(rid):
                 (str(uuid.uuid4()), rid, pick('volunteer_id'), new_amount,
                  'pending', g.user['user_id'], now())
             )
+    # Un-approving (back to pending) or rejecting removes the UNPAID payable.
+    if d.get('status') in ('pending', 'rejected') and row['status'] == 'approved':
+        db.execute("DELETE FROM reimbursements WHERE receipt_id=? AND status!='paid'", (rid,))
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()))
 
@@ -3642,28 +3646,36 @@ def upload_receipt():
 @app.route('/api/finance/summary', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def finance_summary():
+    """Ledger view of the charity's money.
+      income               = donations received
+      pending_review       = receipts submitted but not yet approved (potential spend)
+      committed            = approved expenses (paid + still-owed) — every approved receipt
+      paid_out             = reimbursements actually disbursed to volunteers
+      outstanding_payable  = approved but unpaid = what we owe volunteers right now
+      cash_balance         = income − paid_out   (cash actually left)
+      available            = income − committed  (left after honoring approved payables)
+    committed always reconciles to paid_out + outstanding_payable."""
     db = get_db()
 
-    total_donations = db.execute(
-        "SELECT COALESCE(SUM(amount),0) as t FROM donations"
-    ).fetchone()['t']
-    total_receipts_submitted = db.execute(
-        "SELECT COALESCE(SUM(amount),0) as t FROM receipts WHERE status!='rejected'"
-    ).fetchone()['t']
-    total_reimbursed = db.execute(
-        "SELECT COALESCE(SUM(amount),0) as t FROM reimbursements WHERE status='paid'"
-    ).fetchone()['t']
-    total_pending = db.execute(
-        "SELECT COALESCE(SUM(amount),0) as t FROM reimbursements WHERE status='pending'"
-    ).fetchone()['t']
+    def _sum(sql, *p):
+        return db.execute(sql, p).fetchone()[0]
 
+    income          = _sum("SELECT COALESCE(SUM(amount),0) FROM donations")
+    pending_review  = _sum("SELECT COALESCE(SUM(amount),0) FROM receipts WHERE status='pending'")
+    paid_out        = _sum("SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='paid'")
+    outstanding     = _sum("SELECT COALESCE(SUM(amount),0) FROM reimbursements WHERE status='pending'")
+    committed       = paid_out + outstanding
+    approved_count  = _sum("SELECT COUNT(*) FROM receipts WHERE status='approved'")
+    pending_count   = _sum("SELECT COUNT(*) FROM receipts WHERE status='pending'")
+
+    # Per-cycle spend (approved receipts, resolved to a cycle via cycle_id or slot).
     cycles = db.execute('''
         SELECT
             dc.id, dc.title, dc.delivery_date_start, dc.status as cycle_status,
-            COUNT(DISTINCT r.id) as receipt_count,
-            COALESCE(SUM(CASE WHEN r.id IS NOT NULL THEN r.amount ELSE 0 END),0) as receipts_total,
-            COALESCE(SUM(CASE WHEN reimb.status='paid'    THEN reimb.amount ELSE 0 END),0) as reimbursed_total,
-            COALESCE(SUM(CASE WHEN reimb.status='pending' THEN reimb.amount ELSE 0 END),0) as pending_total
+            COUNT(DISTINCT CASE WHEN r.status='approved' THEN r.id END) as approved_count,
+            COALESCE(SUM(CASE WHEN reimb.status IN ('pending','paid') THEN reimb.amount ELSE 0 END),0) as committed_total,
+            COALESCE(SUM(CASE WHEN reimb.status='paid'    THEN reimb.amount ELSE 0 END),0) as paid_total,
+            COALESCE(SUM(CASE WHEN reimb.status='pending' THEN reimb.amount ELSE 0 END),0) as outstanding_total
         FROM delivery_cycles dc
         LEFT JOIN receipts r ON (
             (r.cycle_id = dc.id AND r.status != 'rejected')
@@ -3678,14 +3690,57 @@ def finance_summary():
 
     return jsonify({
         'totals': {
-            'donations':            round(total_donations, 2),
-            'receipts_submitted':   round(total_receipts_submitted, 2),
-            'reimbursed':           round(total_reimbursed, 2),
-            'pending':              round(total_pending, 2),
-            'balance':              round(total_donations - total_reimbursed, 2)
+            'income':              round(income, 2),
+            'pending_review':      round(pending_review, 2),
+            'committed':           round(committed, 2),
+            'paid_out':            round(paid_out, 2),
+            'outstanding_payable': round(outstanding, 2),
+            'cash_balance':        round(income - paid_out, 2),
+            'available':           round(income - committed, 2),
+            'pending_count':       pending_count,
+            'approved_count':      approved_count,
         },
         'cycles': [dict(c) for c in cycles]
     })
+
+
+@app.route('/api/receipts/analytics', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def receipts_analytics():
+    """Spend breakdowns from approved receipts + their parsed line items:
+    by store, by volunteer (with amount still owed), top items, and monthly trend."""
+    db = get_db()
+    by_store = [dict(r) for r in db.execute('''
+        SELECT COALESCE(NULLIF(TRIM(store),''),'(unknown)') as store,
+               ROUND(COALESCE(SUM(amount),0),2) as total, COUNT(*) as count
+        FROM receipts WHERE status='approved'
+        GROUP BY LOWER(COALESCE(TRIM(store),'')) ORDER BY total DESC LIMIT 50
+    ''').fetchall()]
+    by_volunteer = [dict(r) for r in db.execute('''
+        SELECT COALESCE(v.name,'(unassigned)') as volunteer_name,
+               ROUND(COALESCE(SUM(r.amount),0),2) as total, COUNT(*) as count,
+               ROUND(COALESCE(SUM(CASE WHEN rb.status='pending' THEN rb.amount ELSE 0 END),0),2) as owed
+        FROM receipts r
+        LEFT JOIN volunteers v ON r.volunteer_id = v.id
+        LEFT JOIN reimbursements rb ON rb.receipt_id = r.id
+        WHERE r.status='approved'
+        GROUP BY r.volunteer_id ORDER BY total DESC LIMIT 50
+    ''').fetchall()]
+    top_items = [dict(r) for r in db.execute('''
+        SELECT ri.name, COUNT(*) as count, ROUND(COALESCE(SUM(ri.line_total),0),2) as total
+        FROM receipt_items ri JOIN receipts r ON ri.receipt_id = r.id
+        WHERE r.status='approved' AND ri.name IS NOT NULL AND TRIM(ri.name) != ''
+        GROUP BY LOWER(TRIM(ri.name)) ORDER BY total DESC LIMIT 25
+    ''').fetchall()]
+    by_month = [dict(r) for r in db.execute('''
+        SELECT substr(COALESCE(NULLIF(purchase_date,''), created_at), 1, 7) as month,
+               ROUND(COALESCE(SUM(amount),0),2) as total, COUNT(*) as count
+        FROM receipts WHERE status='approved'
+        GROUP BY month ORDER BY month
+    ''').fetchall()]
+    return jsonify({'by_store': by_store, 'by_volunteer': by_volunteer,
+                    'top_items': top_items, 'by_month': by_month})
+
 
 # ── Reimbursements ────────────────────────────────────────────────────────────
 
@@ -3735,12 +3790,8 @@ def update_reimbursement(rid):
          d.get('approved_by', row['approved_by']) or g.user['user_id'],
          d.get('notes', row['notes']), now(), rid)
     )
-    # When reimbursement is paid, mark the linked receipt as approved too
-    if new_status == 'paid' and row['status'] != 'paid' and row['receipt_id']:
-        db.execute(
-            "UPDATE receipts SET status='approved', updated_at=? WHERE id=? AND status='pending'",
-            (now(), row['receipt_id'])
-        )
+    # (A payable only exists after the receipt is approved, so paying it no longer
+    # needs to touch the receipt's status — it's already 'approved'.)
     db.commit()
     # Notify volunteer via SMS when payment is sent
     if new_status == 'paid' and row['status'] != 'paid':
@@ -7088,13 +7139,10 @@ def portal_submit_receipt():
         vals = [v for _, v in update_fields] + [rid]
         db.execute(f'UPDATE receipts SET {set_clause} WHERE id=?', vals)
 
-        # Also reset the linked reimbursement to pending
-        db.execute(
-            "UPDATE reimbursements SET amount=?, status='pending', updated_at=? WHERE receipt_id=?",
-            (amount, now(), rid)
-        )
-        reimb_row = db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone()
-        reimb_id  = reimb_row['id'] if reimb_row else None
+        # Receipt goes back to pending review — remove any UNPAID payable (a paid one
+        # is left untouched). The payable is recreated if/when it's approved again.
+        db.execute("DELETE FROM reimbursements WHERE receipt_id=? AND status!='paid'", (rid,))
+        reimb_id = None
         if data.get('parsed'):
             try:
                 _persist_receipt_parse(db, rid, _normalize_parsed_receipt(data['parsed']), amount)
@@ -7126,14 +7174,9 @@ def portal_submit_receipt():
         (rid, vol_id, fid, store, pdate, amount, furl, slot_id, 'pending', data.get('notes'), now())
     )
 
-    # Auto-create reimbursement request
-    reimb_id = str(uuid.uuid4())
-    db.execute(
-        '''INSERT INTO reimbursements
-           (id, receipt_id, volunteer_id, amount, status, created_at)
-           VALUES (?,?,?,?,?,?)''',
-        (reimb_id, rid, vol_id, amount, 'pending', now())
-    )
+    # No reimbursement (payable) yet — one is created only when a treasurer/admin
+    # APPROVES the receipt. A pending receipt is a claim under review, not money owed.
+    reimb_id = None
 
     # Persist vision-parse data (if the upload returned a preview) — stores line items
     # + parsed_total and flags a mismatch vs the confirmed amount for treasurer review.
