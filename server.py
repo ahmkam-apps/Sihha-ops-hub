@@ -3590,6 +3590,37 @@ def reparse_receipt(rid):
     return jsonify({'ok': True, 'parsed': parsed})
 
 
+@app.route('/api/receipts/delete-all', methods=['POST'])
+@require_auth(roles=['admin'])
+def delete_all_receipts():
+    """Wipe every receipt + its line items + linked reimbursements. Admin-only and
+    requires an explicit confirm phrase so it can't fire by accident."""
+    if (request.json or {}).get('confirm') != 'DELETE ALL':
+        return jsonify({'error': 'Confirmation required (confirm="DELETE ALL").'}), 400
+    db = get_db()
+    n = db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
+    db.execute("DELETE FROM receipt_items")
+    db.execute("DELETE FROM reimbursements")   # every reimbursement is receipt-linked
+    db.execute("DELETE FROM receipts")
+    db.commit()
+    log.info(f'delete_all_receipts: wiped {n} receipts by admin {g.user["username"]}')
+    return jsonify({'ok': True, 'deleted': n})
+
+
+@app.route('/api/receipts/<rid>', methods=['DELETE'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def delete_receipt(rid):
+    """Delete a single receipt and its line items + linked reimbursement."""
+    db = get_db()
+    if not db.execute("SELECT id FROM receipts WHERE id=?", (rid,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    db.execute("DELETE FROM receipt_items WHERE receipt_id=?", (rid,))
+    db.execute("DELETE FROM reimbursements WHERE receipt_id=?", (rid,))
+    db.execute("DELETE FROM receipts WHERE id=?", (rid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
 @app.route('/api/receipts/upload', methods=['POST'])
 @require_auth(roles=['admin', 'volunteer'])
 def upload_receipt():

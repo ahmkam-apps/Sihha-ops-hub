@@ -2941,6 +2941,7 @@ async function renderReceipts(filter) {
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px">⚙ Auto-read status</button>
+     <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:#c00;border-color:#c00">🗑 Clear all</button>
      <button class="btn btn-green" onclick="openAddReceiptDrawer()">⬆ Upload Receipt(s)</button>`;
 
   let url = '/receipts';
@@ -3191,6 +3192,7 @@ async function openReceiptDetail(rid) {
       ${rec.file_url ? `<button class="btn btn-outline" onclick="reparseReceipt('${rid}')">🔄 Re-read photo</button>` : ''}
       ${rec.status==='pending' ? `<button class="btn" style="background:#1a8754;color:#fff" onclick="setReceiptStatus('${rid}','approved')">✓ Confirm &amp; Approve</button>
         <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="setReceiptStatus('${rid}','rejected')">✗ Reject</button>` : ''}
+      <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="deleteReceipt('${rid}')">🗑 Delete</button>
       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`;
     openDrawer('Receipt', body, footer);
   } catch(e) { alert('Could not load receipt: ' + e.message); }
@@ -3236,6 +3238,27 @@ async function setReceiptStatus(rid, status) {
     closeDrawer();
     renderReceipts(STATE.filter);
   } catch(e) { document.getElementById('rd-err').textContent = e.message; }
+}
+
+async function deleteReceipt(rid) {
+  if (!confirm('Delete this receipt? This removes its line items and any linked reimbursement. This cannot be undone.')) return;
+  try {
+    await DEL('/receipts/' + rid);
+    closeDrawer();
+    renderReceipts(STATE.filter);
+  } catch(e) {
+    const err = document.getElementById('rd-err');
+    if (err) err.textContent = e.message; else alert(e.message);
+  }
+}
+
+async function deleteAllReceipts() {
+  if (!confirm('Delete ALL receipts?\n\nThis permanently removes every receipt, its line items, and all linked reimbursements. This cannot be undone.')) return;
+  try {
+    const r = await POST('/receipts/delete-all', { confirm: 'DELETE ALL' });
+    alert('Deleted ' + (r.deleted || 0) + ' receipt(s).');
+    renderReceipts('all');
+  } catch(e) { alert(e.message); }
 }
 
 async function approveReceipt(id) {
