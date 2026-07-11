@@ -3050,7 +3050,7 @@ function _receiptBanner(text, color) {
 async function quickUploadReceipts(files) {
   const list = Array.from(files || []);
   if (!list.length) return;
-  let ok = 0, fail = 0;
+  let ok = 0, fail = 0, notRead = 0, lastReason = '', firstId = null;
   for (let i = 0; i < list.length; i++) {
     _receiptBanner(`Reading receipt ${i + 1} of ${list.length}…`);
     try {
@@ -3064,7 +3064,8 @@ async function quickUploadReceipts(files) {
       const uj = await up.json();
       if (!up.ok) throw new Error(uj.error || 'upload failed');
       const p = uj.parsed || null;
-      await POST('/receipts', {
+      if (!p && uj.parse_error) { notRead++; lastReason = uj.parse_error; }
+      const created = await POST('/receipts', {
         volunteer_id:  null,
         cycle_id:      null,
         store:         p && p.store ? p.store : null,
@@ -3074,16 +3075,27 @@ async function quickUploadReceipts(files) {
         parsed:        p,
         notify:        false            // admin bulk upload — don't email treasurers per file
       });
+      if (!firstId) firstId = created.id;
       ok++;
     } catch (e) {
       fail++;
     }
   }
   const el = _receiptBanner(
-    `✓ ${ok} receipt${ok !== 1 ? 's' : ''} added${fail ? `, ${fail} failed` : ''}`,
-    fail ? '#8a4b00' : '#1a3a2a'
+    `✓ ${ok} added${fail ? `, ${fail} failed` : ''}${notRead ? ` · ${notRead} couldn't be auto-read` : ''}`,
+    (fail || notRead) ? '#8a4b00' : '#1a3a2a'
   );
-  setTimeout(() => el.remove(), 4000);
+  setTimeout(() => el.remove(), 5000);
+  // Single upload → drop straight into review-and-approve with the data populated.
+  if (list.length === 1 && firstId) {
+    if (STATE.page !== 'receipts') nav('receipts');
+    openReceiptDetail(firstId);
+    return;
+  }
+  if (notRead && lastReason) {
+    setTimeout(() => alert('Some photos could not be auto-read.\n\nReason: ' + lastReason +
+      '\n\nThe receipts were still saved — open one and use "Re-read photo", or check ⚙ Auto-read status.'), 300);
+  }
   if (STATE.page === 'receipts') renderReceipts(STATE.filter);
 }
 
@@ -3144,7 +3156,10 @@ async function openReceiptDetail(rid) {
         ⚠ Amount doesn't match the total read from the photo (${fmtMoney(rec.parsed_total)}). Verify before approving.
       </div>` : '';
     const parsedNote = rec.parse_status==='parsed'
-      ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px">Auto-read${rec.parse_confidence!=null?` · ${Math.round(rec.parse_confidence*100)}% confidence`:''}</div>` : '';
+      ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px">✨ Auto-read${rec.parse_confidence!=null?` · ${Math.round(rec.parse_confidence*100)}% confidence`:''}</div>`
+      : (rec.parse_status==='failed'
+         ? `<div style="font-size:11px;color:#c0392b;margin-top:2px">⚠ Couldn't auto-read this photo — click "🔄 Re-read photo" below to retry.</div>`
+         : '');
     const body = `
       ${mismatchNote}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -3170,7 +3185,7 @@ async function openReceiptDetail(rid) {
     const footer = `
       <button class="btn btn-green" onclick="saveReceiptDetail('${rid}')">Save</button>
       ${rec.file_url ? `<button class="btn btn-outline" onclick="reparseReceipt('${rid}')">🔄 Re-read photo</button>` : ''}
-      ${rec.status==='pending' ? `<button class="btn" style="background:#1a8754;color:#fff" onclick="setReceiptStatus('${rid}','approved')">✓ Approve</button>
+      ${rec.status==='pending' ? `<button class="btn" style="background:#1a8754;color:#fff" onclick="setReceiptStatus('${rid}','approved')">✓ Confirm &amp; Approve</button>
         <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="setReceiptStatus('${rid}','rejected')">✗ Reject</button>` : ''}
       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`;
     openDrawer('Receipt', body, footer);

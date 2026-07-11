@@ -3196,17 +3196,23 @@ def _extract_json(text):
 
 
 def _parse_receipt_image(image_bytes, filename):
-    """Call the Anthropic vision API to extract receipt data. Returns a normalized dict
-    or None. NEVER raises — parsing is best-effort and the app works without it. No-op
-    unless RECEIPT_PARSING_ACTIVE (flag on AND key present)."""
+    """Back-compat wrapper — returns just the parsed dict (or None)."""
+    parsed, _err = _parse_receipt_image_ex(image_bytes, filename)
+    return parsed
+
+
+def _parse_receipt_image_ex(image_bytes, filename):
+    """Call the Anthropic vision API to extract receipt data. Returns (parsed_dict, None)
+    on success or (None, error_message) on failure. NEVER raises — the app works without
+    it. No-op unless RECEIPT_PARSING_ACTIVE (key present + not disabled)."""
     if not RECEIPT_PARSING_ACTIVE:
-        return None
+        return None, 'auto-read is off (no ANTHROPIC_API_KEY)'
     ext = filename.rsplit('.', 1)[-1] if '.' in filename else ''
     prepared = _prepare_receipt_image(image_bytes, ext)
     if not prepared:
-        return None
+        return None, f'could not decode a .{ext or "?"} image (HEIC needs the plugin; PDFs are not read)'
     b64, media_type = prepared
-    import urllib.request as _req, json as _json
+    import urllib.request as _req, urllib.error as _uerr, json as _json
     body = {
         'model': RECEIPT_PARSE_MODEL,
         'max_tokens': 1500,
@@ -3235,11 +3241,15 @@ def _parse_receipt_image(image_bytes, filename):
         parsed = _extract_json(text)
         if not parsed:
             log.warning('_parse_receipt_image: model returned no parseable JSON')
-            return None
-        return _normalize_parsed_receipt(parsed)
+            return None, 'the model reply had no readable data'
+        return _normalize_parsed_receipt(parsed), None
+    except _uerr.HTTPError as e:
+        detail = e.read().decode('utf-8', 'replace')[:200]
+        log.warning(f'_parse_receipt_image HTTP {e.code}: {detail}')
+        return None, f'API {e.code}: {detail}'
     except Exception as e:
         log.warning(f'_parse_receipt_image failed: {e}')
-        return None
+        return None, str(e)[:200]
 
 
 def _to_float(v):
@@ -3558,11 +3568,11 @@ def reparse_receipt(rid):
         return jsonify({'error': 'Photo file not found on the server.'}), 404
     with open(path, 'rb') as f:
         raw = f.read()
-    parsed = _parse_receipt_image(raw, fname)
+    parsed, perr = _parse_receipt_image_ex(raw, fname)
     if not parsed:
         db.execute("UPDATE receipts SET parse_status='failed', parsed_at=? WHERE id=?", (now(), rid))
         db.commit()
-        return jsonify({'error': 'Could not read this photo (unclear image or unsupported format).'}), 422
+        return jsonify({'error': 'Could not read this photo — ' + (perr or 'unknown reason')}), 422
     _persist_receipt_parse(db, rid, parsed, row['amount'])
     # Fill any empty header fields from the parse (don't clobber values already set).
     sets, vals = [], []
@@ -3591,8 +3601,9 @@ def upload_receipt():
     filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1]
     with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as out:
         out.write(raw)
-    parsed = _parse_receipt_image(raw, filename)  # None unless parsing active
-    return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed}), 201
+    parsed, perr = _parse_receipt_image_ex(raw, filename)  # (None, reason) unless active
+    return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed,
+                    'parse_error': (perr if not parsed else None)}), 201
 
 # ── Finance Summary ───────────────────────────────────────────────────────────
 
@@ -6991,8 +7002,9 @@ def portal_upload_receipt_file():
     filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1].lower()
     with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as out:
         out.write(raw)
-    parsed = _parse_receipt_image(raw, filename)  # None unless parsing active
-    return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed}), 201
+    parsed, perr = _parse_receipt_image_ex(raw, filename)  # (None, reason) unless active
+    return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed,
+                    'parse_error': (perr if not parsed else None)}), 201
 
 @app.route('/api/portal/receipts', methods=['POST'])
 @require_portal_auth()
