@@ -5,3 +5,5 @@ gunicorn==23.0.0
 apscheduler==3.10.4
 openpyxl==3.1.5
 flask-compress==1.15
+pillow==11.0.0
+pillow-heif==0.18.0

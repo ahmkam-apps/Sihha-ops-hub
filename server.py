@@ -51,6 +51,17 @@ ALLOWED_EXT     = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'heic'}
 SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '')
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
 
+# ── Receipt vision-parsing (Phase A) ──────────────────────────────────────────
+# Auto-extract store/date/total/line-items from an uploaded receipt photo via the
+# Anthropic vision API. Fully OPTIONAL: if the key is unset or the flag is off, the
+# app behaves exactly as before (manual entry) — nothing breaks. Parsed values only
+# ever pre-fill the form; a treasurer/admin still approves before any money moves.
+ANTHROPIC_API_KEY       = os.environ.get('ANTHROPIC_API_KEY', '')
+RECEIPT_PARSE_MODEL     = os.environ.get('RECEIPT_PARSE_MODEL', 'claude-haiku-4-5-20251001')
+ENABLE_RECEIPT_PARSING  = os.environ.get('ENABLE_RECEIPT_PARSING', '').strip().lower() in ('1', 'true', 'yes', 'on')
+# Only actually call the API when BOTH the flag is on AND a key is present.
+RECEIPT_PARSING_ACTIVE  = ENABLE_RECEIPT_PARSING and bool(ANTHROPIC_API_KEY)
+
 # Twilio removed — all notifications via SendGrid email
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 _early_log = logging.getLogger(__name__)
@@ -660,6 +671,47 @@ def bootstrap_db():
         log.info('Migration: added slot_id to receipts')
     except sqlite3.OperationalError:
         pass
+
+    # ── Receipt vision-parsing columns (Phase A) ──────────────────────────────
+    # parsed_* hold what the vision model extracted; the existing store/amount/
+    # purchase_date stay the human-confirmed source of truth. amount_mismatch is a
+    # review flag when the confirmed amount and parsed_total disagree. parse_status:
+    # none|queued|parsing|parsed|failed. parsed_json keeps the raw model output.
+    for _col, _def in [
+        ('parsed_store',     'TEXT'),
+        ('parsed_date',      'TEXT'),
+        ('subtotal',         'REAL'),
+        ('tax',              'REAL'),
+        ('parsed_total',     'REAL'),
+        ('parse_status',     "TEXT DEFAULT 'none'"),
+        ('parse_confidence', 'REAL'),
+        ('parse_model',      'TEXT'),
+        ('parsed_at',        'TEXT'),
+        ('parsed_json',      'TEXT'),
+        ('amount_mismatch',  'INTEGER DEFAULT 0'),
+    ]:
+        try:
+            conn.execute(f'ALTER TABLE receipts ADD COLUMN {_col} {_def}')
+            log.info(f'Migration: added receipts.{_col}')
+        except sqlite3.OperationalError:
+            pass
+
+    # Line-item breakdown extracted from each receipt (audit: itemized tracking).
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS receipt_items (
+            id          TEXT PRIMARY KEY,
+            receipt_id  TEXT NOT NULL,
+            line_no     INTEGER,
+            name        TEXT,
+            qty         REAL,
+            unit_price  REAL,
+            line_total  REAL,
+            category    TEXT,
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY (receipt_id) REFERENCES receipts(id) ON DELETE CASCADE
+        )
+    ''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON receipt_items(receipt_id)')
 
     # Add email/wa_phone/wa_apikey to users (treasurer notification channels)
     for _col, _def in [('email', 'TEXT'), ('wa_phone', 'TEXT'), ('wa_apikey', 'TEXT')]:
@@ -3065,6 +3117,199 @@ def update_volunteer(vid):
 
 # ── Receipts ──────────────────────────────────────────────────────────────────
 
+# ── Receipt vision parsing (Phase A) ──────────────────────────────────────────
+
+_RECEIPT_PARSE_PROMPT = (
+    "You are extracting structured data from a photo of a store receipt. "
+    "Return ONLY a single minified JSON object, no prose, no markdown fences. "
+    "Schema: {\"store\":string|null, \"purchase_date\":\"YYYY-MM-DD\"|null, "
+    "\"subtotal\":number|null, \"tax\":number|null, \"total\":number|null, "
+    "\"currency\":string|null, \"confidence\":number (0..1), "
+    "\"line_items\":[{\"name\":string, \"qty\":number|null, "
+    "\"unit_price\":number|null, \"line_total\":number|null}]}. "
+    "Use the receipt's grand total for \"total\". Omit loyalty/discount summary lines "
+    "that are not products. If the image is unreadable, set confidence to 0 and null fields."
+)
+
+
+def _prepare_receipt_image(image_bytes, ext):
+    """Return (base64_str, media_type) ready for the vision API, or None if the file
+    can't be used (e.g. a PDF, or HEIC with no decoder available). Converts HEIC→JPEG
+    and downscales large phone photos to keep the request small and cheap."""
+    import base64 as _b64
+    ext = (ext or '').lower().lstrip('.')
+    if ext == 'pdf':
+        return None  # v1 parses images only; PDFs fall back to manual entry
+    try:
+        from PIL import Image
+        try:
+            import pillow_heif  # noqa: registers HEIF/HEIC opener
+            pillow_heif.register_heif_opener()
+        except Exception:
+            if ext in ('heic', 'heif'):
+                return None  # can't decode HEIC without the plugin
+        import io as _io
+        img = Image.open(_io.BytesIO(image_bytes))
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+        # Downscale so the longest side is <= 1600px (plenty for OCR, bounds cost)
+        max_side = 1600
+        if max(img.size) > max_side:
+            ratio = max_side / float(max(img.size))
+            img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)))
+        buf = _io.BytesIO()
+        img.save(buf, format='JPEG', quality=80)
+        return _b64.b64encode(buf.getvalue()).decode('ascii'), 'image/jpeg'
+    except Exception as e:
+        # PIL missing or decode failed — try sending common web formats as-is.
+        if ext in ('jpg', 'jpeg'):
+            return _b64.b64encode(image_bytes).decode('ascii'), 'image/jpeg'
+        if ext == 'png':
+            return _b64.b64encode(image_bytes).decode('ascii'), 'image/png'
+        log.warning(f'_prepare_receipt_image: could not prepare .{ext} image ({e})')
+        return None
+
+
+def _extract_json(text):
+    """Pull the first balanced {...} JSON object out of a model reply and parse it."""
+    import json as _json
+    if not text:
+        return None
+    start = text.find('{')
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == '{':
+            depth += 1
+        elif text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return _json.loads(text[start:i + 1])
+                except Exception:
+                    return None
+    return None
+
+
+def _parse_receipt_image(image_bytes, filename):
+    """Call the Anthropic vision API to extract receipt data. Returns a normalized dict
+    or None. NEVER raises — parsing is best-effort and the app works without it. No-op
+    unless RECEIPT_PARSING_ACTIVE (flag on AND key present)."""
+    if not RECEIPT_PARSING_ACTIVE:
+        return None
+    ext = filename.rsplit('.', 1)[-1] if '.' in filename else ''
+    prepared = _prepare_receipt_image(image_bytes, ext)
+    if not prepared:
+        return None
+    b64, media_type = prepared
+    import urllib.request as _req, json as _json
+    body = {
+        'model': RECEIPT_PARSE_MODEL,
+        'max_tokens': 1500,
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': media_type, 'data': b64}},
+                {'type': 'text', 'text': _RECEIPT_PARSE_PROMPT},
+            ],
+        }],
+    }
+    req = _req.Request(
+        'https://api.anthropic.com/v1/messages',
+        data=_json.dumps(body).encode('utf-8'),
+        headers={
+            'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+        },
+        method='POST',
+    )
+    try:
+        with _req.urlopen(req, timeout=45) as resp:
+            data = _json.loads(resp.read())
+        text = ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+        parsed = _extract_json(text)
+        if not parsed:
+            log.warning('_parse_receipt_image: model returned no parseable JSON')
+            return None
+        return _normalize_parsed_receipt(parsed)
+    except Exception as e:
+        log.warning(f'_parse_receipt_image failed: {e}')
+        return None
+
+
+def _to_float(v):
+    try:
+        return round(float(v), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_parsed_receipt(p):
+    """Coerce the model's JSON into a clean, typed dict we can trust downstream."""
+    items = []
+    for it in (p.get('line_items') or [])[:200]:
+        if not isinstance(it, dict):
+            continue
+        name = (it.get('name') or '').strip()
+        if not name:
+            continue
+        items.append({
+            'name':       name[:200],
+            'qty':        _to_float(it.get('qty')),
+            'unit_price': _to_float(it.get('unit_price')),
+            'line_total': _to_float(it.get('line_total')),
+        })
+    conf = _to_float(p.get('confidence'))
+    if conf is not None:
+        conf = max(0.0, min(1.0, conf))
+    return {
+        'store':         (p.get('store') or '').strip()[:200] or None,
+        'purchase_date': (p.get('purchase_date') or '').strip()[:10] or None,
+        'subtotal':      _to_float(p.get('subtotal')),
+        'tax':           _to_float(p.get('tax')),
+        'total':         _to_float(p.get('total')),
+        'currency':      (p.get('currency') or '').strip()[:8] or None,
+        'confidence':    conf,
+        'line_items':    items,
+    }
+
+
+def _persist_receipt_parse(db, receipt_id, parsed, confirmed_amount=None):
+    """Write parsed_* fields + receipt_items for a receipt and flag amount mismatches.
+    Safe to call repeatedly (clears prior items first). Returns the mismatch flag."""
+    import json as _json
+    if parsed is None:
+        db.execute("UPDATE receipts SET parse_status='failed', parsed_at=? WHERE id=?",
+                   (now(), receipt_id))
+        return 0
+    mismatch = 0
+    total = parsed.get('total')
+    if confirmed_amount is not None and total is not None:
+        try:
+            mismatch = 1 if abs(float(confirmed_amount) - total) > 0.02 else 0
+        except (TypeError, ValueError):
+            mismatch = 0
+    db.execute(
+        "UPDATE receipts SET parsed_store=?, parsed_date=?, subtotal=?, tax=?, parsed_total=?, "
+        "parse_status='parsed', parse_confidence=?, parse_model=?, parsed_at=?, parsed_json=?, "
+        "amount_mismatch=? WHERE id=?",
+        (parsed.get('store'), parsed.get('purchase_date'), parsed.get('subtotal'),
+         parsed.get('tax'), parsed.get('total'), parsed.get('confidence'), RECEIPT_PARSE_MODEL,
+         now(), _json.dumps(parsed), mismatch, receipt_id)
+    )
+    db.execute("DELETE FROM receipt_items WHERE receipt_id=?", (receipt_id,))
+    for i, it in enumerate(parsed.get('line_items') or []):
+        db.execute(
+            "INSERT INTO receipt_items (id, receipt_id, line_no, name, qty, unit_price, line_total, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), receipt_id, i + 1, it['name'], it['qty'],
+             it['unit_price'], it['line_total'], now())
+        )
+    return mismatch
+
+
 @app.route('/api/receipts', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])  # audit: was open to any
 def list_receipts():                                    # authenticated role
@@ -3106,6 +3351,11 @@ def create_receipt():
          data.get('store'), data.get('purchase_date'), data.get('amount'),
          data.get('file_url'), data.get('slot_id'), data.get('cycle_id'), 'pending', data.get('notes'), now())
     )
+    if data.get('parsed'):
+        try:
+            _persist_receipt_parse(db, rid, _normalize_parsed_receipt(data['parsed']), data.get('amount'))
+        except Exception as _e:
+            log.warning(f'create_receipt: parse persist failed for {rid}: {_e}')
     db.commit()
     # Notify treasurers of new receipt submission
     try:
@@ -3158,9 +3408,12 @@ def upload_receipt():
     f = request.files['file']
     if not f.filename or not allowed_file(f.filename):
         return jsonify({'error': 'Invalid file type'}), 400
+    raw = f.read()
     filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1]
-    f.save(os.path.join(UPLOAD_FOLDER, filename))
-    return jsonify({'file_url': f'/uploads/{filename}'}), 201
+    with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as out:
+        out.write(raw)
+    parsed = _parse_receipt_image(raw, filename)  # None unless parsing active
+    return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed}), 201
 
 # ── Finance Summary ───────────────────────────────────────────────────────────
 
@@ -6541,15 +6794,20 @@ def portal_complete_slot(slot_id):
 @app.route('/api/portal/receipts/upload', methods=['POST'])
 @require_portal_auth()
 def portal_upload_receipt_file():
-    """Upload a receipt photo from the volunteer portal."""
+    """Upload a receipt photo from the volunteer portal. If vision parsing is active,
+    also returns a `parsed` preview (store/date/total/line-items) so the submit form can
+    pre-fill — the volunteer still confirms and a treasurer/admin still approves."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     f = request.files['file']
     if not f.filename or not allowed_file(f.filename):
         return jsonify({'error': 'Invalid file type. Use JPG, PNG, PDF, or HEIC.'}), 400
+    raw = f.read()
     filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1].lower()
-    f.save(os.path.join(UPLOAD_FOLDER, filename))
-    return jsonify({'file_url': f'/uploads/{filename}'}), 201
+    with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as out:
+        out.write(raw)
+    parsed = _parse_receipt_image(raw, filename)  # None unless parsing active
+    return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed}), 201
 
 @app.route('/api/portal/receipts', methods=['POST'])
 @require_portal_auth()
@@ -6608,6 +6866,11 @@ def portal_submit_receipt():
         )
         reimb_row = db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone()
         reimb_id  = reimb_row['id'] if reimb_row else None
+        if data.get('parsed'):
+            try:
+                _persist_receipt_parse(db, rid, _normalize_parsed_receipt(data['parsed']), amount)
+            except Exception as _e:
+                log.warning(f'portal_submit_receipt(update): parse persist failed for {rid}: {_e}')
         db.commit()
 
         try:
@@ -6642,6 +6905,14 @@ def portal_submit_receipt():
            VALUES (?,?,?,?,?,?)''',
         (reimb_id, rid, vol_id, amount, 'pending', now())
     )
+
+    # Persist vision-parse data (if the upload returned a preview) — stores line items
+    # + parsed_total and flags a mismatch vs the confirmed amount for treasurer review.
+    if data.get('parsed'):
+        try:
+            _persist_receipt_parse(db, rid, _normalize_parsed_receipt(data['parsed']), amount)
+        except Exception as _e:
+            log.warning(f'portal_submit_receipt: parse persist failed for {rid}: {_e}')
 
     # Auto-complete the slot — submitting receipt IS the completion signal.
     # Covers 'confirmed' too: since the 2026-06-09 auto-confirm redesign, slots go

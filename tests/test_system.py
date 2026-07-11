@@ -2206,3 +2206,72 @@ class TestPortalReceiptFlow:
         assert client.get('/api/portal/receipts').status_code == 401
         assert client.post('/api/portal/receipts',
                            json={'amount': 1}).status_code == 401
+
+
+# ── Receipt vision-parsing (Phase A) ──────────────────────────────────────────
+import server as _server
+
+
+class TestReceiptParsing:
+    def test_schema_has_parsed_columns_and_items_table(self, client, auth):
+        db = _server.get_db_direct() if hasattr(_server, 'get_db_direct') else _server.make_conn()
+        cols = [r[1] for r in db.execute("PRAGMA table_info(receipts)").fetchall()]
+        for c in ['parsed_store', 'parsed_total', 'parse_status', 'amount_mismatch']:
+            assert c in cols, f'missing receipts.{c}'
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='receipt_items'"
+        ).fetchone(), 'receipt_items table missing'
+        db.close()
+
+    def test_parsing_inactive_by_default_returns_none(self):
+        # No ANTHROPIC_API_KEY / flag in the test env → parsing must no-op.
+        assert _server.RECEIPT_PARSING_ACTIVE is False
+        assert _server._parse_receipt_image(b'not-an-image', 'x.jpg') is None
+
+    def test_normalize_coerces_types_and_drops_blank_items(self):
+        out = _server._normalize_parsed_receipt({
+            'store': '  Costco ', 'purchase_date': '2026-07-09',
+            'total': '42.5', 'confidence': 1.7,          # >1 clamps to 1.0
+            'line_items': [
+                {'name': 'Milk', 'qty': '2', 'unit_price': '3.5', 'line_total': '7'},
+                {'name': '', 'qty': 1},                   # blank name dropped
+            ],
+        })
+        assert out['store'] == 'Costco'
+        assert out['total'] == 42.5
+        assert out['confidence'] == 1.0
+        assert len(out['line_items']) == 1
+        assert out['line_items'][0]['qty'] == 2.0
+
+    def test_create_receipt_with_parsed_flags_mismatch_and_persists_items(self, client, auth):
+        # Exercise persist through the endpoint so the app's own connection does the
+        # writes (a second write connection would contend on the WAL lock). typed 20
+        # vs parsed 25 → mismatch flagged; the line item is persisted.
+        payload = {
+            'volunteer_id': None, 'amount': 20.00, 'store': 'Aldi',
+            'parsed': {'store': 'Aldi', 'total': 25.00, 'confidence': 0.8,
+                       'line_items': [{'name': 'Eggs', 'qty': 1, 'unit_price': 25, 'line_total': 25}]},
+        }
+        res = client.post('/api/receipts', headers=auth, json=payload)
+        assert res.status_code == 201
+        rid = res.get_json()['id']
+        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json() if r['id'] == rid)
+        assert rec['parsed_total'] == 25.00
+        assert rec['parse_status'] == 'parsed'
+        assert rec['amount_mismatch'] == 1
+        db = _server.make_conn()   # READ-ONLY use — no write lock taken
+        try:
+            n = db.execute("SELECT COUNT(*) FROM receipt_items WHERE receipt_id=?", (rid,)).fetchone()[0]
+        finally:
+            db.close()
+        assert n == 1
+
+    def test_create_receipt_with_matching_parsed_has_no_mismatch(self, client, auth):
+        payload = {
+            'volunteer_id': None, 'amount': 25.00, 'store': 'Aldi',
+            'parsed': {'store': 'Aldi', 'total': 25.00, 'confidence': 0.9, 'line_items': []},
+        }
+        res = client.post('/api/receipts', headers=auth, json=payload)
+        rid = res.get_json()['id']
+        rec = next(r for r in client.get('/api/receipts', headers=auth).get_json() if r['id'] == rid)
+        assert rec['amount_mismatch'] == 0  # typed 25 == parsed 25
