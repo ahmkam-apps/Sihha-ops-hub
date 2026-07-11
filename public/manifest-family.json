@@ -2,7 +2,7 @@
   "name": "SIHAA Food Request",
   "short_name": "SIHAA",
   "description": "Request food assistance from SIHAA Food Charity, Rochester NY",
-  "start_url": "/order",
+  "start_url": "/family",
   "display": "standalone",
   "background_color": "#111111",
   "theme_color": "#111111",
