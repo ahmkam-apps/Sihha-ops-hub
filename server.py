@@ -3332,6 +3332,54 @@ def list_receipts():                                    # authenticated role
     q += " ORDER BY r.created_at DESC"
     return jsonify([dict(r) for r in db.execute(q, params).fetchall()])
 
+@app.route('/api/receipts/parse-diagnostics', methods=['GET'])
+@require_auth(roles=['admin'])
+def receipt_parse_diagnostics():
+    """Tell the admin exactly why receipt auto-read is or isn't working. Does a live
+    text-only call to the Anthropic API so key/model problems surface with the real
+    error (e.g. 401 bad key, 404 model-not-found)."""
+    info = {
+        'enable_flag':  ENABLE_RECEIPT_PARSING,
+        'has_api_key':  bool(ANTHROPIC_API_KEY),
+        'active':       RECEIPT_PARSING_ACTIVE,
+        'model':        RECEIPT_PARSE_MODEL,
+        'heic_support': False,
+    }
+    try:
+        from PIL import Image  # noqa
+        import pillow_heif      # noqa
+        info['heic_support'] = True
+    except Exception:
+        info['heic_support'] = False
+    if not RECEIPT_PARSING_ACTIVE:
+        missing = []
+        if not ENABLE_RECEIPT_PARSING:
+            missing.append('ENABLE_RECEIPT_PARSING=1')
+        if not ANTHROPIC_API_KEY:
+            missing.append('ANTHROPIC_API_KEY')
+        info['test'] = {'ok': False, 'reason': 'Auto-read is OFF. Set ' + ' and '.join(missing) +
+                        ' in Railway, then redeploy.'}
+        return jsonify(info)
+    import urllib.request as _req, urllib.error as _uerr, json as _json
+    body = {'model': RECEIPT_PARSE_MODEL, 'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Reply with just: OK'}]}
+    req = _req.Request('https://api.anthropic.com/v1/messages',
+        data=_json.dumps(body).encode(), method='POST',
+        headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01',
+                 'content-type': 'application/json'})
+    try:
+        with _req.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read())
+        txt = ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+        info['test'] = {'ok': True, 'model_replied': txt[:50]}
+    except _uerr.HTTPError as e:
+        info['test'] = {'ok': False, 'status': e.code,
+                        'error': e.read().decode('utf-8', 'replace')[:300]}
+    except Exception as e:
+        info['test'] = {'ok': False, 'error': str(e)[:300]}
+    return jsonify(info)
+
+
 @app.route('/api/receipts', methods=['POST'])
 @require_auth(roles=['admin', 'volunteer'])
 def create_receipt():

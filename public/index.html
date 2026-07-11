@@ -2940,7 +2940,8 @@ async function renderReceipts(filter) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-green" onclick="openAddReceiptDrawer()">⬆ Upload Receipt(s)</button>`;
+    `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px">⚙ Auto-read status</button>
+     <button class="btn btn-green" onclick="openAddReceiptDrawer()">⬆ Upload Receipt(s)</button>`;
 
   let url = '/receipts';
   if (filter !== 'all') url += '?status=' + filter;
@@ -2991,6 +2992,28 @@ async function renderReceipts(filter) {
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+  }
+}
+
+// Diagnose why receipt auto-read is/ isn't working — shows the real reason.
+async function checkAutoRead() {
+  try {
+    const d = await GET('/receipts/parse-diagnostics');
+    let msg;
+    if (d.test && d.test.ok) {
+      msg = `✅ Auto-read is WORKING.\n\nModel: ${d.model}\nHEIC (iPhone) support: ${d.heic_support ? 'yes' : 'NO'}\n\nUpload a receipt and the fields will fill in automatically.`;
+    } else if (!d.active) {
+      msg = `⚠ Auto-read is OFF.\n\n${d.test ? d.test.reason : ''}\n\nFlag set: ${d.enable_flag}\nAPI key present: ${d.has_api_key}`;
+    } else {
+      msg = `❌ Auto-read is ON but the test call FAILED.\n\n` +
+            `Model: ${d.model}\n` +
+            (d.test.status ? `HTTP ${d.test.status}\n` : '') +
+            `Error: ${d.test.error || 'unknown'}\n\n` +
+            `HEIC (iPhone) support: ${d.heic_support ? 'yes' : 'NO — HEIC photos will not parse'}`;
+    }
+    alert(msg);
+  } catch (e) {
+    alert('Could not run the auto-read check: ' + e.message);
   }
 }
 
