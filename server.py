@@ -7030,8 +7030,10 @@ def portal_get_families(cycle_id):
     result = []
     for fam in families:
         fam_dict = dict(fam)
-        # Ensure open slots exist (idempotent — creates only if missing)
-        _ensure_volunteer_slots(db, cycle_id, fam['id'])
+        # Slots are pre-created on the write paths (cycle creation → _pre_create_slots_for_cycle,
+        # family activation → _pre_create_slots_for_family, order confirmation → _ensure_volunteer_slots),
+        # so this read endpoint no longer creates/commits them (audit P1.9: a GET must not mutate,
+        # and the SELECT-then-INSERT here was the duplicate-slot race source).
         slots = db.execute(
             '''SELECT vs.id, vs.task_type, vs.claimed_by, vs.status,
                       v.name as claimed_by_name
@@ -7064,7 +7066,7 @@ def portal_get_families(cycle_id):
             fam_dict['city']    = None
         result.append(fam_dict)
 
-    db.commit()  # Persist any slots created by _ensure_volunteer_slots above
+    # No db.commit() — this endpoint is now read-only (slots pre-created on write paths).
 
     return jsonify({
         'cycle':      dict(cycle),
