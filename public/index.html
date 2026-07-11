@@ -3000,8 +3000,12 @@ async function checkAutoRead() {
   try {
     const d = await GET('/receipts/parse-diagnostics');
     let msg;
-    if (d.test && d.test.ok) {
-      msg = `✅ Auto-read is WORKING.\n\nModel: ${d.model}\nHEIC (iPhone) support: ${d.heic_support ? 'yes' : 'NO'}\n\nUpload a receipt and the fields will fill in automatically.`;
+    if (d.test && d.test.ok && d.image_test && d.image_test.ok) {
+      msg = `✅ Auto-read is WORKING (text + image).\n\nModel: ${d.model}\nHEIC (iPhone) support: ${d.heic_support ? 'yes' : 'NO'}\n\nUpload a NEW receipt and the fields fill in automatically. For receipts uploaded earlier (before this worked), open one and click "Re-read photo".`;
+    } else if (d.test && d.test.ok && d.image_test && !d.image_test.ok) {
+      msg = `⚠ Text works but IMAGE reading FAILED — this is why receipts don't parse.\n\nModel: ${d.model}\n` +
+            (d.image_test.status ? `HTTP ${d.image_test.status}\n` : '') +
+            `Error: ${d.image_test.error || 'unknown'}\n\nThis usually means the model doesn't accept images. Tell Claude and it'll switch the model.`;
     } else if (!d.active) {
       msg = `⚠ Auto-read is OFF.\n\n${d.test ? d.test.reason : ''}\n\nFlag set: ${d.enable_flag}\nAPI key present: ${d.has_api_key}`;
     } else {
@@ -3165,6 +3169,7 @@ async function openReceiptDetail(rid) {
       <div id="rd-err" style="color:#c00;font-size:13px;margin-top:6px"></div>`;
     const footer = `
       <button class="btn btn-green" onclick="saveReceiptDetail('${rid}')">Save</button>
+      ${rec.file_url ? `<button class="btn btn-outline" onclick="reparseReceipt('${rid}')">🔄 Re-read photo</button>` : ''}
       ${rec.status==='pending' ? `<button class="btn" style="background:#1a8754;color:#fff" onclick="setReceiptStatus('${rid}','approved')">✓ Approve</button>
         <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="setReceiptStatus('${rid}','rejected')">✗ Reject</button>` : ''}
       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`;
@@ -3190,6 +3195,20 @@ async function saveReceiptDetail(rid) {
     closeDrawer();
     renderReceipts(STATE.filter);
   } catch(e) { document.getElementById('rd-err').textContent = e.message; }
+}
+
+// Re-run vision parsing on an already-uploaded receipt photo (e.g. ones uploaded
+// before the API key worked), then reopen the detail with the filled-in data.
+async function reparseReceipt(rid) {
+  const err = document.getElementById('rd-err');
+  if (err) err.textContent = 'Reading photo…';
+  try {
+    await POST('/receipts/' + rid + '/reparse', {});
+    await openReceiptDetail(rid);   // reopen with fresh parsed data
+  } catch(e) {
+    if (err) err.textContent = e.message;
+    else alert(e.message);
+  }
 }
 
 async function setReceiptStatus(rid, status) {

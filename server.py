@@ -3379,6 +3379,29 @@ def receipt_parse_diagnostics():
                         'error': e.read().decode('utf-8', 'replace')[:300]}
     except Exception as e:
         info['test'] = {'ok': False, 'error': str(e)[:300]}
+
+    # Image/vision test — this is what actually matters for receipts. Text can pass
+    # while image input fails (e.g. a model without vision), so test a real image.
+    try:
+        from PIL import Image as _Img
+        import io as _io, base64 as _b64
+        buf = _io.BytesIO(); _Img.new('RGB', (64, 64), (255, 255, 255)).save(buf, format='JPEG')
+        ib64 = _b64.b64encode(buf.getvalue()).decode('ascii')
+        ibody = {'model': RECEIPT_PARSE_MODEL, 'max_tokens': 16, 'messages': [{'role': 'user', 'content': [
+            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': ib64}},
+            {'type': 'text', 'text': 'Reply with just: OK'}]}]}
+        ireq = _req.Request('https://api.anthropic.com/v1/messages',
+            data=_json.dumps(ibody).encode(), method='POST',
+            headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01',
+                     'content-type': 'application/json'})
+        with _req.urlopen(ireq, timeout=30) as r:
+            _json.loads(r.read())
+        info['image_test'] = {'ok': True}
+    except _uerr.HTTPError as e:
+        info['image_test'] = {'ok': False, 'status': e.code,
+                              'error': e.read().decode('utf-8', 'replace')[:300]}
+    except Exception as e:
+        info['image_test'] = {'ok': False, 'error': str(e)[:300]}
     return jsonify(info)
 
 
@@ -3513,6 +3536,48 @@ def update_receipt(rid):
             )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()))
+
+
+@app.route('/api/receipts/<rid>/reparse', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def reparse_receipt(rid):
+    """Re-run vision parsing on an existing receipt's stored photo. Fills empty
+    store/date/amount from the parse. Used for receipts uploaded before the API key
+    was working, or to retry a failed read."""
+    if not RECEIPT_PARSING_ACTIVE:
+        return jsonify({'error': 'Auto-read is off — no valid ANTHROPIC_API_KEY.'}), 400
+    db = get_db()
+    row = db.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if not row['file_url']:
+        return jsonify({'error': 'This receipt has no photo to read.'}), 400
+    fname = row['file_url'].rsplit('/', 1)[-1]
+    path = os.path.join(UPLOAD_FOLDER, fname)
+    if not os.path.exists(path):
+        return jsonify({'error': 'Photo file not found on the server.'}), 404
+    with open(path, 'rb') as f:
+        raw = f.read()
+    parsed = _parse_receipt_image(raw, fname)
+    if not parsed:
+        db.execute("UPDATE receipts SET parse_status='failed', parsed_at=? WHERE id=?", (now(), rid))
+        db.commit()
+        return jsonify({'error': 'Could not read this photo (unclear image or unsupported format).'}), 422
+    _persist_receipt_parse(db, rid, parsed, row['amount'])
+    # Fill any empty header fields from the parse (don't clobber values already set).
+    sets, vals = [], []
+    if not row['store'] and parsed.get('store'):
+        sets.append('store=?'); vals.append(parsed['store'])
+    if not row['purchase_date'] and parsed.get('purchase_date'):
+        sets.append('purchase_date=?'); vals.append(parsed['purchase_date'])
+    if row['amount'] is None and parsed.get('total') is not None:
+        sets.append('amount=?'); vals.append(parsed['total'])
+    if sets:
+        sets.append('updated_at=?'); vals.append(now()); vals.append(rid)
+        db.execute(f"UPDATE receipts SET {', '.join(sets)} WHERE id=?", vals)
+    db.commit()
+    return jsonify({'ok': True, 'parsed': parsed})
+
 
 @app.route('/api/receipts/upload', methods=['POST'])
 @require_auth(roles=['admin', 'volunteer'])
