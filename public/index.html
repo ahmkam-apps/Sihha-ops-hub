@@ -3089,7 +3089,11 @@ async function quickUploadReceipts(files) {
   // Single upload → drop straight into review-and-approve with the data populated.
   if (list.length === 1 && firstId) {
     if (STATE.page !== 'receipts') nav('receipts');
-    openReceiptDetail(firstId);
+    await openReceiptDetail(firstId);
+    if (notRead && lastReason) {
+      const err = document.getElementById('rd-err');
+      if (err) err.textContent = 'Auto-read didn\'t fill this in — reason: ' + lastReason;
+    }
     return;
   }
   if (notRead && lastReason) {
