@@ -3611,6 +3611,34 @@ def delete_all_receipts():
     return jsonify({'ok': True, 'deleted': n})
 
 
+@app.route('/api/receipts/bulk-approve', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def bulk_approve_receipts():
+    """Approve several pending receipts at once — creates a payable for each. Skips
+    any id that isn't currently pending. Returns how many were approved."""
+    ids = (request.json or {}).get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'No receipts selected'}), 400
+    db = get_db()
+    approved = 0
+    for rid in ids:
+        row = db.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()
+        if not row or row['status'] != 'pending':
+            continue
+        db.execute("UPDATE receipts SET status='approved', updated_at=? WHERE id=?", (now(), rid))
+        if not db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone():
+            db.execute(
+                '''INSERT INTO reimbursements
+                   (id,receipt_id,volunteer_id,amount,status,approved_by,created_at)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (str(uuid.uuid4()), rid, row['volunteer_id'], row['amount'],
+                 'pending', g.user['user_id'], now())
+            )
+        approved += 1
+    db.commit()
+    return jsonify({'ok': True, 'approved': approved})
+
+
 @app.route('/api/receipts/<rid>', methods=['DELETE'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def delete_receipt(rid):

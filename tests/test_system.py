@@ -2323,6 +2323,19 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_bulk_approve_only_pending(self, client, auth):
+        ids = [client.post('/api/receipts', headers=auth,
+                           json={'amount': i + 5, 'store': f'Bulk{i}'}).get_json()['id']
+               for i in range(3)]
+        r = client.post('/api/receipts/bulk-approve', headers=auth, json={'ids': ids[:2]})
+        assert r.status_code == 200 and r.get_json()['approved'] == 2
+        recs = {x['id']: x['status'] for x in client.get('/api/receipts', headers=auth).get_json()}
+        assert recs[ids[0]] == 'approved' and recs[ids[1]] == 'approved' and recs[ids[2]] == 'pending'
+        # payables created for the two approved
+        paid_ids = {r['receipt_id'] for r in client.get('/api/reimbursements', headers=auth).get_json()}
+        assert ids[0] in paid_ids and ids[1] in paid_ids and ids[2] not in paid_ids
+        assert client.post('/api/receipts/bulk-approve', headers=auth, json={'ids': []}).status_code == 400
+
     def test_unapprove_removes_unpaid_payable(self, client, auth):
         rid = client.post('/api/receipts', headers=auth, json={'amount': 10, 'store': 'X'}).get_json()['id']
         client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})

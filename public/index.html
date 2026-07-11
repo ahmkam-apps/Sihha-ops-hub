@@ -2941,8 +2941,9 @@ async function renderReceipts(filter) {
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px">⚙ Auto-read status</button>
+     <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:#1a8754;border-color:#1a8754">✓ Approve selected</button>
      <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:#c00;border-color:#c00">🗑 Clear all</button>
-     <button class="btn btn-green" onclick="openAddReceiptDrawer()">⬆ Upload Receipt(s)</button>`;
+     <button class="btn btn-green" onclick="openAddReceiptDrawer()" title="Pick one or more files — hold ⌘/Ctrl or drag to select several">⬆ Upload Receipt(s)</button>`;
 
   let url = '/receipts';
   if (filter !== 'all') url += '?status=' + filter;
@@ -2963,12 +2964,15 @@ async function renderReceipts(filter) {
         </div>
         <table>
           <thead><tr>
+            <th style="width:30px;text-align:center"><input type="checkbox" onclick="toggleAllReceipts(this)" title="Select all pending"></th>
             <th>Volunteer</th><th>Store</th><th>Date</th><th>Amount</th>
             <th>Items</th><th>Photo</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr id="rrow-${r.id}" style="cursor:pointer" onclick="openReceiptDetail('${r.id}')">
+                <td style="text-align:center" onclick="event.stopPropagation()">${
+                  r.status==='pending' ? `<input type="checkbox" class="rcpt-check" value="${r.id}">` : ''}</td>
                 <td>${r.volunteer_name
                     ? `<strong>${esc(r.volunteer_name)}</strong>`
                     : `<span style="color:#b06a00;font-weight:600">⚠ Assign</span>`}</td>
@@ -2987,7 +2991,7 @@ async function renderReceipts(filter) {
                   <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openReceiptDetail('${r.id}')">✎ Edit</button>
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="8">No receipts found</td></tr>'}
+              '<tr class="empty-row"><td colspan="9">No receipts found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -3250,6 +3254,21 @@ async function deleteReceipt(rid) {
     const err = document.getElementById('rd-err');
     if (err) err.textContent = e.message; else alert(e.message);
   }
+}
+
+function toggleAllReceipts(cb) {
+  document.querySelectorAll('.rcpt-check').forEach(x => { x.checked = cb.checked; });
+}
+
+async function approveSelected() {
+  const ids = Array.from(document.querySelectorAll('.rcpt-check:checked')).map(x => x.value);
+  if (!ids.length) { alert('Select one or more pending receipts first (checkboxes on the left).'); return; }
+  if (!confirm(`Approve ${ids.length} receipt(s)? This creates a payable for each and marks them ready to pay.`)) return;
+  try {
+    const r = await POST('/receipts/bulk-approve', { ids });
+    alert(`Approved ${r.approved} receipt(s).`);
+    renderReceipts(STATE.filter);
+  } catch(e) { alert(e.message); }
 }
 
 async function deleteAllReceipts() {
