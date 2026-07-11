@@ -3318,6 +3318,7 @@ def list_receipts():                                    # authenticated role
     status = request.args.get('status')
     q = '''SELECT r.*, f.name as family_name, v.name as volunteer_name,
               dc.title as cycle_title,
+              (SELECT COUNT(*) FROM receipt_items ri WHERE ri.receipt_id = r.id) as item_count,
               COALESCE(r.cycle_id, vs.cycle_id) as resolved_cycle_id
            FROM receipts r
            LEFT JOIN families f ON r.family_id = f.id
@@ -3377,6 +3378,32 @@ def create_receipt():
             log.warning(f'Treasurer notification failed: {e}')
     return jsonify({'id': rid}), 201
 
+@app.route('/api/receipts/<rid>', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def get_receipt(rid):
+    """Full receipt detail incl. line items — powers the editable detail view."""
+    db = get_db()
+    r = db.execute(
+        '''SELECT r.*, v.name as volunteer_name, f.name as family_name,
+                  dc.title as cycle_title, COALESCE(r.cycle_id, vs.cycle_id) as resolved_cycle_id
+           FROM receipts r
+           LEFT JOIN volunteers v ON r.volunteer_id = v.id
+           LEFT JOIN families f ON r.family_id = f.id
+           LEFT JOIN volunteer_slots vs ON r.slot_id = vs.id
+           LEFT JOIN delivery_cycles dc ON COALESCE(r.cycle_id, vs.cycle_id) = dc.id
+           WHERE r.id=?''', (rid,)
+    ).fetchone()
+    if not r:
+        return jsonify({'error': 'Not found'}), 404
+    items = db.execute(
+        "SELECT id, line_no, name, qty, unit_price, line_total, category "
+        "FROM receipt_items WHERE receipt_id=? ORDER BY line_no", (rid,)
+    ).fetchall()
+    out = dict(r)
+    out['items'] = [dict(i) for i in items]
+    return jsonify(out)
+
+
 @app.route('/api/receipts/<rid>', methods=['PUT'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_receipt(rid):
@@ -3385,20 +3412,55 @@ def update_receipt(rid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = request.json or {}
+
+    # Editable header fields — assign a volunteer, fix store/date/amount/cycle, etc.
+    # Only overwrite a field when the caller actually sent it (partial update).
+    def pick(key):
+        return d[key] if key in d else row[key]
+    new_amount = pick('amount')
+    if new_amount is not None:
+        try:
+            if float(new_amount) < 0:
+                return jsonify({'error': 'Amount cannot be negative'}), 422
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid amount'}), 422
+
+    # Recompute the parsed-vs-confirmed mismatch flag if we have a parsed total.
+    mismatch = row['amount_mismatch'] if 'amount_mismatch' in row.keys() else 0
+    parsed_total = row['parsed_total'] if 'parsed_total' in row.keys() else None
+    if parsed_total is not None and new_amount is not None:
+        try:
+            mismatch = 1 if abs(float(new_amount) - float(parsed_total)) > 0.02 else 0
+        except (TypeError, ValueError):
+            pass
+
     db.execute(
-        "UPDATE receipts SET status=?,notes=?,updated_at=? WHERE id=?",
-        (d.get('status', row['status']), d.get('notes', row['notes']), now(), rid)
+        "UPDATE receipts SET volunteer_id=?, family_id=?, cycle_id=?, store=?, "
+        "purchase_date=?, amount=?, status=?, notes=?, amount_mismatch=?, updated_at=? WHERE id=?",
+        (pick('volunteer_id'), pick('family_id'), pick('cycle_id'), pick('store'),
+         pick('purchase_date'), new_amount, pick('status'), pick('notes'),
+         mismatch, now(), rid)
     )
-    # Auto-create reimbursement when receipt is approved
-    if d.get('status') == 'approved' and row['status'] != 'approved':
-        reimb_id = str(uuid.uuid4())
+
+    # Keep a pending reimbursement in sync with an edited amount/volunteer.
+    if 'amount' in d or 'volunteer_id' in d:
         db.execute(
-            '''INSERT INTO reimbursements
-               (id,receipt_id,volunteer_id,amount,status,approved_by,created_at)
-               VALUES (?,?,?,?,?,?,?)''',
-            (reimb_id, rid, row['volunteer_id'], row['amount'],
-             'pending', g.user['user_id'], now())
+            "UPDATE reimbursements SET amount=?, volunteer_id=?, updated_at=? "
+            "WHERE receipt_id=? AND status='pending'",
+            (new_amount, pick('volunteer_id'), now(), rid)
         )
+
+    # Auto-create reimbursement when receipt is approved (first time).
+    if d.get('status') == 'approved' and row['status'] != 'approved':
+        existing = db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone()
+        if not existing:
+            db.execute(
+                '''INSERT INTO reimbursements
+                   (id,receipt_id,volunteer_id,amount,status,approved_by,created_at)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (str(uuid.uuid4()), rid, pick('volunteer_id'), new_amount,
+                 'pending', g.user['user_id'], now())
+            )
     db.commit()
     return jsonify(dict(db.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()))
 
@@ -6615,20 +6677,26 @@ def edit_food_order_items():
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
-    """Serve uploaded receipt photos. Requires any valid session (admin, volunteer, or family)."""
+    """Serve uploaded receipt photos. Requires any valid session (admin/staff, family,
+    or volunteer — all live in `sessions` now). The token comes as a Bearer header
+    (the SPA fetches the image with the header, then shows it from a blob)."""
     auth = request.headers.get('Authorization', '')
     token = auth[7:] if auth.startswith('Bearer ') else None
     if not token:
         return jsonify({'error': 'Unauthorized'}), 401
     db = get_db()
-    # Accept admin/staff sessions, family sessions, or portal sessions
+    # sessions PK is `token` (there is no `id` column) — select 1, not id.
     session = db.execute(
-        "SELECT id FROM sessions WHERE token=? AND expires_at > ?", (token, now())
+        "SELECT 1 FROM sessions WHERE token=? AND expires_at > ?", (token, now())
     ).fetchone()
     if not session:
-        session = db.execute(
-            "SELECT id FROM portal_sessions WHERE token=? AND expires_at > ?", (token, now())
-        ).fetchone()
+        # Legacy portal_sessions fallback (table may not exist on newer DBs)
+        try:
+            session = db.execute(
+                "SELECT 1 FROM portal_sessions WHERE token=? AND expires_at > ?", (token, now())
+            ).fetchone()
+        except Exception:
+            session = None
     if not session:
         return jsonify({'error': 'Unauthorized'}), 401
     return send_from_directory(UPLOAD_FOLDER, filename)

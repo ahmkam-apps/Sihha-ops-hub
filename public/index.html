@@ -2961,31 +2961,31 @@ async function renderReceipts(filter) {
         </div>
         <table>
           <thead><tr>
-            <th>Volunteer</th><th>Family</th><th>Cycle</th><th>Store</th>
-            <th>Date</th><th>Amount</th><th>Photo</th><th>Status</th><th></th>
+            <th>Volunteer</th><th>Store</th><th>Date</th><th>Amount</th>
+            <th>Items</th><th>Photo</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `
-              <tr id="rrow-${r.id}">
-                <td><strong>${esc(r.volunteer_name||'—')}</strong></td>
-                <td>${esc(r.family_name||'—')}</td>
-                <td style="font-size:12px;color:var(--gray-4)">${esc(r.cycle_title||'—')}</td>
+              <tr id="rrow-${r.id}" style="cursor:pointer" onclick="openReceiptDetail('${r.id}')">
+                <td>${r.volunteer_name
+                    ? `<strong>${esc(r.volunteer_name)}</strong>`
+                    : `<span style="color:#b06a00;font-weight:600">⚠ Assign</span>`}</td>
                 <td>${esc(r.store||'—')}</td>
                 <td style="white-space:nowrap">${fmtDate(r.purchase_date)}</td>
-                <td><strong>${fmtMoney(r.amount)}</strong></td>
+                <td><strong>${fmtMoney(r.amount)}</strong>${
+                    r.amount_mismatch
+                    ? ` <span title="Typed amount differs from the amount read off the photo" style="font-size:11px;color:#c0392b;white-space:nowrap">≠ ${fmtMoney(r.parsed_total)}</span>`
+                    : ''}</td>
+                <td style="text-align:center;color:var(--gray-4)">${r.item_count || 0}</td>
                 <td>${r.file_url
-                  ? `<a href="${esc(r.file_url)}" target="_blank" style="color:var(--green);font-size:13px">📷 View</a>`
+                  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();viewReceiptPhoto('${r.file_url}')" style="color:var(--green);font-size:13px">📷 View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td>${badge(r.status)}</td>
-                <td style="white-space:nowrap" id="receipt-actions-${r.id}">
-                  ${r.status==='pending' ? `
-                    <button class="btn btn-sm" onclick="approveReceipt('${r.id}')">✓ Approve</button>
-                    <button class="btn btn-outline btn-sm" onclick="rejectReceipt('${r.id}')" style="margin-left:4px;color:#c00;border-color:#c00">✗ Reject</button>
-                  ` : r.status==='approved' ? `<span style="color:#1a8754;font-size:12px">✓ Approved</span>`
-                    : r.status==='rejected' ? `<span style="color:#c00;font-size:12px">✗ Rejected</span>` : ''}
+                <td style="white-space:nowrap">
+                  <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openReceiptDetail('${r.id}')">✎ Edit</button>
                 </td>
               </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="9">No receipts found</td></tr>'}
+              '<tr class="empty-row"><td colspan="8">No receipts found</td></tr>'}
           </tbody>
         </table>
       </div>`;
@@ -3058,6 +3058,123 @@ async function quickUploadReceipts(files) {
   );
   setTimeout(() => el.remove(), 4000);
   if (STATE.page === 'receipts') renderReceipts(STATE.filter);
+}
+
+// Receipt photos are auth-protected, so a plain <a href> navigation (no Bearer header)
+// gets 401. Fetch the file WITH the token, then show it in a modal from a blob URL.
+async function viewReceiptPhoto(url) {
+  try {
+    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + STATE.token } });
+    if (!res.ok) throw new Error('Could not load photo (' + res.status + ')');
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const isPdf = blob.type === 'application/pdf' || url.toLowerCase().endsWith('.pdf');
+    const body = isPdf
+      ? `<iframe src="${objUrl}" style="width:100%;height:72vh;border:none"></iframe>`
+      : `<img src="${objUrl}" alt="Receipt" style="max-width:100%;border-radius:8px;display:block;margin:0 auto" />`;
+    openDrawer('Receipt Photo', body,
+      `<a class="btn btn-outline" href="${objUrl}" download="receipt">Download</a>
+       <button class="btn" onclick="closeDrawer()">Close</button>`);
+    // free the blob when the drawer is dismissed
+    setTimeout(() => { const o = document.getElementById('overlay');
+      if (o) o.addEventListener('click', () => URL.revokeObjectURL(objUrl), { once: true }); }, 0);
+  } catch (e) {
+    alert('Could not open the receipt photo: ' + e.message);
+  }
+}
+
+// Editable receipt detail: assign a volunteer, fix store/date/amount, review line items.
+async function openReceiptDetail(rid) {
+  try {
+    const [rec, vols, cycles] = await Promise.all([
+      GET('/receipts/' + rid),
+      GET('/volunteers'),
+      GET('/delivery-cycles')
+    ]);
+    const activeVols = vols.filter(v => v.active);
+    const volOpts = ['<option value="">— unassigned —</option>'].concat(
+      activeVols.map(v => `<option value="${v.id}" ${v.id===rec.volunteer_id?'selected':''}>${esc(v.name)}</option>`)
+    ).join('');
+    const cycleOpts = ['<option value="">— none —</option>'].concat(
+      cycles.map(c => `<option value="${c.id}" ${c.id===rec.cycle_id?'selected':''}>${esc(c.title)}</option>`)
+    ).join('');
+    const items = rec.items || [];
+    const itemsTable = items.length ? `
+      <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px">
+        <thead><tr style="color:var(--gray-4);text-align:left">
+          <th style="padding:3px 4px">Item</th><th style="padding:3px 4px;text-align:right">Qty</th>
+          <th style="padding:3px 4px;text-align:right">Unit</th><th style="padding:3px 4px;text-align:right">Line</th></tr></thead>
+        <tbody>${items.map(it => `
+          <tr style="border-top:1px solid #eee">
+            <td style="padding:3px 4px">${esc(it.name||'—')}</td>
+            <td style="padding:3px 4px;text-align:right">${it.qty!=null?esc(String(it.qty)):''}</td>
+            <td style="padding:3px 4px;text-align:right">${it.unit_price!=null?fmtMoney(it.unit_price):''}</td>
+            <td style="padding:3px 4px;text-align:right">${it.line_total!=null?fmtMoney(it.line_total):''}</td>
+          </tr>`).join('')}</tbody>
+      </table>` : '<div style="font-size:12px;color:var(--gray-4);margin-top:4px">No line items.</div>';
+    const mismatchNote = rec.amount_mismatch ? `
+      <div style="background:#fdecea;border:1px solid #f5b7b1;border-radius:6px;padding:8px 10px;font-size:12px;color:#922;margin-bottom:10px">
+        ⚠ Amount doesn't match the total read from the photo (${fmtMoney(rec.parsed_total)}). Verify before approving.
+      </div>` : '';
+    const parsedNote = rec.parse_status==='parsed'
+      ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px">Auto-read${rec.parse_confidence!=null?` · ${Math.round(rec.parse_confidence*100)}% confidence`:''}</div>` : '';
+    const body = `
+      ${mismatchNote}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>${badge(rec.status)}</div>
+        ${rec.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rec.file_url}')" style="color:var(--green);font-size:13px">📷 View photo</a>` : ''}
+      </div>
+      <div class="form-group"><label>Volunteer</label>
+        <select id="rd-volunteer" class="form-control">${volOpts}</select></div>
+      <div class="form-group"><label>Delivery Cycle</label>
+        <select id="rd-cycle" class="form-control">${cycleOpts}</select></div>
+      <div class="form-group"><label>Store</label>
+        <input type="text" id="rd-store" class="form-control" value="${esc(rec.store||'')}"></div>
+      <div class="form-group"><label>Purchase Date</label>
+        <input type="date" id="rd-date" class="form-control" value="${rec.purchase_date||''}"></div>
+      <div class="form-group"><label>Amount ($)</label>
+        <input type="number" id="rd-amount" class="form-control" step="0.01" min="0" value="${rec.amount!=null?rec.amount:''}">
+        ${parsedNote}</div>
+      <div class="form-group"><label>Notes</label>
+        <textarea id="rd-notes" class="form-control" rows="2">${esc(rec.notes||'')}</textarea></div>
+      <div style="font-weight:700;font-size:12px;color:#1a5e34;margin-top:6px">Line items</div>
+      ${itemsTable}
+      <div id="rd-err" style="color:#c00;font-size:13px;margin-top:6px"></div>`;
+    const footer = `
+      <button class="btn btn-green" onclick="saveReceiptDetail('${rid}')">Save</button>
+      ${rec.status==='pending' ? `<button class="btn" style="background:#1a8754;color:#fff" onclick="setReceiptStatus('${rid}','approved')">✓ Approve</button>
+        <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="setReceiptStatus('${rid}','rejected')">✗ Reject</button>` : ''}
+      <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`;
+    openDrawer('Receipt', body, footer);
+  } catch(e) { alert('Could not load receipt: ' + e.message); }
+}
+
+function _collectReceiptEdits() {
+  const a = document.getElementById('rd-amount').value;
+  return {
+    volunteer_id:  document.getElementById('rd-volunteer').value || null,
+    cycle_id:      document.getElementById('rd-cycle').value || null,
+    store:         document.getElementById('rd-store').value.trim() || null,
+    purchase_date: document.getElementById('rd-date').value || null,
+    amount:        a !== '' ? parseFloat(a) : null,
+    notes:         document.getElementById('rd-notes').value.trim() || null
+  };
+}
+
+async function saveReceiptDetail(rid) {
+  try {
+    await PUT('/receipts/' + rid, _collectReceiptEdits());
+    closeDrawer();
+    renderReceipts(STATE.filter);
+  } catch(e) { document.getElementById('rd-err').textContent = e.message; }
+}
+
+async function setReceiptStatus(rid, status) {
+  try {
+    await PUT('/receipts/' + rid, Object.assign(_collectReceiptEdits(), { status }));
+    closeDrawer();
+    renderReceipts(STATE.filter);
+  } catch(e) { document.getElementById('rd-err').textContent = e.message; }
 }
 
 async function approveReceipt(id) {
@@ -3188,7 +3305,7 @@ async function renderPayments(filter) {
                 <td style="font-size:11px;white-space:nowrap">${fmtDate(r.purchase_date)}</td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>${r.receipt_photo
-                  ? `<a href="${esc(r.receipt_photo)}" target="_blank" style="font-size:12px;color:var(--green);white-space:nowrap">📷 View</a>`
+                  ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${r.receipt_photo}')" style="font-size:12px;color:var(--green);white-space:nowrap">📷 View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${esc(r.payment_ref)}</span>` : ''}</td>
                 <td>${badge(r.status)}</td>

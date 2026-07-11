@@ -2275,3 +2275,41 @@ class TestReceiptParsing:
         rid = res.get_json()['id']
         rec = next(r for r in client.get('/api/receipts', headers=auth).get_json() if r['id'] == rid)
         assert rec['amount_mismatch'] == 0  # typed 25 == parsed 25
+
+    def test_uploads_route_requires_token(self, client):
+        # Photo files are auth-protected; no Bearer header → 401.
+        assert client.get('/uploads/whatever.jpg').status_code == 401
+
+    def test_uploads_route_with_token_does_not_500(self, client, auth):
+        # Regression: serve_upload used to `SELECT id FROM sessions` but sessions has
+        # no id column, so a *valid* token 500'd. A valid token must authenticate;
+        # a missing file then yields 404 (never 500).
+        assert client.get('/uploads/nonexistent-file.jpg', headers=auth).status_code == 404
+
+    def test_detail_endpoint_returns_items(self, client, auth):
+        res = client.post('/api/receipts', headers=auth, json={
+            'amount': 12.00, 'store': 'Costco',
+            'parsed': {'store': 'Costco', 'total': 12.00, 'confidence': 0.9,
+                       'line_items': [{'name': 'Milk', 'qty': 1, 'unit_price': 12, 'line_total': 12}]},
+        })
+        rid = res.get_json()['id']
+        det = client.get('/api/receipts/' + rid, headers=auth).get_json()
+        assert 'items' in det and len(det['items']) == 1
+        assert det['items'][0]['name'] == 'Milk'
+
+    def test_edit_assigns_volunteer_and_recomputes_mismatch(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Assign Me', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        # typed 30 vs parsed 34 → mismatch=1
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': None, 'amount': 30, 'store': 'X',
+            'parsed': {'total': 34.0, 'confidence': 0.9, 'line_items': []},
+        }).get_json()['id']
+        # assign volunteer + fix amount to 34 → mismatch clears
+        r = client.put('/api/receipts/' + rid, headers=auth, json={'volunteer_id': vid, 'amount': 34})
+        assert r.status_code == 200
+        det = client.get('/api/receipts/' + rid, headers=auth).get_json()
+        assert det['volunteer_id'] == vid
+        assert det['amount'] == 34.0
+        assert det['amount_mismatch'] == 0
