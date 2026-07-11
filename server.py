@@ -3357,22 +3357,24 @@ def create_receipt():
         except Exception as _e:
             log.warning(f'create_receipt: parse persist failed for {rid}: {_e}')
     db.commit()
-    # Notify treasurers of new receipt submission
-    try:
-        vol = db.execute("SELECT name FROM volunteers WHERE id=?", (data.get('volunteer_id'),)).fetchone()
-        vol_name = vol['name'] if vol else 'A volunteer'
-        amount = data.get('amount') or 0
-        store  = data.get('store') or 'unknown store'
-        subject = f'New Reimbursement Request — ${amount:.2f} from {vol_name}'
-        msg = (f'New receipt submitted on Sihha Ops Hub.\n'
-               f'Volunteer: {vol_name}\n'
-               f'Store: {store}\n'
-               f'Amount: ${amount:.2f}\n'
-               f'Date: {data.get("purchase_date","")}\n\n'
-               f'Log in to review and pay: https://sihha-ops-hub-production.up.railway.app')
-        _notify_treasurers(db, subject, msg)
-    except Exception as e:
-        log.warning(f'Treasurer notification failed: {e}')
+    # Notify treasurers of new receipt submission (skip for admin bulk quick-upload,
+    # which passes notify=false so N uploads don't send N emails).
+    if data.get('notify', True):
+        try:
+            vol = db.execute("SELECT name FROM volunteers WHERE id=?", (data.get('volunteer_id'),)).fetchone()
+            vol_name = vol['name'] if vol else 'A volunteer'
+            amount = data.get('amount') or 0
+            store  = data.get('store') or 'unknown store'
+            subject = f'New Reimbursement Request — ${amount:.2f} from {vol_name}'
+            msg = (f'New receipt submitted on Sihha Ops Hub.\n'
+                   f'Volunteer: {vol_name}\n'
+                   f'Store: {store}\n'
+                   f'Amount: ${amount:.2f}\n'
+                   f'Date: {data.get("purchase_date","")}\n\n'
+                   f'Log in to review and pay: https://sihha-ops-hub-production.up.railway.app')
+            _notify_treasurers(db, subject, msg)
+        except Exception as e:
+            log.warning(f'Treasurer notification failed: {e}')
     return jsonify({'id': rid}), 201
 
 @app.route('/api/receipts/<rid>', methods=['PUT'])

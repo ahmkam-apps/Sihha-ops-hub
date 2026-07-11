@@ -2940,7 +2940,7 @@ async function renderReceipts(filter) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-green" onclick="openAddReceiptDrawer()">⬆ Upload Receipt</button>`;
+    `<button class="btn btn-green" onclick="openAddReceiptDrawer()">⬆ Upload Receipt(s)</button>`;
 
   let url = '/receipts';
   if (filter !== 'all') url += '?status=' + filter;
@@ -2994,160 +2994,70 @@ async function renderReceipts(filter) {
   }
 }
 
-// Holds the most recent upload for the Add Receipt drawer: { file_url, parsed }
-let _arUpload = null;
-
-async function openAddReceiptDrawer() {
-  _arUpload = null;
-  // Fetch volunteers and cycles in parallel
-  const [vols, cycles] = await Promise.all([
-    GET('/volunteers'),
-    GET('/delivery-cycles')
-  ]);
-  const activeVols = vols.filter(v => v.active);
-  const cycleOpts = cycles.map(c =>
-    `<option value="${c.id}">${esc(c.title)}</option>`
-  ).join('');
-  const volOpts = activeVols.map(v =>
-    `<option value="${v.id}">${esc(v.name)}</option>`
-  ).join('');
-
-  const body = `
-    <div class="form-group">
-      <label>Receipt Photo</label>
-      <input type="file" id="ar-photo" class="form-control" accept="image/*,application/pdf"
-             onchange="uploadReceiptPhoto()">
-      <div id="ar-upload-status" style="font-size:12px;color:var(--gray-4);margin-top:4px">
-        Upload a photo — the store, date, amount, and items are read automatically for review.
-      </div>
-      <div id="ar-parsed" style="margin-top:8px"></div>
-    </div>
-    <div class="form-group">
-      <label>Volunteer <span style="color:var(--gray-4);font-weight:400">(optional)</span></label>
-      <select id="ar-volunteer" class="form-control">
-        <option value="">— none / bought by admin —</option>
-        ${volOpts}
-      </select>
-    </div>
-    <div class="form-group">
-      <label>Delivery Cycle</label>
-      <select id="ar-cycle" class="form-control">
-        <option value="">— select cycle (optional) —</option>
-        ${cycleOpts}
-      </select>
-    </div>
-    <div class="form-group">
-      <label>Store <span style="color:#c00">*</span></label>
-      <input type="text" id="ar-store" class="form-control" placeholder="e.g. Sam's Club">
-    </div>
-    <div class="form-group">
-      <label>Purchase Date <span style="color:#c00">*</span></label>
-      <input type="date" id="ar-date" class="form-control" value="${new Date().toISOString().slice(0,10)}">
-    </div>
-    <div class="form-group">
-      <label>Amount ($) <span style="color:#c00">*</span></label>
-      <input type="number" id="ar-amount" class="form-control" placeholder="0.00" step="0.01" min="0">
-    </div>
-    <div class="form-group">
-      <label>Notes</label>
-      <textarea id="ar-notes" class="form-control" rows="2" placeholder="Optional notes"></textarea>
-    </div>
-    <div id="ar-err" style="color:#c00;font-size:13px;margin-top:4px"></div>`;
-
-  openDrawer('Upload Receipt', body,
-    `<button class="btn btn-green" onclick="saveNewReceipt()">Save Receipt</button>
-     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+// Upload receipts, no form: pick one or more photos → each is uploaded, auto-read,
+// and saved automatically. Correct details later from the Receipts list if needed.
+function openAddReceiptDrawer() {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*,application/pdf';
+  inp.multiple = true;
+  inp.onchange = () => quickUploadReceipts(inp.files);
+  inp.click();
 }
 
-// Uploads the chosen photo immediately; if the server has receipt-parsing on, it
-// returns extracted data which we use to pre-fill the form for the admin to review.
-async function uploadReceiptPhoto() {
-  const photoInput = document.getElementById('ar-photo');
-  const statusEl   = document.getElementById('ar-upload-status');
-  const parsedEl   = document.getElementById('ar-parsed');
-  parsedEl.innerHTML = '';
-  if (!photoInput.files || !photoInput.files[0]) return;
-  statusEl.textContent = 'Uploading & reading receipt…';
-  try {
-    const fd = new FormData();
-    fd.append('file', photoInput.files[0]);
-    const res = await fetch('/api/receipts/upload', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + STATE.token },
-      body: fd
-    });
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.error || 'Upload failed');
-    _arUpload = { file_url: j.file_url, parsed: j.parsed || null };
-    const p = _arUpload.parsed;
-    if (p) {
-      // Pre-fill (admin can still edit any field before saving)
-      if (p.store)         document.getElementById('ar-store').value  = p.store;
-      if (p.purchase_date) document.getElementById('ar-date').value   = p.purchase_date;
-      if (p.total != null) document.getElementById('ar-amount').value = p.total;
-      const conf = p.confidence != null ? Math.round(p.confidence * 100) + '% confidence' : '';
-      const items = (p.line_items || []);
-      const itemRows = items.length ? `
-        <table style="width:100%;font-size:12px;margin-top:6px;border-collapse:collapse">
-          <thead><tr style="color:var(--gray-4);text-align:left">
-            <th style="padding:2px 4px">Item</th><th style="padding:2px 4px;text-align:right">Qty</th>
-            <th style="padding:2px 4px;text-align:right">Line</th></tr></thead>
-          <tbody>${items.map(it => `
-            <tr style="border-top:1px solid #eee">
-              <td style="padding:2px 4px">${esc(it.name||'—')}</td>
-              <td style="padding:2px 4px;text-align:right">${it.qty!=null?esc(String(it.qty)):''}</td>
-              <td style="padding:2px 4px;text-align:right">${it.line_total!=null?fmtMoney(it.line_total):''}</td>
-            </tr>`).join('')}</tbody>
-        </table>` : '<div style="font-size:12px;color:var(--gray-4);margin-top:4px">No line items detected.</div>';
-      parsedEl.innerHTML = `
-        <div style="background:#f0faf5;border:1px solid #cde9db;border-radius:8px;padding:10px 12px">
-          <div style="font-weight:700;font-size:12px;color:#1a5e34">
-            ✨ Auto-read from photo <span style="font-weight:400;color:var(--gray-4)">${conf}</span>
-          </div>
-          <div style="font-size:12px;color:var(--gray-4);margin-top:2px">Review and correct anything before saving.</div>
-          ${itemRows}
-        </div>`;
-      statusEl.textContent = '✓ Uploaded & read';
-    } else {
-      statusEl.textContent = '✓ Uploaded (auto-read is off — enter details manually)';
+function _receiptBanner(text, color) {
+  let el = document.getElementById('receipt-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'receipt-toast';
+    el.style.cssText = 'position:fixed;top:16px;right:16px;z-index:9999;background:#1a3a2a;' +
+      'color:#fff;padding:12px 18px;border-radius:8px;font-size:13px;font-weight:600;' +
+      'box-shadow:0 4px 16px rgba(0,0,0,.25)';
+    document.body.appendChild(el);
+  }
+  if (color) el.style.background = color;
+  el.textContent = text;
+  return el;
+}
+
+async function quickUploadReceipts(files) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < list.length; i++) {
+    _receiptBanner(`Reading receipt ${i + 1} of ${list.length}…`);
+    try {
+      const fd = new FormData();
+      fd.append('file', list[i]);
+      const up = await fetch('/api/receipts/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + STATE.token },
+        body: fd
+      });
+      const uj = await up.json();
+      if (!up.ok) throw new Error(uj.error || 'upload failed');
+      const p = uj.parsed || null;
+      await POST('/receipts', {
+        volunteer_id:  null,
+        cycle_id:      null,
+        store:         p && p.store ? p.store : null,
+        amount:        p && p.total != null ? p.total : null,
+        purchase_date: p && p.purchase_date ? p.purchase_date : null,
+        file_url:      uj.file_url,
+        parsed:        p,
+        notify:        false            // admin bulk upload — don't email treasurers per file
+      });
+      ok++;
+    } catch (e) {
+      fail++;
     }
-  } catch(e) {
-    _arUpload = null;
-    statusEl.textContent = '';
-    document.getElementById('ar-err').textContent = 'Photo upload failed: ' + e.message;
   }
-}
-
-async function saveNewReceipt() {
-  const vid    = document.getElementById('ar-volunteer').value;
-  const cid    = document.getElementById('ar-cycle').value;
-  const store  = document.getElementById('ar-store').value.trim();
-  const date   = document.getElementById('ar-date').value;
-  const amount = parseFloat(document.getElementById('ar-amount').value);
-  const notes  = document.getElementById('ar-notes').value.trim();
-  const errEl  = document.getElementById('ar-err');
-
-  if (!store)      { errEl.textContent = 'Store name is required.'; return; }
-  if (!date)       { errEl.textContent = 'Purchase date is required.'; return; }
-  if (!amount || amount <= 0) { errEl.textContent = 'Enter a valid amount.'; return; }
-
-  errEl.textContent = '';
-  try {
-    await POST('/receipts', {
-      volunteer_id:  vid || null,
-      cycle_id:      cid || null,
-      store, amount,
-      purchase_date: date,
-      file_url:      _arUpload ? _arUpload.file_url : null,
-      parsed:        _arUpload ? _arUpload.parsed : null,
-      notes: notes || null
-    });
-    _arUpload = null;
-    closeDrawer();
-    renderReceipts(STATE.filter);
-  } catch(e) {
-    errEl.textContent = e.message;
-  }
+  const el = _receiptBanner(
+    `✓ ${ok} receipt${ok !== 1 ? 's' : ''} added${fail ? `, ${fail} failed` : ''}`,
+    fail ? '#8a4b00' : '#1a3a2a'
+  );
+  setTimeout(() => el.remove(), 4000);
+  if (STATE.page === 'receipts') renderReceipts(STATE.filter);
 }
 
 async function approveReceipt(id) {
