@@ -15,6 +15,16 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # ── Config ────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__, static_folder='public')
+# gzip/brotli-compress responses (audit P2): index.html is ~267KB of inline HTML/JS
+# served no-store, so it re-downloads every admin visit. Compression cuts that ~4-5×
+# with a single line. flask-compress only touches compressible content-types above a
+# size threshold; JSON API responses benefit too. Degrades gracefully if not installed.
+try:
+    from flask_compress import Compress
+    Compress(app)
+except ImportError:
+    import logging as _logging
+    _logging.getLogger(__name__).warning('flask-compress not installed — responses uncompressed')
 # Railway terminates TLS at a single reverse proxy that appends the real client IP
 # to X-Forwarded-For. Trust exactly ONE hop (x_for=1) so request.remote_addr is the
 # real client and cannot be spoofed by a client-supplied X-Forwarded-For (audit P1.5:
@@ -2614,18 +2624,24 @@ def list_families():
     q += " ORDER BY f.created_at DESC"
     rows = [dict(r) for r in db.execute(q, params).fetchall()]
 
-    # Last shopper/deliverer per family in ONE scan (audit 3.3 — replaces 4
-    # correlated subqueries per family row). Ordered ASC so the final overwrite
-    # per (family, task) is the most recently created claimed slot.
+    # Last shopper/deliverer per family (audit 3.3 — replaces 4 correlated subqueries
+    # per family row). Audit P2: the previous version pulled EVERY claimed slot in
+    # history into Python and overwrote to keep the latest; as history grows that's an
+    # unbounded transfer. A ROW_NUMBER() window keeps only the most-recent claimed slot
+    # per (family, task_type) in SQL, so at most ~2 rows per family reach Python. Result
+    # is identical (rn=1 by created_at DESC == the old ASC-overwrite winner).
     last_map = {}
     for s in db.execute(
-        '''SELECT vs.family_id, vs.task_type, v.name AS vol_name,
-                  dc.delivery_date_start AS d_date
-           FROM volunteer_slots vs
-           JOIN volunteers v ON vs.claimed_by = v.id
-           JOIN delivery_cycles dc ON vs.cycle_id = dc.id
-           WHERE vs.claimed_by IS NOT NULL AND vs.task_type IN ('shopping','delivery')
-           ORDER BY vs.created_at ASC'''
+        '''SELECT family_id, task_type, vol_name, d_date FROM (
+               SELECT vs.family_id AS family_id, vs.task_type AS task_type,
+                      v.name AS vol_name, dc.delivery_date_start AS d_date,
+                      ROW_NUMBER() OVER (PARTITION BY vs.family_id, vs.task_type
+                                         ORDER BY vs.created_at DESC) AS rn
+               FROM volunteer_slots vs
+               JOIN volunteers v ON vs.claimed_by = v.id
+               JOIN delivery_cycles dc ON vs.cycle_id = dc.id
+               WHERE vs.claimed_by IS NOT NULL AND vs.task_type IN ('shopping','delivery')
+           ) WHERE rn = 1'''
     ).fetchall():
         last_map[(s['family_id'], s['task_type'])] = (s['vol_name'], s['d_date'])
     for r in rows:
@@ -3274,12 +3290,41 @@ def update_reimbursement(rid):
 
 # ── Donations ─────────────────────────────────────────────────────────────────
 
+DONATIONS_MAX_ROWS = 10000  # safety ceiling on donations reads (audit P2: bound the
+                            # fastest-growing table). ~decades of headroom for this
+                            # charity, so today's results are unchanged; prevents an
+                            # unbounded SELECT * from OOM-ing the worker years from now.
+
+def _donations_where(args):
+    """Build an optional date-window WHERE clause + effective LIMIT from query args
+    (?since=YYYY-MM-DD, ?until=YYYY-MM-DD, ?limit=N). Shared by the JSON list and the
+    Excel export so both are bounded identically."""
+    where, params = [], []
+    since = (args.get('since') or '').strip()
+    until = (args.get('until') or '').strip()
+    if since:
+        where.append("date >= ?"); params.append(since)
+    if until:
+        where.append("date <= ?"); params.append(until)
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    try:
+        req_limit = int(args.get('limit') or 0)
+    except ValueError:
+        req_limit = 0
+    eff_limit = min(req_limit, DONATIONS_MAX_ROWS) if req_limit > 0 else DONATIONS_MAX_ROWS
+    return wsql, params, eff_limit
+
 @app.route('/api/donations', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def list_donations():
+    wsql, params, limit = _donations_where(request.args)
     rows = get_db().execute(
-        "SELECT * FROM donations ORDER BY date DESC, created_at DESC"
+        f"SELECT * FROM donations{wsql} ORDER BY date DESC, created_at DESC LIMIT ?",
+        params + [limit]
     ).fetchall()
+    if len(rows) >= DONATIONS_MAX_ROWS:
+        log.warning(f'list_donations hit the {DONATIONS_MAX_ROWS}-row ceiling — '
+                    f'client-side totals may under-count; add date filters or paginate.')
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/donations/export', methods=['GET'])
@@ -3292,9 +3337,11 @@ def export_donations():
     import io
 
     db   = get_db()
+    wsql, params, limit = _donations_where(request.args)
     rows = db.execute(
         "SELECT date, donor_name, donor_email, amount, frequency, type, source, notes, reference_id, created_at "
-        "FROM donations ORDER BY date DESC, created_at DESC"
+        f"FROM donations{wsql} ORDER BY date DESC, created_at DESC LIMIT ?",
+        params + [limit]
     ).fetchall()
 
     wb = openpyxl.Workbook()
@@ -3730,7 +3777,7 @@ def update_food_item(iid):
         db.commit()
     except Exception as e:
         log.exception(f'update_food_item error: {e}')
-        return jsonify({'error': f'Save failed: {e}'}), 500
+        return jsonify({'error': 'Save failed — please try again.'}), 500
     return jsonify(dict(db.execute("SELECT * FROM food_items WHERE id=?", (iid,)).fetchone()))
 
 # ── Bundle Quantities ─────────────────────────────────────────────────────────
@@ -5726,7 +5773,7 @@ def cancel_food_order():
 
     except Exception as _e:
         log.exception(f'cancel_food_order ERROR — family={family_id!r} request={request_id!r}')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 # ── Family Change Requests ────────────────────────────────────────────────────
@@ -5834,7 +5881,7 @@ def submit_family_change_request():
 
     except Exception as _e:
         log.exception(f'submit_family_change_request ERROR')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 @app.route('/api/family-request/<cr_id>/retract', methods=['POST'])
@@ -5868,7 +5915,7 @@ def retract_family_change_request(cr_id):
 
     except Exception as _e:
         log.exception('retract_family_change_request ERROR')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 # ── Admin Change Request Routes ───────────────────────────────────────────────
@@ -6021,7 +6068,7 @@ def approve_change_request(cr_id):
 
     except Exception as _e:
         log.exception(f'approve_change_request ERROR cr_id={cr_id}')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 @app.route('/api/admin/change-requests/<cr_id>/reject', methods=['POST'])
@@ -6069,7 +6116,7 @@ def reject_change_request(cr_id):
 
     except Exception as _e:
         log.exception(f'reject_change_request ERROR cr_id={cr_id}')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 @app.route('/api/families/<fid>/reset-order', methods=['POST'])
@@ -6115,7 +6162,7 @@ def reset_family_order(fid):
 
     except Exception as _e:
         log.exception(f'reset_family_order ERROR fid={fid}')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 @app.route('/api/families/<fid>/cancel-order', methods=['POST'])
@@ -6199,7 +6246,7 @@ def admin_cancel_family_order(fid):
 
     except Exception as _e:
         log.exception(f'admin_cancel_family_order ERROR fid={fid}')
-        return jsonify({'error': f'Server error: {str(_e)}'}), 500
+        return jsonify({'error': 'Server error — please try again. If it persists, contact a coordinator.'}), 500
 
 
 @app.route('/api/food-order/items', methods=['PUT'])
@@ -7243,10 +7290,31 @@ def _send_reminders_job():
     finally:
         conn.close()
 
+def _destructive_guard(expected_confirm):
+    """Two-key safety for destructive admin endpoints (audit P2). Returns an
+    (response, status) error tuple to return immediately, or None to proceed.
+    Requires BOTH: an ops-level opt-in env var (ALLOW_DESTRUCTIVE_OPS truthy) AND
+    an exact confirmation phrase in the JSON body — so neither a stray POST nor a
+    forgotten env flag alone can wipe live data. Backups are only once-daily."""
+    enabled = os.environ.get('ALLOW_DESTRUCTIVE_OPS', '').strip().lower() in ('1', 'true', 'yes', 'on')
+    if not enabled:
+        return jsonify({'error': 'Destructive operations are disabled on this deployment. '
+                                 'Set ALLOW_DESTRUCTIVE_OPS=1 in the environment to enable them.'}), 403
+    confirm = (request.json or {}).get('confirm', '')
+    if confirm != expected_confirm:
+        return jsonify({'error': f'Confirmation required. Re-send this request with '
+                                 f'body {{"confirm": "{expected_confirm}"}} to proceed.'}), 400
+    return None
+
+
 @app.route('/api/admin/wipe-test-data', methods=['POST'])
 @require_auth(roles=['admin'])
 def wipe_test_data():
-    """Wipe all operational data. Preserves: users, food catalog, donations, sessions."""
+    """Wipe all operational data. Preserves: users, food catalog, donations, sessions.
+    Gated by _destructive_guard — requires ALLOW_DESTRUCTIVE_OPS + confirm phrase."""
+    _blocked = _destructive_guard('WIPE-ALL-DATA')
+    if _blocked:
+        return _blocked
     db = get_db()
     db.execute('PRAGMA foreign_keys=OFF')
     counts = {}
@@ -7376,7 +7444,12 @@ def import_historical():
 @app.route('/api/admin/seed-cycles-2026', methods=['POST'])
 @require_auth(roles=['admin'])
 def seed_cycles_2026():
-    """Create all bi-weekly 2026 delivery cycles (May–Dec). Idempotent — skips existing."""
+    """Create all bi-weekly 2026 delivery cycles (May–Dec). DESTRUCTIVE: deletes all
+    existing 2026 cycles first, so it's gated by _destructive_guard (ALLOW_DESTRUCTIVE_OPS
+    + confirm phrase) to prevent wiping live 2026 cycles on a stray POST."""
+    _blocked = _destructive_guard('SEED-CYCLES-2026')
+    if _blocked:
+        return _blocked
     from datetime import date, timedelta
 
     def build_cycles():
