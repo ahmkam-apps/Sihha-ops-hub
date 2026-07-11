@@ -562,6 +562,9 @@
       <div class="nav-item" onclick="nav('payments')" id="nav-payments">
         <span class="icon">◫</span> Payments
       </div>
+      <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
+        <span class="icon">🧾</span> Receipts
+      </div>
       <div class="nav-item" onclick="nav('donations')" id="nav-donations">
         <span class="icon">♦</span> Donations
       </div>
@@ -718,7 +721,7 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     summary: 'Finance Summary',
-    payments: 'Payments', donations: 'Donations', users: 'Users',
+    payments: 'Payments', receipts: 'Receipts', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
     catalog: 'Food Catalog', pricing: 'Pricing Table',
     cycle_detail: 'Delivery Detail', orders: 'Orders',
@@ -730,7 +733,7 @@ function nav(page) {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
     summary: renderFinanceSummary,
-    payments: renderPayments, donations: renderDonations,
+    payments: renderPayments, receipts: renderReceipts, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, 'active-cycle': renderActiveCycle,
     catalog: renderCatalog, pricing: renderPricingTable, orders: renderOrders,
     requests: renderRequests
