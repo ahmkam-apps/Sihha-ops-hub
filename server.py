@@ -3657,8 +3657,11 @@ def create_receipt():
     # Auto-match a delivery cycle from the purchase date when the caller didn't set one
     # (dashboard uploads) — keeps them out of the "Unassigned" bucket.
     cycle_id = data.get('cycle_id')
-    if not cycle_id and not data.get('slot_id') and data.get('purchase_date'):
-        cycle_id = _cycle_for_date(db, data.get('purchase_date'))
+    if not cycle_id and not data.get('slot_id'):
+        # Match on the purchase date; fall back to today's upload date when the date is
+        # missing or doesn't land near a delivery (a good proxy — receipts are uploaded
+        # around when the volunteer shopped).
+        cycle_id = _cycle_for_date(db, data.get('purchase_date')) or _cycle_for_date(db, now())
     db.execute(
         '''INSERT INTO receipts
            (id,assignment_id,volunteer_id,family_id,store,purchase_date,amount,file_url,slot_id,cycle_id,status,notes,created_at)
@@ -3935,13 +3938,15 @@ def auto_match_cycle():
     ids = (request.json or {}).get('ids')
     db = get_db()
     if ids:
-        rows = db.execute(f"SELECT id, purchase_date FROM receipts WHERE id IN ({','.join('?'*len(ids))})", ids).fetchall()
+        rows = db.execute(f"SELECT id, purchase_date, created_at FROM receipts WHERE id IN ({','.join('?'*len(ids))})", ids).fetchall()
     else:
-        rows = db.execute("SELECT id, purchase_date FROM receipts "
+        rows = db.execute("SELECT id, purchase_date, created_at FROM receipts "
                           "WHERE cycle_id IS NULL AND slot_id IS NULL AND status!='rejected'").fetchall()
     matched = 0
     for r in rows:
-        cid = _cycle_for_date(db, r['purchase_date'])
+        # Purchase date first; fall back to the upload date when it's missing or a
+        # misread (e.g. a stray 2023) that lands near no delivery.
+        cid = _cycle_for_date(db, r['purchase_date']) or _cycle_for_date(db, r['created_at'])
         if cid:
             db.execute("UPDATE receipts SET cycle_id=?, updated_at=? WHERE id=?", (cid, now(), r['id']))
             matched += 1
