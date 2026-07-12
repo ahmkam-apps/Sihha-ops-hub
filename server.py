@@ -3445,6 +3445,29 @@ def _group_by_store(rows, limit=50):
     return out[:limit]
 
 
+def _cycle_for_date(db, date_str, max_days=10):
+    """Best delivery cycle for a receipt purchased on date_str — the cycle whose
+    delivery date is nearest the purchase date (volunteers shop right around delivery),
+    but only if within max_days. Returns a cycle id or None."""
+    if not date_str:
+        return None
+    from datetime import date as _date
+    try:
+        d = _date.fromisoformat(str(date_str)[:10])
+    except Exception:
+        return None
+    best, best_diff = None, None
+    for r in db.execute("SELECT id, delivery_date_start FROM delivery_cycles WHERE delivery_date_start IS NOT NULL").fetchall():
+        try:
+            dd = _date.fromisoformat(str(r['delivery_date_start'])[:10])
+        except Exception:
+            continue
+        diff = abs((dd - d).days)
+        if best_diff is None or diff < best_diff:
+            best, best_diff = r['id'], diff
+    return best if (best and best_diff is not None and best_diff <= max_days) else None
+
+
 def _sane_receipt_date(s):
     """Return a plausible YYYY-MM-DD or None. Guards against the vision model guessing
     a wrong year (e.g. defaulting to 2023) — a receipt date more than ~13 months old or
@@ -3631,13 +3654,18 @@ def create_receipt():
             return jsonify({'error': 'Invalid amount'}), 422
     rid = str(uuid.uuid4())
     db = get_db()
+    # Auto-match a delivery cycle from the purchase date when the caller didn't set one
+    # (dashboard uploads) — keeps them out of the "Unassigned" bucket.
+    cycle_id = data.get('cycle_id')
+    if not cycle_id and not data.get('slot_id') and data.get('purchase_date'):
+        cycle_id = _cycle_for_date(db, data.get('purchase_date'))
     db.execute(
         '''INSERT INTO receipts
            (id,assignment_id,volunteer_id,family_id,store,purchase_date,amount,file_url,slot_id,cycle_id,status,notes,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (rid, data.get('assignment_id'), data.get('volunteer_id'), data.get('family_id'),
          data.get('store'), data.get('purchase_date'), data.get('amount'),
-         data.get('file_url'), data.get('slot_id'), data.get('cycle_id'), 'pending', data.get('notes'), now())
+         data.get('file_url'), data.get('slot_id'), cycle_id, 'pending', data.get('notes'), now())
     )
     if data.get('parsed'):
         try:
@@ -3897,6 +3925,28 @@ def rename_store():
                      [to, now(), *variants])
     db.commit()
     return jsonify({'ok': True, 'updated': cur.rowcount})
+
+
+@app.route('/api/receipts/auto-match-cycle', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def auto_match_cycle():
+    """Auto-assign a delivery cycle from each receipt's purchase date. With `ids`, only
+    those; otherwise every currently-unassigned, non-rejected receipt with a date."""
+    ids = (request.json or {}).get('ids')
+    db = get_db()
+    if ids:
+        rows = db.execute(f"SELECT id, purchase_date FROM receipts WHERE id IN ({','.join('?'*len(ids))})", ids).fetchall()
+    else:
+        rows = db.execute("SELECT id, purchase_date FROM receipts "
+                          "WHERE cycle_id IS NULL AND slot_id IS NULL AND status!='rejected'").fetchall()
+    matched = 0
+    for r in rows:
+        cid = _cycle_for_date(db, r['purchase_date'])
+        if cid:
+            db.execute("UPDATE receipts SET cycle_id=?, updated_at=? WHERE id=?", (cid, now(), r['id']))
+            matched += 1
+    db.commit()
+    return jsonify({'ok': True, 'matched': matched, 'checked': len(rows)})
 
 
 @app.route('/api/receipts/bulk-assign-cycle', methods=['POST'])

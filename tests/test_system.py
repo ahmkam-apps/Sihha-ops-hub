@@ -2324,6 +2324,21 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_receipt_auto_matches_cycle_by_date(self, client, auth):
+        cyc = client.post('/api/delivery-cycles', headers=auth, json={
+            'title': 'AutoMatch Cycle', 'delivery_date_start': '2026-09-12',
+            'delivery_date_end': '2026-09-13', 'request_open_at': '2026-08-30T08:00',
+            'request_close_at': '2026-09-05T23:59', 'status': 'upcoming'}).get_json()['id']
+        # near delivery → auto-matched on create
+        near = client.post('/api/receipts', headers=auth, json={
+            'store': 'X', 'amount': 10, 'purchase_date': '2026-09-10'}).get_json()['id']
+        assert client.get('/api/receipts/' + near, headers=auth).get_json()['cycle_id'] == cyc
+        # far from any delivery → stays unassigned even after bulk auto-match
+        far = client.post('/api/receipts', headers=auth, json={
+            'store': 'Y', 'amount': 10, 'purchase_date': '2026-06-01'}).get_json()['id']
+        client.post('/api/receipts/auto-match-cycle', headers=auth, json={'ids': [far]})
+        assert client.get('/api/receipts/' + far, headers=auth).get_json()['cycle_id'] is None
+
     def test_reimbursement_report_by_volunteer(self, client, auth):
         vid = client.post('/api/volunteers', headers=auth, json={
             'name': 'Report Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',

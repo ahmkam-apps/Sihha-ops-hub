@@ -3012,6 +3012,7 @@ async function renderReceipts(filter) {
     `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px"><i class="ti ti-settings" aria-hidden="true"></i> Auto-read status</button>
      <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px"><i class="ti ti-user-plus" aria-hidden="true"></i> Assign volunteer</button>
      <button class="btn btn-outline" onclick="assignCycleSelected()" style="margin-right:8px"><i class="ti ti-calendar-event" aria-hidden="true"></i> Assign cycle</button>
+     <button class="btn btn-outline" onclick="autoMatchCycle()" style="margin-right:8px" title="Assign a cycle from each receipt's date"><i class="ti ti-calendar-search" aria-hidden="true"></i> Match cycle by date</button>
      <button class="btn btn-outline" onclick="reparseSelected()" style="margin-right:8px"><i class="ti ti-refresh" aria-hidden="true"></i> Re-read selected</button>
      <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:var(--accent);border-color:var(--accent)"><i class="ti ti-check" aria-hidden="true"></i> Approve selected</button>
      <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:var(--danger);border-color:var(--danger)"><i class="ti ti-trash" aria-hidden="true"></i> Clear all</button>
@@ -3382,6 +3383,18 @@ async function applyBulkAssign() {
     alert(`Assigned ${r.assigned} receipt(s).`);
     renderReceipts(STATE.filter);
   } catch(e) { document.getElementById('bulk-assign-err').textContent = e.message; }
+}
+
+async function autoMatchCycle() {
+  const ids = Array.from(document.querySelectorAll('.rcpt-check:checked')).map(x => x.value);
+  const scope = ids.length ? `the ${ids.length} selected` : 'all unassigned';
+  if (!confirm(`Auto-match ${scope} receipt(s) to a delivery cycle based on each receipt's date?`)) return;
+  try {
+    const r = await POST('/receipts/auto-match-cycle', ids.length ? { ids } : {});
+    alert(`Matched ${r.matched} of ${r.checked} receipt(s) to a cycle.` +
+          (r.matched < r.checked ? '\n\nThe rest had no date near any delivery — assign those manually.' : ''));
+    renderReceipts(STATE.filter);
+  } catch(e) { alert(e.message); }
 }
 
 async function assignCycleSelected() {
