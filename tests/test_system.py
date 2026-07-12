@@ -2052,7 +2052,8 @@ class TestFinanceSummary:
         data = self._summary()
         assert set(data['totals'].keys()) == {
             'income', 'pending_review', 'committed', 'paid_out', 'outstanding_payable',
-            'cash_balance', 'available', 'pending_count', 'approved_count'}
+            'cash_balance', 'available', 'pending_count', 'approved_count',
+            'owed_count', 'mismatch_count'}
         assert isinstance(data['cycles'], list)
         if data['cycles']:
             assert {'id', 'title', 'cycle_status', 'approved_count',

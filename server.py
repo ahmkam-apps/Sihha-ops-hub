@@ -3794,6 +3794,27 @@ def update_receipt_item(item_id):
     return jsonify({'ok': True, 'category': cat})
 
 
+@app.route('/api/receipts/bulk-assign-cycle', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def bulk_assign_cycle():
+    """Attach several receipts to a delivery cycle at once (or clear the cycle)."""
+    d = request.json or {}
+    ids = d.get('ids') or []
+    cid = d.get('cycle_id') or None
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'No receipts selected'}), 400
+    if cid and not get_db().execute("SELECT id FROM delivery_cycles WHERE id=?", (cid,)).fetchone():
+        return jsonify({'error': 'Cycle not found'}), 404
+    db = get_db()
+    n = 0
+    for rid in ids:
+        if db.execute("SELECT id FROM receipts WHERE id=?", (rid,)).fetchone():
+            db.execute("UPDATE receipts SET cycle_id=?, updated_at=? WHERE id=?", (cid, now(), rid))
+            n += 1
+    db.commit()
+    return jsonify({'ok': True, 'assigned': n})
+
+
 @app.route('/api/receipts/<rid>', methods=['DELETE'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def delete_receipt(rid):
@@ -3850,6 +3871,8 @@ def finance_summary():
     committed       = paid_out + outstanding
     approved_count  = _sum("SELECT COUNT(*) FROM receipts WHERE status='approved'")
     pending_count   = _sum("SELECT COUNT(*) FROM receipts WHERE status='pending'")
+    owed_count      = _sum("SELECT COUNT(*) FROM reimbursements WHERE status='pending'")
+    mismatch_count  = _sum("SELECT COUNT(*) FROM receipts WHERE status!='rejected' AND amount_mismatch=1")
 
     # Per-cycle spend (approved receipts, resolved to a cycle via cycle_id or slot).
     cycles = db.execute('''
@@ -3907,6 +3930,8 @@ def finance_summary():
             'available':           round(income - committed, 2),
             'pending_count':       pending_count,
             'approved_count':      approved_count,
+            'owed_count':          owed_count,
+            'mismatch_count':      mismatch_count,
         },
         'cycles': cyc_list
     })
@@ -4112,14 +4137,21 @@ def update_reimbursement(rid):
     if d.get('payment_method') is not None and d['payment_method'] not in _VALID_PAYMENT_METHODS:
         return jsonify({'error': f'Invalid payment method. Use one of: {", ".join(_VALID_PAYMENT_METHODS)}'}), 422
     new_status = d.get('status', row['status'])
-    paid_date  = d.get('paid_date', row['paid_date']) or (now()[:10] if new_status == 'paid' else row['paid_date'])
+    # Reverting a paid reimbursement back to unpaid (e.g. it was marked paid by mistake)
+    # clears the payment details so it shows as owed again and stops counting as paid_out.
+    reverting = (new_status != 'paid' and row['status'] == 'paid')
+    if reverting:
+        payment_method = d.get('payment_method', None)
+        payment_ref    = d.get('payment_ref', None)
+        paid_date      = d.get('paid_date', None)
+    else:
+        payment_method = d.get('payment_method', row['payment_method'])
+        payment_ref    = d.get('payment_ref', row['payment_ref'])
+        paid_date      = d.get('paid_date', row['paid_date']) or (now()[:10] if new_status == 'paid' else row['paid_date'])
     db.execute(
         '''UPDATE reimbursements SET status=?,payment_method=?,payment_ref=?,paid_date=?,
            approved_by=?,notes=?,updated_at=? WHERE id=?''',
-        (new_status,
-         d.get('payment_method', row['payment_method']),
-         d.get('payment_ref', row['payment_ref']),
-         paid_date,
+        (new_status, payment_method, payment_ref, paid_date,
          d.get('approved_by', row['approved_by']) or g.user['user_id'],
          d.get('notes', row['notes']), now(), rid)
     )

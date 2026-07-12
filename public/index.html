@@ -3001,7 +3001,8 @@ async function renderReceipts(filter) {
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px"><i class="ti ti-settings" aria-hidden="true"></i> Auto-read status</button>
-     <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px"><i class="ti ti-user-plus" aria-hidden="true"></i> Assign selected</button>
+     <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px"><i class="ti ti-user-plus" aria-hidden="true"></i> Assign volunteer</button>
+     <button class="btn btn-outline" onclick="assignCycleSelected()" style="margin-right:8px"><i class="ti ti-calendar-event" aria-hidden="true"></i> Assign cycle</button>
      <button class="btn btn-outline" onclick="reparseSelected()" style="margin-right:8px"><i class="ti ti-refresh" aria-hidden="true"></i> Re-read selected</button>
      <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:var(--accent);border-color:var(--accent)"><i class="ti ti-check" aria-hidden="true"></i> Approve selected</button>
      <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:var(--danger);border-color:var(--danger)"><i class="ti ti-trash" aria-hidden="true"></i> Clear all</button>
@@ -3374,6 +3375,31 @@ async function applyBulkAssign() {
   } catch(e) { document.getElementById('bulk-assign-err').textContent = e.message; }
 }
 
+async function assignCycleSelected() {
+  const ids = Array.from(document.querySelectorAll('.rcpt-check:checked')).map(x => x.value);
+  if (!ids.length) { alert('Select one or more receipts first (checkboxes on the left).'); return; }
+  _bulkAssignIds = ids;
+  const cycles = await GET('/delivery-cycles');
+  const opts = ['<option value="">— none / unassigned —</option>'].concat(
+    cycles.map(c => `<option value="${c.id}">${esc(c.title)}</option>`)
+  ).join('');
+  openDrawer('Assign delivery cycle', `
+    <p style="font-size:13px;color:var(--gray-4)">Attach <strong>${ids.length}</strong> selected receipt(s) to a cycle:</p>
+    <div class="form-group"><label>Delivery cycle</label><select id="bulk-cyc" class="form-control">${opts}</select></div>
+    <div id="bulk-cyc-err" style="color:var(--danger);font-size:13px"></div>`,
+    `<button class="btn btn-green" onclick="applyBulkCycle()">Assign</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+}
+async function applyBulkCycle() {
+  const cid = document.getElementById('bulk-cyc').value || null;
+  try {
+    const r = await POST('/receipts/bulk-assign-cycle', { ids: _bulkAssignIds, cycle_id: cid });
+    closeDrawer();
+    alert(`Updated ${r.assigned} receipt(s).`);
+    renderReceipts(STATE.filter);
+  } catch(e) { document.getElementById('bulk-cyc-err').textContent = e.message; }
+}
+
 async function reparseSelected() {
   const ids = Array.from(document.querySelectorAll('.rcpt-check:checked')).map(x => x.value);
   if (!ids.length) { alert('Select one or more receipts first (checkboxes on the left).'); return; }
@@ -3434,6 +3460,12 @@ async function rejectReceipt(id) {
 // ── Finance (unified: money ledger + spend dashboard) ─────────────────────────
 const SR_PALETTE = ['#285D4C','#B0863C','#4E8A5E','#C4772E','#337060','#8E6A2A','#6C6A5C','#A7B3A0','#1E4A3C','#C39A4E'];
 
+function goFinance(page, filter) {
+  nav(page);
+  if (page === 'receipts') renderReceipts(filter);
+  else if (page === 'payments') renderPayments(filter);
+}
+
 async function renderFinanceSummary() {
   STATE._srSince = STATE._srSince || '';
   STATE._srUntil = STATE._srUntil || '';
@@ -3465,9 +3497,40 @@ async function renderFinanceSummary() {
         ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:3px">${sub}</div>` : ''}
       </div>`;
     const sec = txt => `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin:4px 0 -6px 2px">${txt}</div>`;
+    const action = (icon, label, value, color, click) => `
+      <div class="stat-card" style="padding:14px 16px;cursor:pointer;border-left:4px solid ${color}" onclick="${click}">
+        <div style="display:flex;align-items:center;gap:10px">
+          <i class="ti ${icon}" style="font-size:19px;color:${color}" aria-hidden="true"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:13px">${label}</div>
+            <div style="font-size:12px;color:var(--gray-4)">${value}</div>
+          </div>
+          <i class="ti ti-arrow-right" style="color:var(--gray-4)" aria-hidden="true"></i>
+        </div>
+      </div>`;
+    const attn = (t.pending_count || t.owed_count || t.mismatch_count);
 
     document.getElementById('content').innerHTML = `
       <div style="display:flex;flex-direction:column;gap:20px">
+
+        <div class="stat-card" style="padding:20px 22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;border-left:4px solid var(--gold)">
+          <div>
+            <div class="stat-label">Cash balance</div>
+            <div style="font-family:var(--font-serif);font-size:40px;font-weight:500;color:var(--gold-deep);line-height:1.05">${fmtMoney(t.cash_balance)}</div>
+            <div style="font-size:12px;color:var(--gray-4);margin-top:6px">Raised ${fmtMoney(t.income)} · Committed ${fmtMoney(t.committed)} · Owe volunteers ${fmtMoney(t.outstanding_payable)}</div>
+          </div>
+          <div style="text-align:right">
+            <div class="stat-label">Available after commitments</div>
+            <div style="font-family:var(--font-serif);font-size:26px;font-weight:500;color:var(--accent)">${fmtMoney(t.available)}</div>
+          </div>
+        </div>
+
+        ${sec('Needs attention')}
+        ${attn ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px">
+          ${t.pending_count ? action('ti-inbox', `${t.pending_count} receipt${t.pending_count!=1?'s':''} to review`, fmtMoney(t.pending_review)+' pending', 'var(--warning)', "goFinance('receipts','pending')") : ''}
+          ${t.owed_count ? action('ti-cash-banknote', `Owed to ${t.owed_count} volunteer${t.owed_count!=1?'s':''}`, fmtMoney(t.outstanding_payable)+' to pay', 'var(--warning)', "nav('payments')") : ''}
+          ${t.mismatch_count ? action('ti-alert-triangle', `${t.mismatch_count} amount mismatch${t.mismatch_count!=1?'es':''}`, 'typed vs photo — verify', 'var(--danger)', "goFinance('receipts','all')") : ''}
+        </div>` : `<div class="stat-card" style="padding:14px 18px;color:var(--accent);font-size:13px;cursor:default"><i class="ti ti-circle-check" aria-hidden="true"></i> All caught up — nothing needs attention.</div>`}
 
         ${sec('Money position')}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
@@ -3646,9 +3709,12 @@ async function renderPayments(filter) {
                           onclick="quickPayReimb('${r.id}','${m}',${r.amount||0})">${m.charAt(0).toUpperCase()+m.slice(1)}</button>`
                       ).join('')}
                       <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);padding:3px 7px;font-size:11px"
-                        onclick="rejectReimb('${r.id}')">✗</button>
+                        onclick="rejectReimb('${r.id}')"><i class="ti ti-x" aria-hidden="true"></i></button>
                     </div>` : r.status==='paid' ? `
-                    <span style="font-size:11px;color:var(--accent)">✓ Paid</span>` : ''
+                    <span style="font-size:11px;color:var(--accent)"><i class="ti ti-check" aria-hidden="true"></i> Paid</span>
+                    <button class="btn btn-sm btn-outline" style="padding:3px 8px;font-size:11px;margin-left:6px" title="Marked paid by mistake? Undo it" onclick="undoPayment('${r.id}')">Undo</button>`
+                    : r.status==='rejected' ? `
+                    <button class="btn btn-sm btn-outline" style="padding:3px 8px;font-size:11px" onclick="undoPayment('${r.id}')" title="Reopen as pending">Reopen</button>` : ''
                   }
                 </td>
               </tr>`).join('') :
@@ -3926,6 +3992,14 @@ async function confirmReimbPaid(id) {
 async function rejectReimb(id) {
   try {
     await PUT('/reimbursements/' + id, { status: 'rejected' });
+    renderPayments(STATE.filter);
+  } catch(e) { alert(e.message); }
+}
+
+async function undoPayment(id) {
+  if (!confirm('Reset this to unpaid?\n\nIt goes back to owed (pending), the payment method/reference/date are cleared, and it stops counting as paid out.')) return;
+  try {
+    await PUT('/reimbursements/' + id, { status: 'pending' });
     renderPayments(STATE.filter);
   } catch(e) { alert(e.message); }
 }
