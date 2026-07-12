@@ -3131,7 +3131,9 @@ _RECEIPT_PARSE_PROMPT = (
     "\"line_items\":[{\"name\":string, \"qty\":number|null, "
     "\"unit_price\":number|null, \"line_total\":number|null}]}. "
     "Use the receipt's grand total for \"total\". Omit loyalty/discount summary lines "
-    "that are not products. If the image is unreadable, set confidence to 0 and null fields."
+    "that are not products. The image or PDF may be rotated, sideways, or UPSIDE DOWN, "
+    "or a low-quality scan — mentally rotate it and read it regardless of orientation. "
+    "Only if it is genuinely unreadable, set confidence to 0 and null fields."
 )
 
 
@@ -3153,7 +3155,14 @@ def _prepare_receipt_image(image_bytes, ext):
             if ext in ('heic', 'heif'):
                 return None  # can't decode HEIC without the plugin
         import io as _io
+        from PIL import ImageOps
         img = Image.open(_io.BytesIO(image_bytes))
+        # Respect the camera's EXIF orientation so sideways/upside-down phone photos
+        # are uprighted before we send them (the model reads upright far better).
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
         if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
         # Downscale so the longest side is <= 1600px (plenty for OCR, bounds cost)
@@ -3637,6 +3646,30 @@ def bulk_approve_receipts():
         approved += 1
     db.commit()
     return jsonify({'ok': True, 'approved': approved})
+
+
+@app.route('/api/receipts/bulk-assign', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def bulk_assign_receipts():
+    """Assign (or clear) a volunteer on several receipts at once. Also updates any
+    UNPAID payable so the reimbursement follows the assignment."""
+    d = request.json or {}
+    ids = d.get('ids') or []
+    vid = d.get('volunteer_id') or None
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'No receipts selected'}), 400
+    if vid and not get_db().execute("SELECT id FROM volunteers WHERE id=?", (vid,)).fetchone():
+        return jsonify({'error': 'Volunteer not found'}), 404
+    db = get_db()
+    n = 0
+    for rid in ids:
+        if db.execute("SELECT id FROM receipts WHERE id=?", (rid,)).fetchone():
+            db.execute("UPDATE receipts SET volunteer_id=?, updated_at=? WHERE id=?", (vid, now(), rid))
+            db.execute("UPDATE reimbursements SET volunteer_id=?, updated_at=? WHERE receipt_id=? AND status!='paid'",
+                       (vid, now(), rid))
+            n += 1
+    db.commit()
+    return jsonify({'ok': True, 'assigned': n})
 
 
 @app.route('/api/receipts/<rid>', methods=['DELETE'])

@@ -2941,6 +2941,7 @@ async function renderReceipts(filter) {
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px">⚙ Auto-read status</button>
+     <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px">👤 Assign selected</button>
      <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:#1a8754;border-color:#1a8754">✓ Approve selected</button>
      <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:#c00;border-color:#c00">🗑 Clear all</button>
      <button class="btn btn-green" onclick="openAddReceiptDrawer()" title="Pick one or more files — hold ⌘/Ctrl or drag to select several">⬆ Upload Receipt(s)</button>`;
@@ -2971,8 +2972,7 @@ async function renderReceipts(filter) {
           <tbody>
             ${rows.length ? rows.map(r => `
               <tr id="rrow-${r.id}" style="cursor:pointer" onclick="openReceiptDetail('${r.id}')">
-                <td style="text-align:center" onclick="event.stopPropagation()">${
-                  r.status==='pending' ? `<input type="checkbox" class="rcpt-check" value="${r.id}">` : ''}</td>
+                <td style="text-align:center" onclick="event.stopPropagation()"><input type="checkbox" class="rcpt-check" value="${r.id}" data-status="${r.status}"></td>
                 <td>${r.volunteer_name
                     ? `<strong>${esc(r.volunteer_name)}</strong>`
                     : `<span style="color:#b06a00;font-weight:600">⚠ Assign</span>`}</td>
@@ -3263,6 +3263,36 @@ async function deleteReceipt(rid) {
 
 function toggleAllReceipts(cb) {
   document.querySelectorAll('.rcpt-check').forEach(x => { x.checked = cb.checked; });
+}
+
+let _bulkAssignIds = [];
+async function assignSelected() {
+  const ids = Array.from(document.querySelectorAll('.rcpt-check:checked')).map(x => x.value);
+  if (!ids.length) { alert('Select one or more receipts first (checkboxes on the left).'); return; }
+  _bulkAssignIds = ids;
+  const vols = await GET('/volunteers');
+  const selectable = vols
+    .filter(v => v.status !== 'inactive')
+    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1)
+                     || (a.name || '').localeCompare(b.name || ''));
+  const opts = ['<option value="">— unassigned —</option>'].concat(
+    selectable.map(v => `<option value="${v.id}">${esc(v.name)}${v.status!=='active'?' ('+v.status+')':''}</option>`)
+  ).join('');
+  openDrawer('Assign volunteer', `
+    <p style="font-size:13px;color:var(--gray-4)">Assign a volunteer to <strong>${ids.length}</strong> selected receipt(s):</p>
+    <div class="form-group"><label>Volunteer</label><select id="bulk-vol" class="form-control">${opts}</select></div>
+    <div id="bulk-assign-err" style="color:#c00;font-size:13px"></div>`,
+    `<button class="btn btn-green" onclick="applyBulkAssign()">Assign</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+}
+async function applyBulkAssign() {
+  const vid = document.getElementById('bulk-vol').value || null;
+  try {
+    const r = await POST('/receipts/bulk-assign', { ids: _bulkAssignIds, volunteer_id: vid });
+    closeDrawer();
+    alert(`Assigned ${r.assigned} receipt(s).`);
+    renderReceipts(STATE.filter);
+  } catch(e) { document.getElementById('bulk-assign-err').textContent = e.message; }
 }
 
 async function approveSelected() {
