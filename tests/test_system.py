@@ -2360,6 +2360,50 @@ class TestReceiptParsing:
         assert 'Approved — owed' in h
         assert client.get('/api/reports/reimbursements').status_code == 401   # token required
 
+    def test_by_volunteer_groups_and_subtotals(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Grouped Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        cyc = client.post('/api/delivery-cycles', headers=auth, json={
+            'title': 'Group Cycle', 'delivery_date_start': '2026-08-15',
+            'delivery_date_end': '2026-08-16', 'request_open_at': '2026-08-01T08:00',
+            'request_close_at': '2026-08-07T23:59', 'status': 'upcoming'}).get_json()['id']
+        ids = []
+        for amt in (180, 120):
+            rid = client.post('/api/receipts', headers=auth, json={
+                'volunteer_id': vid, 'cycle_id': cyc, 'store': 'Costco',
+                'amount': amt, 'purchase_date': '2026-08-12'}).get_json()['id']
+            client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+            ids.append(rid)
+        d = client.get('/api/reimbursements/by-volunteer?filter=all', headers=auth).get_json()
+        v = next(v for v in d['volunteers'] if v['volunteer_id'] == vid)
+        assert v['owed'] == pytest.approx(300)
+        assert len(v['owed_ids']) == 2
+        c = next(c for c in v['cycles'] if c['cycle_id'] == cyc)
+        assert c['owed'] == pytest.approx(300) and len(c['receipts']) == 2
+
+    def test_bulk_pay_marks_all_and_validates_method(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Bulk Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': vid, 'store': 'BulkMart', 'amount': 45,
+            'purchase_date': '2026-07-01'}).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        d = client.get('/api/reimbursements/by-volunteer?filter=owed', headers=auth).get_json()
+        owed = next(v for v in d['volunteers'] if v['volunteer_id'] == vid)['owed_ids']
+        assert client.post('/api/reimbursements/bulk-pay', headers=auth,
+                           json={'ids': owed, 'payment_method': 'crypto'}).status_code == 422
+        r = client.post('/api/reimbursements/bulk-pay', headers=auth,
+                        json={'ids': owed, 'payment_method': 'zelle', 'payment_ref': 'Z9'})
+        assert r.status_code == 200 and r.get_json()['paid'] == len(owed)
+        d2 = client.get('/api/reimbursements/by-volunteer?filter=all', headers=auth).get_json()
+        v2 = next(v for v in d2['volunteers'] if v['volunteer_id'] == vid)
+        assert v2['owed'] == pytest.approx(0) and v2['paid'] == pytest.approx(45)
+        # already-paid ids are skipped, not re-paid
+        assert client.post('/api/reimbursements/bulk-pay', headers=auth,
+                           json={'ids': owed, 'payment_method': 'zelle'}).get_json()['paid'] == 0
+
     def test_store_fuzzy_matching(self):
         def tc(n):
             t = _server._store_tokens(n)

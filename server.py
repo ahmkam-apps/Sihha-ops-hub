@@ -4289,6 +4289,104 @@ def list_reimbursements():
         log.error(f'list_reimbursements error: {e}')
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/reimbursements/by-volunteer', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def reimbursements_by_volunteer():
+    """Reimbursements grouped by volunteer → delivery cycle, for the accordion view.
+    ?filter=all|owed|paid. Each volunteer + cycle carries owed/paid subtotals and the
+    list of still-owed reimbursement ids (for 'pay all owed')."""
+    db = get_db()
+    filt = (request.args.get('filter') or 'all').strip()
+    where = "rb.status IN ('pending','paid')"
+    if filt == 'owed': where = "rb.status='pending'"
+    elif filt == 'paid': where = "rb.status='paid'"
+    cyc = "COALESCE(r.cycle_id,(SELECT vs.cycle_id FROM volunteer_slots vs WHERE vs.id=r.slot_id))"
+    rows = db.execute(f'''
+        SELECT rb.id reimb_id, rb.status reimb_status, rb.amount, rb.payment_method, rb.payment_ref, rb.paid_date,
+               r.id receipt_id, COALESCE(NULLIF(r.purchase_date,''),substr(r.created_at,1,10)) date, r.store, r.file_url,
+               rb.volunteer_id, v.name volunteer_name,
+               f.family_code, f.name family_name,
+               {cyc} cycle_id, dc.title cycle_title, dc.delivery_date_start cycle_date
+        FROM reimbursements rb
+        JOIN receipts r ON rb.receipt_id = r.id
+        LEFT JOIN volunteers v ON rb.volunteer_id = v.id
+        LEFT JOIN families f ON r.family_id = f.id
+        LEFT JOIN delivery_cycles dc ON dc.id = {cyc}
+        WHERE {where}
+        ORDER BY v.name
+    ''').fetchall()
+
+    vols = {}
+    for r in rows:
+        amt = r['amount'] or 0
+        vk = r['volunteer_id'] or '__none__'
+        v = vols.setdefault(vk, {'volunteer_id': r['volunteer_id'],
+                                 'volunteer_name': r['volunteer_name'] or '(unassigned)',
+                                 'owed': 0.0, 'paid': 0.0, 'count': 0, 'owed_ids': [], 'cycles': {}})
+        v['count'] += 1
+        if r['reimb_status'] == 'paid':
+            v['paid'] += amt
+        else:
+            v['owed'] += amt; v['owed_ids'].append(r['reimb_id'])
+        ck = r['cycle_id'] or '__nocycle__'
+        c = v['cycles'].setdefault(ck, {'cycle_id': r['cycle_id'],
+                                        'cycle_title': r['cycle_title'] or 'No cycle',
+                                        'cycle_date': r['cycle_date'], 'owed': 0.0, 'paid': 0.0,
+                                        'owed_ids': [], 'receipts': []})
+        if r['reimb_status'] == 'paid':
+            c['paid'] += amt
+        else:
+            c['owed'] += amt; c['owed_ids'].append(r['reimb_id'])
+        fam = r['family_code'] or ''
+        if r['family_name']:
+            fam = (fam + ' · ' if fam else '') + r['family_name']
+        c['receipts'].append({'reimb_id': r['reimb_id'], 'receipt_id': r['receipt_id'],
+                              'date': r['date'], 'family': fam or None, 'store': r['store'],
+                              'file_url': r['file_url'], 'amount': round(amt, 2),
+                              'status': r['reimb_status'], 'payment_method': r['payment_method'],
+                              'payment_ref': r['payment_ref'], 'paid_date': r['paid_date']})
+
+    out = []
+    for v in vols.values():
+        cycles = sorted(v['cycles'].values(), key=lambda c: (c['cycle_date'] or ''), reverse=True)
+        for c in cycles:
+            c['owed'] = round(c['owed'], 2); c['paid'] = round(c['paid'], 2)
+        out.append({'volunteer_id': v['volunteer_id'], 'volunteer_name': v['volunteer_name'],
+                    'owed': round(v['owed'], 2), 'paid': round(v['paid'], 2), 'count': v['count'],
+                    'owed_ids': v['owed_ids'], 'cycles': cycles})
+    out.sort(key=lambda x: (-x['owed'], -x['paid'], x['volunteer_name'].lower()))
+    totals = {'owed': round(sum(v['owed'] for v in out), 2), 'paid': round(sum(v['paid'] for v in out), 2),
+              'receipts': len(rows), 'vol_with_balance': sum(1 for v in out if v['owed'] > 0)}
+    return jsonify({'volunteers': out, 'totals': totals})
+
+
+@app.route('/api/reimbursements/bulk-pay', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def bulk_pay_reimbursements():
+    """Mark several pending reimbursements paid in one action (a cycle or a volunteer's
+    whole run). Skips any that aren't currently pending."""
+    d = request.json or {}
+    ids = d.get('ids') or []
+    method = (d.get('payment_method') or '').strip()
+    ref = (d.get('payment_ref') or '').strip() or None
+    valid = ('venmo', 'zelle', 'check', 'cash', 'bank_transfer', 'cheque', 'other')
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'No reimbursements selected'}), 400
+    if method not in valid:
+        return jsonify({'error': f'Invalid payment method. Use one of: {", ".join(valid)}'}), 422
+    db = get_db()
+    paid = 0
+    for rid in ids:
+        row = db.execute("SELECT status FROM reimbursements WHERE id=?", (rid,)).fetchone()
+        if row and row['status'] == 'pending':
+            db.execute("UPDATE reimbursements SET status='paid', payment_method=?, payment_ref=?, "
+                       "paid_date=?, updated_at=? WHERE id=?", (method, ref, now()[:10], now(), rid))
+            paid += 1
+    db.commit()
+    return jsonify({'ok': True, 'paid': paid})
+
+
 @app.route('/api/reimbursements/<rid>', methods=['PUT'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_reimbursement(rid):

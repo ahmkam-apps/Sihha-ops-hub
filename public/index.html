@@ -388,6 +388,13 @@
   .badge-give     { background: var(--gold-pale);    color: var(--gold-deep); }
   .badge-info     { background: var(--accent-pale);  color: var(--accent-deep); }
 
+  /* ── Reimbursement accordion ─────────────────────────────── */
+  .vr-item { border: 1px solid var(--border); border-radius: var(--r-lg); margin-bottom: 10px; overflow: hidden; background: var(--surface); }
+  .vr-head { display: flex; align-items: center; gap: 10px; padding: 12px 15px; cursor: pointer; }
+  .vr-head:hover { background: var(--surface-2); }
+  .vr-chev { transition: transform 0.15s; color: var(--text-3); font-size: 17px; }
+  .vr-cyc { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 4px 6px; border-top: 1px solid var(--border); margin-top: 6px; }
+
   /* ── Drawer / Slide-in panel ────────────────────────────── */
   .overlay {
     display: none;
@@ -620,7 +627,7 @@
         <i class="ti ti-chart-bar icon" aria-hidden="true"></i> Finance
       </div>
       <div class="nav-item" onclick="nav('payments')" id="nav-payments">
-        <i class="ti ti-cash-banknote icon" aria-hidden="true"></i> Payments
+        <i class="ti ti-cash-banknote icon" aria-hidden="true"></i> Reimbursements
       </div>
       <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
         <i class="ti ti-receipt icon" aria-hidden="true"></i> Receipts
@@ -775,7 +782,7 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     summary: 'Finance',
-    payments: 'Payments', receipts: 'Receipts', donations: 'Donations', users: 'Users',
+    payments: 'Volunteer Reimbursement', receipts: 'Receipts', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
     catalog: 'Food Catalog', pricing: 'Pricing Table',
     cycle_detail: 'Delivery Detail', orders: 'Orders',
@@ -3699,74 +3706,139 @@ function drawSpendCharts(d) {
   }
 }
 
-// ── Payments (unified receipts + reimbursements) ───────────────────────────────
+// ── Volunteer Reimbursement (accordion: volunteer → cycle → receipt) ────────────
 async function renderPayments(filter) {
-  filter = filter || STATE.filter || 'pending';
+  filter = (filter || STATE.filter || 'all');
+  if (!['all','owed','paid'].includes(filter)) filter = 'all';
   STATE.filter = filter;
-  const rptStatus = (filter === 'rejected' || filter === 'all') ? 'all' : filter;
+  const rptStatus = filter === 'owed' ? 'approved' : (filter === 'paid' ? 'paid' : 'all');
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="downloadPDF('/reports/reimbursements?status=${rptStatus}')" title="Printable reimbursement report grouped by volunteer"><i class="ti ti-file-text" aria-hidden="true"></i> Volunteer report (PDF)</button>`;
-
-  let url = '/reimbursements';
-  if (filter !== 'all') url += '?status=' + filter;
+    `<button class="btn btn-outline" onclick="downloadPDF('/reports/reimbursements?status=${rptStatus}')" title="Printable reimbursement report grouped by volunteer"><i class="ti ti-file-text" aria-hidden="true"></i> Report (PDF)</button>`;
 
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const rows = await GET(url);
-    const pendingCount = rows.filter(r => r.status === 'pending').length;
-    document.getElementById('content').innerHTML = `
-      <div class="table-card">
-        <div class="table-header">
-          <span class="table-title">Payments${pendingCount ? ` <span style="background:var(--danger);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px">${pendingCount} pending</span>` : ''}</span>
-          <div class="filter-tabs">
-            ${['pending','paid','all','rejected'].map(f =>
-              `<div class="filter-tab ${filter===f?'active':''}"
-                onclick="renderPayments('${f}')">${f}</div>`
-            ).join('')}
-          </div>
+    const d = await GET('/reimbursements/by-volunteer?filter=' + filter);
+    window._vrData = d.volunteers;
+    const t = d.totals;
+    if (!STATE._openVol && d.volunteers.length)
+      STATE._openVol = (d.volunteers.find(v => v.owed > 0) || d.volunteers[0]).volunteer_id;
+
+    const rcptRow = (rc) => `
+      <tr>
+        <td style="white-space:nowrap;color:var(--text-3);font-size:12px">${rc.date ? fmtDate(rc.date) : '—'}</td>
+        <td style="font-size:12px">${esc(rc.family || '—')}</td>
+        <td>${esc(rc.store || '—')}</td>
+        <td style="text-align:right;font-weight:600">${fmtMoney(rc.amount)}</td>
+        <td>${rc.status === 'paid'
+              ? `<span class="badge badge-approved">Paid${rc.payment_method ? ' · ' + esc(rc.payment_method) : ''}</span>`
+              : `<span class="badge badge-pending">Owed</span>`}</td>
+        <td style="text-align:right;white-space:nowrap">
+          ${rc.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rc.file_url}')" style="color:var(--accent);font-size:13px;margin-right:10px" title="View receipt"><i class="ti ti-photo" aria-hidden="true"></i></a>` : ''}
+          ${rc.status === 'pending'
+            ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 10px;font-size:11px" onclick="payOne('${rc.reimb_id}','this receipt')">Pay</button>`
+            : `<button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px" onclick="undoPayment('${rc.reimb_id}')" title="Marked paid by mistake? Undo it">Undo</button>`}
+        </td>
+      </tr>`;
+
+    const acc = d.volunteers.map((v, vi) => {
+      const open = v.volunteer_id === STATE._openVol;
+      const cyclesHtml = v.cycles.map((c, ci) => `
+        <div class="vr-cyc">
+          <div><span style="font-weight:600;font-size:13px">${esc(c.cycle_title)}</span>
+            <span style="color:var(--text-3);font-size:12px;margin-left:8px">${c.cycle_date ? fmtDate(c.cycle_date) : ''}${c.owed > 0 ? ' · owed ' + fmtMoney(c.owed) : ''}${c.paid > 0 ? ' · paid ' + fmtMoney(c.paid) : ''}</span></div>
+          ${c.owed > 0 ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:4px 11px;font-size:11px;white-space:nowrap" onclick="payCyc(${vi},${ci})"><i class="ti ti-cash-banknote" aria-hidden="true"></i> Pay cycle (${fmtMoney(c.owed)})</button>` : ''}
         </div>
-        <table>
-          <thead><tr>
-            <th>Volunteer</th><th>Store</th><th>Date</th><th>Amount</th>
-            <th>Receipt</th><th>Method</th><th>Status</th><th></th>
-          </tr></thead>
-          <tbody>
-            ${rows.length ? rows.map(r => `
-              <tr>
-                <td><strong>${esc(r.volunteer_name||'—')}</strong></td>
-                <td>${esc(r.store||'—')}</td>
-                <td style="font-size:11px;white-space:nowrap">${fmtDate(r.purchase_date)}</td>
-                <td><strong>${fmtMoney(r.amount)}</strong></td>
-                <td>${r.receipt_photo
-                  ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${r.receipt_photo}')" style="font-size:12px;color:var(--green);white-space:nowrap"><i class="ti ti-photo" aria-hidden="true"></i> View</a>`
-                  : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
-                <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${esc(r.payment_ref)}</span>` : ''}</td>
-                <td>${badge(r.status)}</td>
-                <td style="white-space:nowrap" id="reimb-actions-${r.id}">
-                  ${r.status==='pending' ? `
-                    <div style="display:flex;gap:4px;flex-wrap:wrap">
-                      ${['venmo','zelle','check','cash'].map(m =>
-                        `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 7px;font-size:11px"
-                          onclick="quickPayReimb('${r.id}','${m}',${r.amount||0})">${m.charAt(0).toUpperCase()+m.slice(1)}</button>`
-                      ).join('')}
-                      <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);padding:3px 7px;font-size:11px"
-                        onclick="rejectReimb('${r.id}')"><i class="ti ti-x" aria-hidden="true"></i></button>
-                    </div>` : r.status==='paid' ? `
-                    <span style="font-size:11px;color:var(--accent)"><i class="ti ti-check" aria-hidden="true"></i> Paid</span>
-                    <button class="btn btn-sm btn-outline" style="padding:3px 8px;font-size:11px;margin-left:6px" title="Marked paid by mistake? Undo it" onclick="undoPayment('${r.id}')">Undo</button>`
-                    : r.status==='rejected' ? `
-                    <button class="btn btn-sm btn-outline" style="padding:3px 8px;font-size:11px" onclick="undoPayment('${r.id}')" title="Reopen as pending">Reopen</button>` : ''
-                  }
-                </td>
-              </tr>`).join('') :
-              '<tr class="empty-row"><td colspan="8">No payments found</td></tr>'}
-          </tbody>
-        </table>
+        <table><tbody>${c.receipts.map(rcptRow).join('')}</tbody></table>`).join('');
+      return `
+      <div class="vr-item" data-open="${open ? 1 : 0}" data-vol="${v.volunteer_id || ''}">
+        <div class="vr-head" onclick="toggleVol(this)">
+          <i class="ti ti-chevron-right vr-chev" style="${open ? 'transform:rotate(90deg)' : ''}" aria-hidden="true"></i>
+          <div style="flex:1;min-width:0">
+            <span style="font-weight:600">${esc(v.volunteer_name)}</span>
+            <span style="color:var(--text-3);font-size:12px;margin-left:8px">${v.count} receipt${v.count !== 1 ? 's' : ''} · ${v.cycles.length} cycle${v.cycles.length !== 1 ? 's' : ''}</span>
+          </div>
+          ${v.owed > 0 ? `<span class="badge badge-pending">${fmtMoney(v.owed)} owed</span>` : ''}
+          ${v.paid > 0 ? `<span class="badge badge-approved">${fmtMoney(v.paid)} paid</span>` : ''}
+          ${v.owed > 0 ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:4px 11px;font-size:11px;margin-left:4px;white-space:nowrap" onclick="event.stopPropagation();payVol(${vi})">Pay all owed</button>` : ''}
+        </div>
+        <div class="vr-body" style="display:${open ? 'block' : 'none'};padding:0 16px 14px">${cyclesHtml || '<div style="padding:12px;color:var(--text-3);font-size:13px">No receipts.</div>'}</div>
+      </div>`;
+    }).join('');
+
+    document.getElementById('content').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
+          <div class="stat-card" style="cursor:default;border-left:4px solid var(--warning)"><div class="stat-label">Owed to volunteers</div><div class="stat-value" style="color:var(--warning)">${fmtMoney(t.owed)}</div><div style="font-size:11px;color:var(--text-3)">${t.vol_with_balance} volunteer${t.vol_with_balance !== 1 ? 's' : ''} with a balance</div></div>
+          <div class="stat-card" style="cursor:default;border-left:4px solid var(--accent)"><div class="stat-label">Paid out</div><div class="stat-value">${fmtMoney(t.paid)}</div></div>
+          <div class="stat-card" style="cursor:default;border-left:4px solid var(--gold)"><div class="stat-label">Receipts</div><div class="stat-value" style="color:var(--gold-deep)">${t.receipts}</div></div>
+        </div>
+        <div class="table-card">
+          <div class="table-header">
+            <span class="table-title">Volunteer reimbursement</span>
+            <div class="filter-tabs">
+              ${['all','owed','paid'].map(f => `<div class="filter-tab ${filter===f?'active':''}" onclick="renderPayments('${f}')">${f}</div>`).join('')}
+            </div>
+          </div>
+          <div id="vr-acc" style="padding:12px 14px">${acc || '<div style="text-align:center;color:var(--text-3);padding:36px">No reimbursements found.</div>'}</div>
+        </div>
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
+
+// Single-open accordion toggle
+function toggleVol(el) {
+  const item = el.closest('.vr-item');
+  const wasOpen = item.dataset.open === '1';
+  document.querySelectorAll('#vr-acc .vr-item').forEach(i => {
+    i.dataset.open = '0';
+    const b = i.querySelector('.vr-body'); if (b) b.style.display = 'none';
+    const ch = i.querySelector('.vr-chev'); if (ch) ch.style.transform = 'none';
+  });
+  if (!wasOpen) {
+    item.dataset.open = '1';
+    item.querySelector('.vr-body').style.display = 'block';
+    const ch = item.querySelector('.vr-chev'); if (ch) ch.style.transform = 'rotate(90deg)';
+    STATE._openVol = item.dataset.vol;
+  } else {
+    STATE._openVol = null;
+  }
+}
+
+// Payment drawer — used for single receipt, whole cycle, or a volunteer's full balance
+function _openPayDrawer(ids, label) {
+  if (!ids || !ids.length) { showToast('Nothing owed here.'); return; }
+  window._payIds = ids;
+  openDrawer('Record payment', `
+    <p style="font-size:13px;color:var(--text-2);margin-bottom:14px">Mark <strong>${ids.length}</strong> receipt${ids.length!==1?'s':''} — <strong>${esc(label)}</strong> — as paid.</p>
+    <div class="form-group"><label>Payment method</label>
+      <select id="pay-method" class="form-control">
+        <option value="zelle">Zelle</option><option value="venmo">Venmo</option>
+        <option value="check">Check</option><option value="cash">Cash</option>
+        <option value="bank_transfer">Bank transfer</option><option value="other">Other</option>
+      </select></div>
+    <div class="form-group"><label>Reference <span style="color:var(--text-3);font-weight:400">(optional)</span></label>
+      <input id="pay-ref" class="form-control" placeholder="confirmation # / check #"></div>
+    <div id="pay-err" style="color:var(--danger);font-size:13px"></div>`,
+    `<button class="btn btn-green" onclick="applyBulkPay()"><i class="ti ti-check" aria-hidden="true"></i> Mark paid</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+}
+async function applyBulkPay() {
+  const method = document.getElementById('pay-method').value;
+  const ref = document.getElementById('pay-ref').value.trim();
+  try {
+    const r = await POST('/reimbursements/bulk-pay', { ids: window._payIds, payment_method: method, payment_ref: ref });
+    closeDrawer();
+    showToast(`Marked ${r.paid} receipt${r.paid!==1?'s':''} paid.`);
+    renderPayments(STATE.filter);
+  } catch(e) {
+    const el = document.getElementById('pay-err'); if (el) el.textContent = e.message;
+  }
+}
+function payVol(vi) { const v = window._vrData[vi]; _openPayDrawer(v.owed_ids, v.volunteer_name); }
+function payCyc(vi, ci) { const c = window._vrData[vi].cycles[ci]; _openPayDrawer(c.owed_ids, c.cycle_title); }
+function payOne(id, label) { _openPayDrawer([id], label); }
 
 // ── Donations ─────────────────────────────────────────────────────────────────
 async function renderDonations(filter) {
