@@ -3918,6 +3918,8 @@ def finance_summary():
         SELECT
             dc.id, dc.title, dc.delivery_date_start, dc.status as cycle_status,
             COUNT(DISTINCT CASE WHEN r.status='approved' THEN r.id END) as approved_count,
+            COUNT(DISTINCT CASE WHEN r.status='pending'  THEN r.id END) as pending_count,
+            COALESCE(SUM(CASE WHEN r.status='pending' THEN r.amount ELSE 0 END),0) as pending_total,
             COALESCE(SUM(CASE WHEN reimb.status IN ('pending','paid') THEN reimb.amount ELSE 0 END),0) as committed_total,
             COALESCE(SUM(CASE WHEN reimb.status='paid'    THEN reimb.amount ELSE 0 END),0) as paid_total,
             COALESCE(SUM(CASE WHEN reimb.status='pending' THEN reimb.amount ELSE 0 END),0) as outstanding_total
@@ -3938,6 +3940,8 @@ def finance_summary():
     unassigned = db.execute('''
         SELECT
             COUNT(DISTINCT CASE WHEN r.status='approved' THEN r.id END) as approved_count,
+            COUNT(DISTINCT CASE WHEN r.status='pending'  THEN r.id END) as pending_count,
+            COALESCE(SUM(CASE WHEN r.status='pending' THEN r.amount ELSE 0 END),0) as pending_total,
             COALESCE(SUM(CASE WHEN reimb.status IN ('pending','paid') THEN reimb.amount ELSE 0 END),0) as committed_total,
             COALESCE(SUM(CASE WHEN reimb.status='paid'    THEN reimb.amount ELSE 0 END),0) as paid_total,
             COALESCE(SUM(CASE WHEN reimb.status='pending' THEN reimb.amount ELSE 0 END),0) as outstanding_total
@@ -3948,11 +3952,13 @@ def finance_summary():
     ''').fetchone()
 
     cyc_list = [dict(c) for c in cycles]
-    if unassigned and unassigned['approved_count']:
+    if unassigned and (unassigned['approved_count'] or unassigned['pending_count']):
         cyc_list.append({
             'id': None, 'title': 'Unassigned (no cycle)', 'delivery_date_start': None,
             'cycle_status': None,
             'approved_count':   unassigned['approved_count'],
+            'pending_count':    unassigned['pending_count'],
+            'pending_total':    round(unassigned['pending_total'], 2),
             'committed_total':  round(unassigned['committed_total'], 2),
             'paid_total':       round(unassigned['paid_total'], 2),
             'outstanding_total': round(unassigned['outstanding_total'], 2),

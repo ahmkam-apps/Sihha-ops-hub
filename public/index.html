@@ -3545,18 +3545,20 @@ async function renderFinanceSummary() {
         <div class="table-card">
           <div class="table-header"><span class="table-title">Per-cycle spend</span></div>
           <table>
-            <thead><tr><th>Cycle</th><th>Date</th><th>Approved</th><th>Committed</th><th>Paid</th><th>Outstanding</th></tr></thead>
+            <thead><tr><th>Cycle</th><th>Date</th><th>Pending review</th><th>Committed</th><th>Paid</th><th>Outstanding</th></tr></thead>
             <tbody>
-              ${cycles.some(c => c.approved_count > 0) ? cycles.map(c => `
-                <tr style="${c.approved_count===0?'opacity:0.4':''}">
+              ${cycles.some(c => (c.approved_count||0) + (c.pending_count||0) > 0) ? cycles.map(c => {
+                const active = (c.approved_count||0) + (c.pending_count||0) > 0;
+                return `
+                <tr style="${active?'':'opacity:0.4'}">
                   <td><strong>${esc(c.title)}</strong></td>
                   <td style="font-size:12px;white-space:nowrap">${c.delivery_date_start ? fmtDate(c.delivery_date_start) : '—'}</td>
-                  <td style="text-align:center">${c.approved_count||0}</td>
+                  <td style="color:${(c.pending_count||0)>0?'var(--warning)':'var(--gray-3)'}">${(c.pending_count||0)>0?fmtMoney(c.pending_total)+' ('+c.pending_count+')':'—'}</td>
                   <td><strong>${fmtMoney(c.committed_total)}</strong></td>
                   <td style="color:var(--accent)">${fmtMoney(c.paid_total)}</td>
-                  <td style="color:${c.outstanding_total>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(c.outstanding_total)}</td>
-                </tr>`).join('')
-              : '<tr class="empty-row"><td colspan="6">No approved receipts yet</td></tr>'}
+                  <td style="color:${c.outstanding_total>0?'var(--warning)':'var(--gray-3)'}">${fmtMoney(c.outstanding_total)}</td>
+                </tr>`; }).join('')
+              : '<tr class="empty-row"><td colspan="6">No receipts yet</td></tr>'}
             </tbody>
           </table>
         </div>
