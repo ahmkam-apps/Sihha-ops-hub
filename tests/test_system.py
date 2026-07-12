@@ -2427,6 +2427,52 @@ class TestReceiptParsing:
         assert rc['store'] == 'RightStore'
         assert fam['family_code'] in (rc['family'] or '')
 
+    def test_exclude_line_item_reduces_reimbursable(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Exclude Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': vid, 'store': 'MixMart', 'amount': 100, 'purchase_date': '2026-07-03',
+            'parsed': {'store': 'MixMart', 'total': 100, 'confidence': 0.9, 'line_items': [
+                {'name': 'Groceries', 'qty': 1, 'unit_price': 70, 'line_total': 70},
+                {'name': 'Personal soda', 'qty': 1, 'unit_price': 30, 'line_total': 30}]},
+        }).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        det = client.get('/api/receipts/' + rid, headers=auth).get_json()
+        soda = next(i for i in det['items'] if i['name'] == 'Personal soda')
+        # exclude the personal charge
+        r = client.put('/api/receipt-items/' + soda['id'], headers=auth, json={'excluded': True})
+        assert r.status_code == 200 and r.get_json()['reimbursable_amount'] == pytest.approx(70)
+        det2 = client.get('/api/receipts/' + rid, headers=auth).get_json()
+        assert det2['reimbursable_amount'] == pytest.approx(70) and det2['excluded_total'] == pytest.approx(30)
+        # owed reimbursement dropped to 70
+        d = client.get('/api/reimbursements/by-volunteer?filter=owed', headers=auth).get_json()
+        rc = next(rc for v in d['volunteers'] if v['volunteer_id'] == vid
+                  for c in v['cycles'] for rc in c['receipts'] if rc['receipt_id'] == rid)
+        assert rc['amount'] == pytest.approx(70)
+        # re-including restores full amount
+        client.put('/api/receipt-items/' + soda['id'], headers=auth, json={'excluded': False})
+        assert client.get('/api/receipts/' + rid, headers=auth).get_json()['reimbursable_amount'] == pytest.approx(100)
+
+    def test_exclude_blocked_after_paid(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Paid Excl Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': vid, 'store': 'PaidMart', 'amount': 40, 'purchase_date': '2026-07-04',
+            'parsed': {'store': 'PaidMart', 'total': 40, 'confidence': 0.9, 'line_items': [
+                {'name': 'Item A', 'qty': 1, 'unit_price': 40, 'line_total': 40}]},
+        }).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        item = client.get('/api/receipts/' + rid, headers=auth).get_json()['items'][0]
+        # pay it, then excluding must be blocked
+        rb = next(r for r in client.get('/api/reimbursements', headers=auth).get_json()
+                  if r['receipt_id'] == rid)
+        client.post('/api/reimbursements/bulk-pay', headers=auth,
+                    json={'ids': [rb['id']], 'payment_method': 'cash'})
+        res = client.put('/api/receipt-items/' + item['id'], headers=auth, json={'excluded': True})
+        assert res.status_code == 409
+
     def test_store_fuzzy_matching(self):
         def tc(n):
             t = _server._store_tokens(n)

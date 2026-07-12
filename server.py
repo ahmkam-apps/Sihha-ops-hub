@@ -692,6 +692,10 @@ def bootstrap_db():
         ('parsed_at',        'TEXT'),
         ('parsed_json',      'TEXT'),
         ('amount_mismatch',  'INTEGER DEFAULT 0'),
+        # reimbursable_amount = confirmed total minus any line items excluded from
+        # reimbursement (a volunteer's personal charge on the same receipt). NULL means
+        # "no exclusions yet" and callers treat it as equal to amount.
+        ('reimbursable_amount', 'REAL'),
     ]:
         try:
             conn.execute(f'ALTER TABLE receipts ADD COLUMN {_col} {_def}')
@@ -715,6 +719,12 @@ def bootstrap_db():
         )
     ''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON receipt_items(receipt_id)')
+    # excluded=1 removes this line's line_total from the receipt's reimbursable amount.
+    try:
+        conn.execute('ALTER TABLE receipt_items ADD COLUMN excluded INTEGER DEFAULT 0')
+        log.info('Migration: added receipt_items.excluded')
+    except sqlite3.OperationalError:
+        pass
 
     # Add email/wa_phone/wa_apikey to users (treasurer notification channels)
     for _col, _def in [('email', 'TEXT'), ('wa_phone', 'TEXT'), ('wa_apikey', 'TEXT')]:
@@ -3696,6 +3706,25 @@ def create_receipt():
             log.warning(f'Treasurer notification failed: {e}')
     return jsonify({'id': rid}), 201
 
+def _recompute_reimbursable(db, rid):
+    """Reimbursable = confirmed receipt total minus the line_total of any excluded
+    items (clamped at 0). Persist it on the receipt and keep an unpaid (pending)
+    reimbursement's amount in sync. Paid reimbursements are never touched."""
+    row = db.execute("SELECT amount FROM receipts WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return None
+    amt = float(row['amount'] or 0)
+    excl = db.execute(
+        "SELECT COALESCE(SUM(line_total),0) s FROM receipt_items "
+        "WHERE receipt_id=? AND excluded=1", (rid,)
+    ).fetchone()['s'] or 0
+    reimb = round(max(0.0, amt - float(excl)), 2)
+    db.execute("UPDATE receipts SET reimbursable_amount=? WHERE id=?", (reimb, rid))
+    db.execute("UPDATE reimbursements SET amount=?, updated_at=? "
+               "WHERE receipt_id=? AND status='pending'", (reimb, now(), rid))
+    return reimb
+
+
 @app.route('/api/receipts/<rid>', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def get_receipt(rid):
@@ -3714,11 +3743,21 @@ def get_receipt(rid):
     if not r:
         return jsonify({'error': 'Not found'}), 404
     items = db.execute(
-        "SELECT id, line_no, name, qty, unit_price, line_total, category "
+        "SELECT id, line_no, name, qty, unit_price, line_total, category, "
+        "COALESCE(excluded,0) as excluded "
         "FROM receipt_items WHERE receipt_id=? ORDER BY line_no", (rid,)
     ).fetchall()
     out = dict(r)
     out['items'] = [dict(i) for i in items]
+    # Effective reimbursable (falls back to amount when no exclusions recorded yet).
+    out['reimbursable_amount'] = (r['reimbursable_amount']
+                                  if r['reimbursable_amount'] is not None else r['amount'])
+    out['excluded_total'] = round(sum((i['line_total'] or 0) for i in items if i['excluded']), 2)
+    # Is the linked reimbursement already paid? (locks excluded-item editing)
+    rb = db.execute("SELECT status FROM reimbursements WHERE receipt_id=? "
+                    "ORDER BY (status='paid') DESC LIMIT 1", (rid,)).fetchone()
+    out['reimb_status'] = rb['status'] if rb else None
+    out['reimb_paid'] = bool(rb and rb['status'] == 'paid')
     return jsonify(out)
 
 
@@ -3760,24 +3799,31 @@ def update_receipt(rid):
          mismatch, now(), rid)
     )
 
-    # Keep a pending reimbursement in sync with an edited amount/volunteer.
-    if 'amount' in d or 'volunteer_id' in d:
+    # Keep a pending reimbursement's volunteer in sync with the receipt.
+    if 'volunteer_id' in d:
         db.execute(
-            "UPDATE reimbursements SET amount=?, volunteer_id=?, updated_at=? "
+            "UPDATE reimbursements SET volunteer_id=?, updated_at=? "
             "WHERE receipt_id=? AND status='pending'",
-            (new_amount, pick('volunteer_id'), now(), rid)
+            (pick('volunteer_id'), now(), rid)
         )
+    # If the total changed, recompute reimbursable (respects excluded items) and
+    # push it onto any pending reimbursement.
+    if 'amount' in d:
+        _recompute_reimbursable(db, rid)
 
     # Approval is the single point money is committed: create the payable (unpaid)
-    # exactly once when the receipt first becomes 'approved'.
+    # exactly once when the receipt first becomes 'approved'. Amount owed is the
+    # reimbursable total, not the raw receipt total.
     if d.get('status') == 'approved' and row['status'] != 'approved':
         existing = db.execute("SELECT id FROM reimbursements WHERE receipt_id=?", (rid,)).fetchone()
         if not existing:
+            reimb_amt = _recompute_reimbursable(db, rid)   # no pending reimb yet, just sets the receipt figure
             db.execute(
                 '''INSERT INTO reimbursements
                    (id,receipt_id,volunteer_id,amount,status,approved_by,created_at)
                    VALUES (?,?,?,?,?,?,?)''',
-                (str(uuid.uuid4()), rid, pick('volunteer_id'), new_amount,
+                (str(uuid.uuid4()), rid, pick('volunteer_id'),
+                 reimb_amt if reimb_amt is not None else new_amount,
                  'pending', g.user['user_id'], now())
             )
     # Un-approving (back to pending) or rejecting removes the UNPAID payable.
@@ -3900,15 +3946,34 @@ def bulk_assign_receipts():
 @app.route('/api/receipt-items/<item_id>', methods=['PUT'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_receipt_item(item_id):
-    """Manually set/override a line item's spending category (from the food catalog,
-    'Other', or blank to clear). Lets an admin correct what the model guessed."""
+    """Edit a line item: override its spending category and/or exclude it from
+    reimbursement (a volunteer's personal charge on a shared receipt). Excluding
+    subtracts the line's total from what's owed; blocked once the receipt is paid."""
     db = get_db()
-    if not db.execute("SELECT id FROM receipt_items WHERE id=?", (item_id,)).fetchone():
+    item = db.execute("SELECT id, receipt_id FROM receipt_items WHERE id=?", (item_id,)).fetchone()
+    if not item:
         return jsonify({'error': 'Not found'}), 404
-    cat = ((request.json or {}).get('category') or '').strip()[:60] or None
-    db.execute("UPDATE receipt_items SET category=? WHERE id=?", (cat, item_id))
+    d = request.json or {}
+    rid = item['receipt_id']
+
+    resp = {'ok': True}
+    if 'category' in d:
+        cat = (d.get('category') or '').strip()[:60] or None
+        db.execute("UPDATE receipt_items SET category=? WHERE id=?", (cat, item_id))
+        resp['category'] = cat
+
+    if 'excluded' in d:
+        # Can't change what's owed after it's been paid out.
+        paid = db.execute("SELECT 1 FROM reimbursements WHERE receipt_id=? AND status='paid'",
+                          (rid,)).fetchone()
+        if paid:
+            return jsonify({'error': 'This receipt has already been paid; undo the payment before changing excluded items.'}), 409
+        db.execute("UPDATE receipt_items SET excluded=? WHERE id=?",
+                   (1 if d['excluded'] else 0, item_id))
+        resp['reimbursable_amount'] = _recompute_reimbursable(db, rid)
+
     db.commit()
-    return jsonify({'ok': True, 'category': cat})
+    return jsonify(resp)
 
 
 @app.route('/api/receipts/rename-store', methods=['POST'])
