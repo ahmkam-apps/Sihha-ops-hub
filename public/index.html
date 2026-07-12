@@ -3487,7 +3487,7 @@ async function renderFinanceSummary() {
               ${cycles.some(c => c.approved_count > 0) ? cycles.map(c => `
                 <tr style="${c.approved_count===0?'opacity:0.4':''}">
                   <td><strong>${esc(c.title)}</strong></td>
-                  <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)}</td>
+                  <td style="font-size:12px;white-space:nowrap">${c.delivery_date_start ? fmtDate(c.delivery_date_start) : '—'}</td>
                   <td style="text-align:center">${c.approved_count||0}</td>
                   <td><strong>${fmtMoney(c.committed_total)}</strong></td>
                   <td style="color:var(--accent)">${fmtMoney(c.paid_total)}</td>

@@ -3871,6 +3871,31 @@ def finance_summary():
         ORDER BY dc.delivery_date_start
     ''').fetchall()
 
+    # Receipts not tied to any cycle (e.g. admin dashboard uploads) — surface them as
+    # an "Unassigned" row so per-cycle totals reconcile with the overall committed.
+    unassigned = db.execute('''
+        SELECT
+            COUNT(DISTINCT CASE WHEN r.status='approved' THEN r.id END) as approved_count,
+            COALESCE(SUM(CASE WHEN reimb.status IN ('pending','paid') THEN reimb.amount ELSE 0 END),0) as committed_total,
+            COALESCE(SUM(CASE WHEN reimb.status='paid'    THEN reimb.amount ELSE 0 END),0) as paid_total,
+            COALESCE(SUM(CASE WHEN reimb.status='pending' THEN reimb.amount ELSE 0 END),0) as outstanding_total
+        FROM receipts r
+        LEFT JOIN reimbursements reimb ON reimb.receipt_id = r.id
+        WHERE r.status != 'rejected'
+          AND COALESCE(r.cycle_id, (SELECT vs.cycle_id FROM volunteer_slots vs WHERE vs.id = r.slot_id)) IS NULL
+    ''').fetchone()
+
+    cyc_list = [dict(c) for c in cycles]
+    if unassigned and unassigned['approved_count']:
+        cyc_list.append({
+            'id': None, 'title': 'Unassigned (no cycle)', 'delivery_date_start': None,
+            'cycle_status': None,
+            'approved_count':   unassigned['approved_count'],
+            'committed_total':  round(unassigned['committed_total'], 2),
+            'paid_total':       round(unassigned['paid_total'], 2),
+            'outstanding_total': round(unassigned['outstanding_total'], 2),
+        })
+
     return jsonify({
         'totals': {
             'income':              round(income, 2),
@@ -3883,7 +3908,7 @@ def finance_summary():
             'pending_count':       pending_count,
             'approved_count':      approved_count,
         },
-        'cycles': [dict(c) for c in cycles]
+        'cycles': cyc_list
     })
 
 
