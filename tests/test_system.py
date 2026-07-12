@@ -2323,6 +2323,19 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_store_names_normalized_in_report(self, client, auth):
+        for s in ["ZSam's Club", "ZSams Club", "ZSAMS CLUB", "ZPenzeys Spices"]:
+            rid = client.post('/api/receipts', headers=auth,
+                              json={'store': s, 'amount': 10}).get_json()['id']
+            client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        stores = {x['store']: x['count'] for x in
+                  client.get('/api/finance/spend-report', headers=auth).get_json()['by_store']}
+        # the three Sam's Club spellings fold into one group of 3
+        sams = [c for name, c in stores.items() if 'sam' in name.lower()]
+        assert sams and max(sams) == 3
+        # a genuinely different store is not swept in
+        assert any('penzeys' in name.lower() for name in stores)
+
     def test_manual_item_category_override(self, client, auth):
         rid = client.post('/api/receipts', headers=auth, json={
             'amount': 20, 'store': 'X',

@@ -3322,6 +3322,43 @@ def _to_float(v):
         return None
 
 
+_STORE_STOPWORDS = {
+    'grocer', 'grocers', 'grocery', 'groceries', 'market', 'markets', 'supermarket',
+    'store', 'stores', 'mart', 'foods', 'food', 'wholesale', 'warehouse', 'supercenter',
+    'super', 'center', 'centre', 'inc', 'llc', 'co', 'company', 'the', 'and', 'of',
+}
+
+def _store_key(name):
+    """Fold a store name to a comparison key so spelling/punctuation/generic-word
+    variants collapse: 'Sam's Club' == 'Sams Club', 'International Spices & Grocer' ==
+    'International Spices'. Drops apostrophes, punctuation, and common grocery filler."""
+    import re
+    if not name:
+        return ''
+    s = name.lower().replace("'", "").replace("’", "")   # apostrophes vanish, no space
+    s = re.sub(r'[^a-z0-9 ]', ' ', s)
+    toks = [t for t in s.split() if t and t not in _STORE_STOPWORDS]
+    return ' '.join(toks) or re.sub(r'[^a-z0-9]', '', name.lower())
+
+
+def _group_by_store(rows, limit=50):
+    """Aggregate (store, amount) rows by normalized store key; label each group with
+    its most-common original spelling. rows: iterable of sqlite Rows/dicts."""
+    groups = {}
+    for r in rows:
+        raw = (r['store'] or '').strip() or '(unknown)'
+        key = _store_key(raw) or raw.lower()
+        g = groups.setdefault(key, {'total': 0.0, 'count': 0, 'labels': {}})
+        g['total'] += (r['amount'] or 0)
+        g['count'] += 1
+        g['labels'][raw] = g['labels'].get(raw, 0) + 1
+    out = [{'store': max(g['labels'].items(), key=lambda kv: kv[1])[0],
+            'total': round(g['total'], 2), 'count': g['count']}
+           for g in groups.values()]
+    out.sort(key=lambda x: -x['total'])
+    return out[:limit]
+
+
 def _sane_receipt_date(s):
     """Return a plausible YYYY-MM-DD or None. Guards against the vision model guessing
     a wrong year (e.g. defaulting to 2023) — a receipt date more than ~13 months old or
@@ -3856,12 +3893,8 @@ def receipts_analytics():
     """Spend breakdowns from approved receipts + their parsed line items:
     by store, by volunteer (with amount still owed), top items, and monthly trend."""
     db = get_db()
-    by_store = [dict(r) for r in db.execute('''
-        SELECT COALESCE(NULLIF(TRIM(store),''),'(unknown)') as store,
-               ROUND(COALESCE(SUM(amount),0),2) as total, COUNT(*) as count
-        FROM receipts WHERE status='approved'
-        GROUP BY LOWER(COALESCE(TRIM(store),'')) ORDER BY total DESC LIMIT 50
-    ''').fetchall()]
+    by_store = _group_by_store(
+        db.execute("SELECT store, amount FROM receipts WHERE status='approved'").fetchall(), limit=50)
     by_volunteer = [dict(r) for r in db.execute('''
         SELECT COALESCE(v.name,'(unassigned)') as volunteer_name,
                ROUND(COALESCE(SUM(r.amount),0),2) as total, COUNT(*) as count,
@@ -3945,10 +3978,9 @@ def _spend_report_data(db, since, until):
     by_month = [dict(r) for r in db.execute(
         f"""SELECT substr({date_expr},1,7) as month, ROUND(SUM(r.amount),2) total, COUNT(*) count
             FROM receipts r WHERE {w} GROUP BY month ORDER BY month""", params).fetchall()]
-    by_store = [dict(r) for r in db.execute(
-        f"""SELECT COALESCE(NULLIF(TRIM(r.store),''),'(unknown)') store, ROUND(SUM(r.amount),2) total, COUNT(*) count
-            FROM receipts r WHERE {w} GROUP BY LOWER(COALESCE(TRIM(r.store),''))
-            ORDER BY total DESC LIMIT 12""", params).fetchall()]
+    by_store = _group_by_store(
+        db.execute(f"SELECT r.store as store, r.amount as amount FROM receipts r WHERE {w}", params).fetchall(),
+        limit=12)
     top_items = [dict(r) for r in db.execute(
         f"""SELECT ri.name, COUNT(*) count, ROUND(SUM(ri.line_total),2) total
             FROM receipt_items ri JOIN receipts r ON ri.receipt_id=r.id WHERE {w}
