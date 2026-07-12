@@ -3152,7 +3152,9 @@ def _build_receipt_prompt(category_names):
         "\"line_items\":[{\"name\":string, \"qty\":number|null, "
         "\"unit_price\":number|null, \"line_total\":number|null" + cat_field + "}]}. "
         "Use the receipt's grand total for \"total\". Omit loyalty/discount summary lines "
-        "that are not products." + cat_rule +
+        "that are not products. For purchase_date, use ONLY a date actually printed on the "
+        "receipt and read the year exactly as shown — NEVER guess a date or year; if no date "
+        "is clearly visible, set purchase_date to null." + cat_rule +
         " The image or PDF may be rotated, sideways, or UPSIDE DOWN, or a low-quality "
         "scan — mentally rotate it and read it regardless of orientation. "
         "Only if it is genuinely unreadable, set confidence to 0 and null fields."
@@ -3300,6 +3302,23 @@ def _to_float(v):
         return None
 
 
+def _sane_receipt_date(s):
+    """Return a plausible YYYY-MM-DD or None. Guards against the vision model guessing
+    a wrong year (e.g. defaulting to 2023) — a receipt date more than ~13 months old or
+    in the future is treated as a misread and dropped (falls back to the upload date)."""
+    if not s:
+        return None
+    from datetime import timedelta as _td
+    try:
+        d = datetime.fromisoformat(str(s)[:10]).date()
+    except Exception:
+        return None
+    today = datetime.utcnow().date()
+    if d > today + _td(days=2) or d < today - _td(days=400):
+        return None
+    return d.isoformat()
+
+
 def _normalize_parsed_receipt(p):
     """Coerce the model's JSON into a clean, typed dict we can trust downstream."""
     items = []
@@ -3321,7 +3340,7 @@ def _normalize_parsed_receipt(p):
         conf = max(0.0, min(1.0, conf))
     return {
         'store':         (p.get('store') or '').strip()[:200] or None,
-        'purchase_date': (p.get('purchase_date') or '').strip()[:10] or None,
+        'purchase_date': _sane_receipt_date((p.get('purchase_date') or '').strip()[:10]),
         'subtotal':      _to_float(p.get('subtotal')),
         'tax':           _to_float(p.get('tax')),
         'total':         _to_float(p.get('total')),

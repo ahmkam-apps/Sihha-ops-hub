@@ -2942,6 +2942,7 @@ async function renderReceipts(filter) {
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px">⚙ Auto-read status</button>
      <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px">👤 Assign selected</button>
+     <button class="btn btn-outline" onclick="reparseSelected()" style="margin-right:8px">🔄 Re-read selected</button>
      <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:#1a8754;border-color:#1a8754">✓ Approve selected</button>
      <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:#c00;border-color:#c00">🗑 Clear all</button>
      <button class="btn btn-green" onclick="openAddReceiptDrawer()" title="Pick one or more files — hold ⌘/Ctrl or drag to select several">⬆ Upload Receipt(s)</button>`;
@@ -3295,6 +3296,21 @@ async function applyBulkAssign() {
     alert(`Assigned ${r.assigned} receipt(s).`);
     renderReceipts(STATE.filter);
   } catch(e) { document.getElementById('bulk-assign-err').textContent = e.message; }
+}
+
+async function reparseSelected() {
+  const ids = Array.from(document.querySelectorAll('.rcpt-check:checked')).map(x => x.value);
+  if (!ids.length) { alert('Select one or more receipts first (checkboxes on the left).'); return; }
+  if (!confirm(`Re-read ${ids.length} receipt(s)? This re-scans each photo to fill store/date/amount/items and assign categories.`)) return;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < ids.length; i++) {
+    _receiptBanner(`Re-reading ${i + 1} of ${ids.length}…`);
+    try { await POST('/receipts/' + ids[i] + '/reparse', {}); ok++; }
+    catch(e) { fail++; }
+  }
+  const el = _receiptBanner(`✓ ${ok} re-read${fail ? `, ${fail} couldn't be read` : ''}`, fail ? '#8a4b00' : '#1a3a2a');
+  setTimeout(() => el.remove(), 4500);
+  renderReceipts(STATE.filter);
 }
 
 async function approveSelected() {
