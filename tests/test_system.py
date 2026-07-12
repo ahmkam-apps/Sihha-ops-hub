@@ -2324,6 +2324,21 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_store_fuzzy_matching(self):
+        def tc(n):
+            t = _server._store_tokens(n)
+            return (set(t), ''.join(t))
+        sim = lambda a, b: _server._stores_similar(tc(a), tc(b))
+        # merge: location suffix, hyphen/spacing, typo, apostrophe
+        assert sim('Costco', 'Costco Rochester')
+        assert sim('Wal-Mart', 'Walmart')
+        assert sim('Costco', 'Cosco')
+        assert sim("Sam's Club", 'SAMS CLUB')
+        # keep apart: genuinely different stores that share a generic word
+        assert not sim('International Spices', 'Penzeys Spices')
+        assert not sim('Aldi', 'Lidl')
+        assert not sim('Costco', 'Kroger')
+
     def test_store_names_normalized_in_report(self, client, auth):
         for s in ["ZSam's Club", "ZSams Club", "ZSAMS CLUB", "ZPenzeys Spices"]:
             rid = client.post('/api/receipts', headers=auth,

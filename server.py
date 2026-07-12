@@ -3324,37 +3324,76 @@ def _to_float(v):
 
 _STORE_STOPWORDS = {
     'grocer', 'grocers', 'grocery', 'groceries', 'market', 'markets', 'supermarket',
-    'store', 'stores', 'mart', 'foods', 'food', 'wholesale', 'warehouse', 'supercenter',
+    'store', 'stores', 'foods', 'food', 'wholesale', 'warehouse', 'supercenter',
     'super', 'center', 'centre', 'inc', 'llc', 'co', 'company', 'the', 'and', 'of',
 }
 
-def _store_key(name):
-    """Fold a store name to a comparison key so spelling/punctuation/generic-word
-    variants collapse: 'Sam's Club' == 'Sams Club', 'International Spices & Grocer' ==
-    'International Spices'. Drops apostrophes, punctuation, and common grocery filler."""
+def _store_tokens(name):
+    """Significant lowercase tokens of a store name (apostrophes dropped, punctuation
+    split, generic grocery filler words removed). 'Sam's Club' -> ['sams','club']."""
     import re
     if not name:
-        return ''
-    s = name.lower().replace("'", "").replace("’", "")   # apostrophes vanish, no space
+        return []
+    s = name.lower().replace("'", "").replace("’", "")
     s = re.sub(r'[^a-z0-9 ]', ' ', s)
     toks = [t for t in s.split() if t and t not in _STORE_STOPWORDS]
-    return ' '.join(toks) or re.sub(r'[^a-z0-9]', '', name.lower())
+    if not toks:  # name was entirely filler/punctuation — fall back to raw alnum
+        toks = [re.sub(r'[^a-z0-9]', '', name.lower())] if name.strip() else []
+    return toks
+
+
+def _store_key(name):
+    """Exact normalized key (used for first-pass grouping + tests)."""
+    return ' '.join(_store_tokens(name))
+
+
+def _stores_similar(a, b):
+    """Fuzzy match two (token_set, compact_str) stores. Merges location suffixes,
+    spacing/hyphen/typo variants — but keeps genuinely different names apart."""
+    ta, sa = a
+    tb, sb = b
+    if ta and tb:
+        shared = ta & tb
+        if shared:
+            jac = len(shared) / len(ta | tb)
+            if jac >= 0.5:                       # strong token overlap / subset
+                return True
+    import difflib
+    return difflib.SequenceMatcher(None, sa, sb).ratio() >= 0.88   # spacing/typos
 
 
 def _group_by_store(rows, limit=50):
-    """Aggregate (store, amount) rows by normalized store key; label each group with
-    its most-common original spelling. rows: iterable of sqlite Rows/dicts."""
-    groups = {}
+    """Aggregate (store, amount) rows and fuzzily cluster near-duplicate store names.
+    Each cluster is labelled with its most-common original spelling. Grouping-only —
+    the stored receipt data is never modified."""
+    # Pass 1: collapse exact-normalized duplicates and tally raw spellings.
+    exact = {}
     for r in rows:
         raw = (r['store'] or '').strip() or '(unknown)'
-        key = _store_key(raw) or raw.lower()
-        g = groups.setdefault(key, {'total': 0.0, 'count': 0, 'labels': {}})
-        g['total'] += (r['amount'] or 0)
-        g['count'] += 1
-        g['labels'][raw] = g['labels'].get(raw, 0) + 1
-    out = [{'store': max(g['labels'].items(), key=lambda kv: kv[1])[0],
-            'total': round(g['total'], 2), 'count': g['count']}
-           for g in groups.values()]
+        toks = _store_tokens(raw)
+        key = ' '.join(toks) or raw.lower()
+        e = exact.setdefault(key, {'total': 0.0, 'count': 0, 'labels': {},
+                                   'tokens': set(toks), 'compact': ''.join(toks) or key})
+        e['total'] += (r['amount'] or 0)
+        e['count'] += 1
+        e['labels'][raw] = e['labels'].get(raw, 0) + 1
+
+    # Pass 2: seed clusters from the largest groups first (so the biggest becomes the
+    # canonical), match each remaining group against existing SEEDS (non-transitive).
+    clusters = []
+    for g in sorted(exact.values(), key=lambda x: -x['total']):
+        for cl in clusters:
+            if _stores_similar((g['tokens'], g['compact']), (cl['tokens'], cl['compact'])):
+                cl['total'] += g['total']; cl['count'] += g['count']
+                for lbl, c in g['labels'].items():
+                    cl['labels'][lbl] = cl['labels'].get(lbl, 0) + c
+                break
+        else:
+            clusters.append(dict(g))
+
+    out = [{'store': max(cl['labels'].items(), key=lambda kv: kv[1])[0],
+            'total': round(cl['total'], 2), 'count': cl['count']}
+           for cl in clusters]
     out.sort(key=lambda x: -x['total'])
     return out[:limit]
 
