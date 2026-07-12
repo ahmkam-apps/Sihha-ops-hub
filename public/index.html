@@ -3211,13 +3211,15 @@ async function viewReceiptPhoto(url) {
 }
 
 // Editable receipt detail: assign a volunteer, fix store/date/amount, review line items.
-async function openReceiptDetail(rid) {
+async function openReceiptDetail(rid, onDone) {
+  window._rdReturn = (typeof onDone === 'function') ? onDone : (() => renderReceipts(STATE.filter));
   try {
-    const [rec, vols, cycles, foodCats] = await Promise.all([
+    const [rec, vols, cycles, foodCats, families] = await Promise.all([
       GET('/receipts/' + rid),
       GET('/volunteers'),
       GET('/delivery-cycles'),
-      GET('/food-categories').catch(() => [])
+      GET('/food-categories').catch(() => []),
+      GET('/families').catch(() => [])
     ]);
     const catNames = (foodCats || []).filter(c => c.is_active !== 0).map(c => c.name);
     const catSelect = (itemId, current) => {
@@ -3240,6 +3242,12 @@ async function openReceiptDetail(rid) {
     ).join('');
     const cycleOpts = ['<option value="">— none —</option>'].concat(
       cycles.map(c => `<option value="${c.id}" ${c.id===rec.cycle_id?'selected':''}>${esc(c.title)}</option>`)
+    ).join('');
+    const famOpts = ['<option value="">— none —</option>'].concat(
+      (families || [])
+        .slice().sort((a, b) => (a.family_code || '').localeCompare(b.family_code || '')
+                                 || (a.name || '').localeCompare(b.name || ''))
+        .map(f => `<option value="${f.id}" ${f.id===rec.family_id?'selected':''}>${esc(f.family_code||'')}${f.name?' · '+esc(f.name):''}</option>`)
     ).join('');
     const items = rec.items || [];
     const itemsTable = items.length ? `
@@ -3274,6 +3282,8 @@ async function openReceiptDetail(rid) {
       </div>
       <div class="form-group"><label>Volunteer</label>
         <select id="rd-volunteer" class="form-control">${volOpts}</select></div>
+      <div class="form-group"><label>Family</label>
+        <select id="rd-family" class="form-control">${famOpts}</select></div>
       <div class="form-group"><label>Delivery Cycle</label>
         <select id="rd-cycle" class="form-control">${cycleOpts}</select></div>
       <div class="form-group"><label>Store</label>
@@ -3303,6 +3313,7 @@ function _collectReceiptEdits() {
   const a = document.getElementById('rd-amount').value;
   return {
     volunteer_id:  document.getElementById('rd-volunteer').value || null,
+    family_id:     document.getElementById('rd-family').value || null,
     cycle_id:      document.getElementById('rd-cycle').value || null,
     store:         document.getElementById('rd-store').value.trim() || null,
     purchase_date: document.getElementById('rd-date').value || null,
@@ -3320,7 +3331,7 @@ async function saveReceiptDetail(rid) {
   try {
     await PUT('/receipts/' + rid, _collectReceiptEdits());
     closeDrawer();
-    renderReceipts(STATE.filter);
+    (window._rdReturn || (() => renderReceipts(STATE.filter)))();
   } catch(e) { document.getElementById('rd-err').textContent = e.message; }
 }
 
@@ -3342,7 +3353,7 @@ async function setReceiptStatus(rid, status) {
   try {
     await PUT('/receipts/' + rid, Object.assign(_collectReceiptEdits(), { status }));
     closeDrawer();
-    renderReceipts(STATE.filter);
+    (window._rdReturn || (() => renderReceipts(STATE.filter)))();
   } catch(e) { document.getElementById('rd-err').textContent = e.message; }
 }
 
@@ -3351,7 +3362,7 @@ async function deleteReceipt(rid) {
   try {
     await DEL('/receipts/' + rid);
     closeDrawer();
-    renderReceipts(STATE.filter);
+    (window._rdReturn || (() => renderReceipts(STATE.filter)))();
   } catch(e) {
     const err = document.getElementById('rd-err');
     if (err) err.textContent = e.message; else alert(e.message);
@@ -3733,6 +3744,7 @@ async function renderPayments(filter) {
               ? `<span class="badge badge-approved">Paid${rc.payment_method ? ' · ' + esc(rc.payment_method) : ''}</span>`
               : `<span class="badge badge-pending">Owed</span>`}</td>
         <td style="text-align:right;white-space:nowrap">
+          <a href="javascript:void(0)" onclick="editReceiptFromVR('${rc.receipt_id}')" style="color:var(--text-3);font-size:13px;margin-right:10px" title="Edit fields (date, family, store, amount)"><i class="ti ti-pencil" aria-hidden="true"></i></a>
           ${rc.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rc.file_url}')" style="color:var(--accent);font-size:13px;margin-right:10px" title="View receipt"><i class="ti ti-photo" aria-hidden="true"></i></a>` : ''}
           ${rc.status === 'pending'
             ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 10px;font-size:11px" onclick="payOne('${rc.reimb_id}','this receipt')">Pay</button>`
@@ -3839,6 +3851,8 @@ async function applyBulkPay() {
 function payVol(vi) { const v = window._vrData[vi]; _openPayDrawer(v.owed_ids, v.volunteer_name); }
 function payCyc(vi, ci) { const c = window._vrData[vi].cycles[ci]; _openPayDrawer(c.owed_ids, c.cycle_title); }
 function payOne(id, label) { _openPayDrawer([id], label); }
+// Open the full receipt editor from the accordion; return here after saving
+function editReceiptFromVR(rid) { openReceiptDetail(rid, () => renderPayments(STATE.filter)); }
 
 // ── Donations ─────────────────────────────────────────────────────────────────
 async function renderDonations(filter) {

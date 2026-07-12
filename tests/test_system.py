@@ -2404,6 +2404,29 @@ class TestReceiptParsing:
         assert client.post('/api/reimbursements/bulk-pay', headers=auth,
                            json={'ids': owed, 'payment_method': 'zelle'}).get_json()['paid'] == 0
 
+    def test_edit_receipt_fields_reflow_into_by_volunteer(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Edit Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        fam = client.post('/api/families', headers=auth, json={
+            'name': 'Edit Fam', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'family_size': 2, 'status': 'active'}).get_json()
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': vid, 'store': 'WrongStore', 'amount': 50,
+            'purchase_date': '2026-07-02'}).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        # fix family, store, date, amount after approval
+        res = client.put(f'/api/receipts/{rid}', headers=auth, json={
+            'family_id': fam['id'], 'store': 'RightStore',
+            'purchase_date': '2026-07-08', 'amount': 82.50})
+        assert res.status_code == 200
+        d = client.get('/api/reimbursements/by-volunteer?filter=owed', headers=auth).get_json()
+        rc = next(rc for v in d['volunteers'] if v['volunteer_id'] == vid
+                  for c in v['cycles'] for rc in c['receipts'] if rc['receipt_id'] == rid)
+        assert rc['amount'] == pytest.approx(82.50)   # pending reimb amount stayed in sync
+        assert rc['store'] == 'RightStore'
+        assert fam['family_code'] in (rc['family'] or '')
+
     def test_store_fuzzy_matching(self):
         def tc(n):
             t = _server._store_tokens(n)
