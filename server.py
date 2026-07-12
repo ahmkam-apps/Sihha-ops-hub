@@ -1507,6 +1507,17 @@ def bootstrap_db():
     # Runs on every boot — idempotent, bails immediately if already correct
     _ensure_treasurer_role(conn)
 
+    # Extra receipt-spend categories (2026-07-12) — so grocery items outside the
+    # Grains/Protein/Produce staples get classified instead of falling to "Other".
+    # Idempotent: only inserts a category if that name doesn't already exist.
+    for _cat in ('Oil & Condiments', 'Household'):
+        if not conn.execute("SELECT id FROM food_categories WHERE name=?", (_cat,)).fetchone():
+            _mo = conn.execute("SELECT COALESCE(MAX(display_order),0) FROM food_categories").fetchone()[0]
+            conn.execute(
+                "INSERT INTO food_categories (id, name, display_order, is_active, created_at) VALUES (?,?,?,1,?)",
+                (str(uuid.uuid4()), _cat, _mo + 1, now()))
+            log.info(f'Seeded food category: {_cat}')
+
     # ── audit P1.9: one ACTIVE volunteer slot per (cycle, family, task_type) ──
     # Placed at the END of bootstrap so it runs AFTER volunteer_slots is created and
     # rebuilt by the migrations above (the early index-loop runs before the table
