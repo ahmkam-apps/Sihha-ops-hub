@@ -3403,7 +3403,8 @@ def _group_by_store(rows, limit=50):
             clusters.append(dict(g))
 
     out = [{'store': max(cl['labels'].items(), key=lambda kv: kv[1])[0],
-            'total': round(cl['total'], 2), 'count': cl['count']}
+            'total': round(cl['total'], 2), 'count': cl['count'],
+            'variants': [v for v in cl['labels'].keys() if v != '(unknown)']}
            for cl in clusters]
     out.sort(key=lambda x: -x['total'])
     return out[:limit]
@@ -3842,6 +3843,25 @@ def update_receipt_item(item_id):
     db.execute("UPDATE receipt_items SET category=? WHERE id=?", (cat, item_id))
     db.commit()
     return jsonify({'ok': True, 'category': cat})
+
+
+@app.route('/api/receipts/rename-store', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def rename_store():
+    """Rename a store across every receipt that uses one of its spelling variants —
+    standardizes the underlying data (list, detail, exports all update). `from` is the
+    exact list of raw store strings to replace (the cluster's variants)."""
+    d = request.json or {}
+    variants = d.get('from') or []
+    to = (d.get('to') or '').strip()
+    if not isinstance(variants, list) or not variants or not to:
+        return jsonify({'error': 'Provide the store variants and a new name.'}), 400
+    db = get_db()
+    ph = ','.join('?' * len(variants))
+    cur = db.execute(f"UPDATE receipts SET store=?, updated_at=? WHERE store IN ({ph})",
+                     [to, now(), *variants])
+    db.commit()
+    return jsonify({'ok': True, 'updated': cur.rowcount})
 
 
 @app.route('/api/receipts/bulk-assign-cycle', methods=['POST'])

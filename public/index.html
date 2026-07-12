@@ -3484,6 +3484,7 @@ async function renderFinanceSummary() {
       GET('/finance/spend-report' + (qs.length ? '?' + qs.join('&') : '')),
     ]);
     const t = data.totals, cycles = data.cycles, m = d.metrics;
+    window._financeStores = d.by_store;   // for rename-store lookups by index
     const ledger = (label, val, color, sub) => `
       <div class="stat-card" style="border-left:4px solid ${color};padding:14px 16px;min-width:0;cursor:default">
         <div class="stat-label" style="margin-bottom:6px">${label}</div>
@@ -3599,9 +3600,9 @@ async function renderFinanceSummary() {
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
-          <div class="table-card"><div class="table-header"><span class="table-title">Top stores</span></div>
+          <div class="table-card"><div class="table-header"><span class="table-title">Top stores</span><span style="font-size:11px;color:var(--gray-4)">click the pencil to rename</span></div>
             <table><thead><tr><th>Store</th><th>Spend</th><th>#</th></tr></thead><tbody>
-            ${d.by_store.length ? d.by_store.map(s => `<tr><td>${esc(s.store)}</td><td><strong>${fmtMoney(s.total)}</strong></td><td style="text-align:center">${s.count}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="3">None</td></tr>'}</tbody></table></div>
+            ${d.by_store.length ? d.by_store.map((s, i) => `<tr><td>${esc(s.store)} <i class="ti ti-pencil" title="Rename this store everywhere" style="cursor:pointer;color:var(--gray-4);font-size:13px" onclick="renameStore(${i})" aria-label="Rename store"></i></td><td><strong>${fmtMoney(s.total)}</strong></td><td style="text-align:center">${s.count}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="3">None</td></tr>'}</tbody></table></div>
           <div class="table-card"><div class="table-header"><span class="table-title">Top items</span></div>
             <table><thead><tr><th>Item</th><th>Spend</th><th>#</th></tr></thead><tbody>
             ${d.top_items.length ? d.top_items.map(i => `<tr><td>${esc(i.name)}</td><td>${fmtMoney(i.total)}</td><td style="text-align:center">${i.count}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="3">None</td></tr>'}</tbody></table></div>
@@ -3622,6 +3623,20 @@ function applySpendFilter() {
   STATE._srUntil = document.getElementById('sr-until').value;
   renderFinanceSummary();
 }
+async function renameStore(i) {
+  const s = (window._financeStores || [])[i];
+  if (!s) return;
+  if (!s.variants || !s.variants.length) { alert('This store has no editable name.'); return; }
+  const to = prompt(`Rename this store across all ${s.count} of its receipt(s):`, s.store);
+  if (to === null) return;
+  if (!to.trim()) { alert('Enter a name.'); return; }
+  try {
+    const r = await POST('/receipts/rename-store', { from: s.variants, to: to.trim() });
+    alert(`Renamed ${r.updated} receipt(s) to "${to.trim()}".`);
+    renderFinanceSummary();
+  } catch(e) { alert(e.message); }
+}
+
 function exportSpendReport() {
   const qs = [];
   if (STATE._srSince) qs.push('since=' + STATE._srSince);
