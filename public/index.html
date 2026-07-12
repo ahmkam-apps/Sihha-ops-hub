@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.17.0/dist/tabler-icons.min.css">
 <style>
   :root {
     /* ── Evergreen & Gold (Editorial Luxury) ── */
@@ -193,7 +194,7 @@
     border-left-color: var(--gold);
     background: var(--accent);
   }
-  .nav-item .icon { font-size: 14px; width: 18px; text-align: center; }
+  .nav-item .icon { font-size: 17px; width: 20px; text-align: center; display: inline-flex; align-items: center; justify-content: center; opacity: .92; }
   .sidebar-footer {
     flex-shrink: 0;
     padding: 16px 20px;
@@ -555,7 +556,7 @@
     margin-bottom: 16px;
     display: none;
   }
-  .alert-error { background: #fff0f0; border: 1px solid #fcc; color: #c00; }
+  .alert-error { background: #fff0f0; border: 1px solid #fcc; color: var(--danger); }
   .alert-success { background: #f0fff4; border: 1px solid #9f9; color: #060; }
 
   /* ── Responsive ─────────────────────────────────────────── */
@@ -594,63 +595,63 @@
 
     <div class="sidebar-nav">
       <div class="nav-item active" onclick="nav('dashboard')" id="nav-dashboard">
-        <span class="icon">◈</span> Dashboard
+        <i class="ti ti-layout-dashboard icon" aria-hidden="true"></i> Dashboard
       </div>
       <div class="nav-item" onclick="nav('orders')" id="nav-orders">
-        <span class="icon">◳</span> Orders
+        <i class="ti ti-clipboard-list icon" aria-hidden="true"></i> Orders
       </div>
 
       <div class="nav-section">Operations</div>
       <div class="nav-item" onclick="nav('active-cycle')" id="nav-active-cycle">
-        <span class="icon">⊕</span> Active Cycle
+        <i class="ti ti-calendar-event icon" aria-hidden="true"></i> Active Cycle
       </div>
       <div class="nav-item" onclick="nav('deliveries')" id="nav-deliveries">
-        <span class="icon">↻</span> Deliveries
+        <i class="ti ti-truck-delivery icon" aria-hidden="true"></i> Deliveries
       </div>
       <div class="nav-item" onclick="nav('families')" id="nav-families">
-        <span class="icon">⌂</span> Families
+        <i class="ti ti-users icon" aria-hidden="true"></i> Families
       </div>
       <div class="nav-item" onclick="nav('volunteers')" id="nav-volunteers">
-        <span class="icon">◎</span> Volunteers
+        <i class="ti ti-heart-handshake icon" aria-hidden="true"></i> Volunteers
       </div>
 
       <div class="nav-section">Finance</div>
       <div class="nav-item" onclick="nav('summary')" id="nav-summary">
-        <span class="icon">📊</span> Finance
+        <i class="ti ti-chart-bar icon" aria-hidden="true"></i> Finance
       </div>
       <div class="nav-item" onclick="nav('payments')" id="nav-payments">
-        <span class="icon">◫</span> Payments
+        <i class="ti ti-cash-banknote icon" aria-hidden="true"></i> Payments
       </div>
       <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
-        <span class="icon">🧾</span> Receipts
+        <i class="ti ti-receipt icon" aria-hidden="true"></i> Receipts
       </div>
       <div class="nav-item" onclick="nav('donations')" id="nav-donations">
-        <span class="icon">♦</span> Donations
+        <i class="ti ti-gift icon" aria-hidden="true"></i> Donations
       </div>
 
-      <div class="nav-section" id="nav-section-admin" style="display:none;color:#800000;">Administrator</div>
+      <div class="nav-section" id="nav-section-admin" style="display:none;color:var(--sidebar-cumin);">Administrator</div>
       <div class="nav-item" onclick="nav('users')" id="nav-users" style="display:none">
-        <span class="icon">◉</span> Users
+        <i class="ti ti-user-cog icon" aria-hidden="true"></i> Users
       </div>
       <div class="nav-item" onclick="nav('pricing')" id="nav-pricing" style="display:none">
-        <span class="icon">◫</span> Pricing Table
+        <i class="ti ti-table icon" aria-hidden="true"></i> Pricing Table
       </div>
       <div class="nav-item" onclick="nav('catalog')" id="nav-catalog" style="display:none">
-        <span class="icon">☰</span> Food Catalog
+        <i class="ti ti-basket icon" aria-hidden="true"></i> Food Catalog
       </div>
 
       <div class="nav-section">Public Links</div>
       <div class="nav-item" onclick="window.open('/family','_blank')" style="font-size:12px;">
-        <span class="icon">⇗</span> My Order (Families)
+        <i class="ti ti-external-link icon" aria-hidden="true"></i> My Order (Families)
       </div>
       <div class="nav-item" onclick="window.open('/intake','_blank')" style="font-size:12px;">
-        <span class="icon">⇗</span> Family Registration
+        <i class="ti ti-external-link icon" aria-hidden="true"></i> Family Registration
       </div>
       <div class="nav-item" onclick="window.open('/portal','_blank')" style="font-size:12px;">
-        <span class="icon">⇗</span> Volunteer Portal
+        <i class="ti ti-external-link icon" aria-hidden="true"></i> Volunteer Portal
       </div>
       <div class="nav-item" onclick="window.open('/volunteer-signup','_blank')" style="font-size:12px;">
-        <span class="icon">⇗</span> Volunteer Sign Up
+        <i class="ti ti-external-link icon" aria-hidden="true"></i> Volunteer Sign Up
       </div>
     </div><!-- /sidebar-nav -->
 
@@ -862,7 +863,7 @@ async function renderDashboard() {
          s.upcoming_cycles.find(c => c.status === 'upcoming'))
       : null;
 
-    const statusColors = { upcoming:'#1a8754', open:'#e07b00', shopping:'#2e86c1', delivered:'#555' };
+    const statusColors = { upcoming:'var(--accent)', open:'#e07b00', shopping:'#2e86c1', delivered:'#555' };
     const statusBg     = { upcoming:'#f0faf5', open:'#fff8f0', shopping:'#eaf4fb', delivered:'#f5f5f5' };
 
     let cycleHTML = '';
@@ -892,7 +893,7 @@ async function renderDashboard() {
           <div style="display:flex;gap:12px;font-size:11px;color:#888;margin-top:5px;">
             <span style="color:#e0a800;">● ${s.slots_open} open</span>
             <span style="color:#2e86c1;">● ${s.slots_claimed} claimed</span>
-            <span style="color:#1a8754;">● ${s.slots_complete} done</span>
+            <span style="color:var(--accent);">● ${s.slots_complete} done</span>
           </div>
         </div>` : '';
 
@@ -945,7 +946,7 @@ async function renderDashboard() {
             </div>`).join('')}
         </div>
       </div>` : `
-      <div style="background:#f0faf5;border:1.5px solid #1a875440;border-radius:8px;padding:12px 18px;margin-bottom:20px;font-size:13px;color:#1a8754;">
+      <div style="background:var(--accent-pale);border:1px solid var(--accent-pale);border-radius:8px;padding:12px 18px;margin-bottom:20px;font-size:13px;color:var(--accent-deep);">
         ✓ All clear — nothing needs attention
       </div>`;
 
@@ -959,7 +960,7 @@ async function renderDashboard() {
             <div style="font-size:11px;color:var(--gray-4);">Family · pending approval</div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0;">
-            <button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 10px;font-size:11px;"
+            <button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 10px;font-size:11px;"
               onclick="dashApprove('family','${f.id}','${escJs(f.name)}')">Approve</button>
             <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;"
               onclick="viewFamily('${f.id}')">View</button>
@@ -974,7 +975,7 @@ async function renderDashboard() {
             <div style="font-size:11px;color:var(--gray-4);">Volunteer · pending approval</div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0;">
-            <button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 10px;font-size:11px;"
+            <button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 10px;font-size:11px;"
               onclick="dashApprove('volunteer','${v.id}','${escJs(v.name)}')">Approve</button>
             <button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px;"
               onclick="viewVolunteer('${v.id}')">View</button>
@@ -1066,7 +1067,7 @@ async function renderDashboard() {
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
         <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
           <div style="font-size:11px;color:#888;margin-bottom:4px;">This month collected</div>
-          <div style="font-size:22px;font-weight:700;color:#1a8754;">${fmtMoney(s.donations_month)}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--accent);">${fmtMoney(s.donations_month)}</div>
           <div style="font-size:11px;color:#888;margin-top:2px;">need ${fmtMoney(DONATION_GOAL)}/mo for ${s.families_active} families</div>
         </div>
         <div style="background:#f7f7f7;border-radius:8px;padding:12px 14px;cursor:pointer;" onclick="nav('donations')">
@@ -1080,8 +1081,8 @@ async function renderDashboard() {
           <div style="font-size:11px;color:#888;margin-top:2px;">${s.donations_count} donations</div>
         </div>
         <div style="background:${nextMonthNeeds>0?'#fffbec':'#f0faf5'};border-radius:8px;padding:12px 14px;">
-          <div style="font-size:11px;color:${nextMonthNeeds>0?'#b8860b':'#1a8754'};margin-bottom:4px;">Next month target</div>
-          <div style="font-size:22px;font-weight:700;color:${nextMonthNeeds>0?'#e0a800':'#1a8754'};">${nextMonthNeeds>0?fmtMoney(nextMonthNeeds):'✓ Covered'}</div>
+          <div style="font-size:11px;color:${nextMonthNeeds>0?'#b8860b':'var(--accent)'};margin-bottom:4px;">Next month target</div>
+          <div style="font-size:22px;font-weight:700;color:${nextMonthNeeds>0?'#e0a800':'var(--accent)'};">${nextMonthNeeds>0?fmtMoney(nextMonthNeeds):'✓ Covered'}</div>
           <div style="font-size:11px;color:#888;margin-top:2px;">${nextMonthNeeds>0?`need − last month collected`:'last month exceeded need'}</div>
         </div>
       </div>`;
@@ -1090,12 +1091,12 @@ async function renderDashboard() {
     const nowLabel       = new Date().toLocaleDateString('en-US', {month:'long', year:'numeric'});
     const barGoal        = thisMonthAdjTarget;  // adjusted for last-month surplus
     const surplusNote    = lastMonthSurplus > 0
-      ? `<span style="color:#1a8754;font-weight:600;">+${fmtMoney(lastMonthSurplus)} surplus carried forward from last month</span>`
+      ? `<span style="color:var(--accent);font-weight:600;">+${fmtMoney(lastMonthSurplus)} surplus carried forward from last month</span>`
       : '';
     const collectedPct   = barGoal > 0
       ? Math.min(100, Math.round((s.donations_month || 0) / barGoal * 100))
       : 100;  // if target is 0 (fully covered by surplus), show 100%
-    const barColor       = collectedPct >= 100 ? '#1a8754' : collectedPct >= 60 ? '#e07b00' : '#c0392b';
+    const barColor       = collectedPct >= 100 ? 'var(--accent)' : collectedPct >= 60 ? '#e07b00' : '#c0392b';
     const goalMetBySurplus = barGoal === 0 && DONATION_GOAL > 0;
 
     const monthProgressBar = DONATION_GOAL > 0 ? `
@@ -1112,7 +1113,7 @@ async function renderDashboard() {
           </div>
         </div>
         ${goalMetBySurplus
-          ? `<div style="background:#e8f8f0;border:1px solid #1a8754;border-radius:4px;padding:8px 12px;font-size:12px;color:#1a8754;font-weight:600;text-align:center;">
+          ? `<div style="background:#e8f8f0;border:1px solid var(--accent);border-radius:4px;padding:8px 12px;font-size:12px;color:var(--accent);font-weight:600;text-align:center;">
                ✓ This month's goal is fully covered by last month's surplus
              </div>`
           : `<div style="background:#e8e8e8;height:18px;border-radius:4px;overflow:hidden;margin-top:10px;">
@@ -1147,7 +1148,7 @@ async function renderDashboard() {
             <canvas id="dash-bar-chart"></canvas>
           </div>
           <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;">
-            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#1a8754;"></span>Recurring</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--accent);"></span>Recurring</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#b2dfdb;"></span>One-time</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal (${fmtMoney(DONATION_GOAL)})</span>
           </div>
@@ -1159,7 +1160,7 @@ async function renderDashboard() {
             <canvas id="dash-line-chart"></canvas>
           </div>
           <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap;">
-            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#1a8754;"></span>Actual</span>
+            <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:var(--accent);"></span>Actual</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;border-top:2px dashed #2e86c1;"></span>Projected</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;background:#e0a800;"></span>Goal (${fmtMoney(DONATION_GOAL)})</span>
             <span style="font-size:11px;color:#888;display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:14px;height:2px;border-top:2px dashed #9b59b6;"></span>Average</span>
@@ -1265,7 +1266,7 @@ async function renderDashboard() {
           data: {
             labels: histLabels,
             datasets: [
-              { label:'Recurring', data:histRecur,   backgroundColor:'#1a8754', stack:'don', barThickness:28, borderRadius:{topLeft:3,topRight:3} },
+              { label:'Recurring', data:histRecur,   backgroundColor:'#285D4C', stack:'don', barThickness:28, borderRadius:{topLeft:3,topRight:3} },
               { label:'One-time',  data:histOneTime, backgroundColor:'#b2dfdb', stack:'don', barThickness:28, borderRadius:{topLeft:3,topRight:3} }
             ]
           },
@@ -1359,10 +1360,10 @@ async function renderDashboard() {
               {
                 label: 'Actual',
                 data: actualData,
-                borderColor: '#1a8754', borderWidth: 2.5,
+                borderColor: '#285D4C', borderWidth: 2.5,
                 backgroundColor: 'rgba(26,135,84,0.07)',
                 fill: true,
-                pointBackgroundColor: '#1a8754',
+                pointBackgroundColor: '#285D4C',
                 pointRadius: 5, pointHoverRadius: 7,
                 tension: 0.3,
                 spanGaps: false,
@@ -1411,7 +1412,7 @@ async function renderDashboard() {
     updateDashProjection();
 
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -1496,7 +1497,7 @@ function updateDashProjection() {
   const donorsNeeded = (gap > 0 && avgGift > 0) ? Math.ceil(gap / avgGift) : 0;
 
   const gapClass   = gap === 0 ? '#f0faf5' : coverPct >= 60 ? '#fffbec' : '#fff5f5';
-  const gapTextCol = gap === 0 ? '#1a8754' : coverPct >= 60 ? '#b8860b' : '#c0392b';
+  const gapTextCol = gap === 0 ? 'var(--accent)' : coverPct >= 60 ? '#b8860b' : '#c0392b';
 
   const el = document.getElementById('proj-results');
   if (!el) return;
@@ -1662,7 +1663,7 @@ async function renderFamilies(filter, search) {
       if (!o) return `<span style="font-size:11px;color:var(--gray-3)">—</span>`;
       const s = o.status;
       if (s === 'confirmed')
-        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#1a8754;background:#f0faf5;padding:2px 7px;border-radius:10px;border:1px solid #b7e0ca">✓ Confirmed</span>`;
+        return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--accent);background:#f0faf5;padding:2px 7px;border-radius:10px;border:1px solid #b7e0ca">✓ Confirmed</span>`;
       if (s === 'submitted')
         return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#b45309;background:#fffbeb;padding:2px 7px;border-radius:10px;border:1px solid #f6d58a">● Submitted</span>`;
       if (s === 'skipped')
@@ -1720,12 +1721,12 @@ async function renderFamilies(filter, search) {
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap" onclick="event.stopPropagation()">
                   ${r.status==='pending' ? `
-                    <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
-                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusFamily('${r.id}','inactive')">✗</button>
+                    <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="quickStatusFamily('${r.id}','active')">✓ Approve</button>
+                    <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);margin-left:4px" onclick="quickStatusFamily('${r.id}','inactive')">✗</button>
                   ` : r.status==='active' ? `
-                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00" onclick="if(confirm('Deactivate this family?'))quickStatusFamily('${r.id}','inactive')">Deactivate</button>
+                    <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="if(confirm('Deactivate this family?'))quickStatusFamily('${r.id}','inactive')">Deactivate</button>
                   ` : `
-                    <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusFamily('${r.id}','active')">Activate</button>
+                    <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="quickStatusFamily('${r.id}','active')">Activate</button>
                   `}
                   <button class="btn btn-sm btn-outline" style="margin-left:4px" title="Open family portal as this family" onclick="previewFamilyPortal('${r.id}')">👁 Preview</button>
                 </td>
@@ -1735,7 +1736,7 @@ async function renderFamilies(filter, search) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -1927,7 +1928,7 @@ async function saveFamily() {
                <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">TEMP PASSWORD</span><br><strong>${esc(res.login_temp_password)}</strong></div>
              </div>
              <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
-             ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Credentials emailed to ${esc(res.email)}</p>` : (res.email ? `<p style="font-size:12px;color:#c00;margin-top:4px">⚠ Email failed to send — share credentials manually</p>` : `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email provided — share credentials manually</p>`)}`,
+             ${res.email_sent ? `<p style="font-size:12px;color:var(--accent);margin-top:4px">✓ Credentials emailed to ${esc(res.email)}</p>` : (res.email ? `<p style="font-size:12px;color:var(--danger);margin-top:4px">⚠ Email failed to send — share credentials manually</p>` : `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email provided — share credentials manually</p>`)}`,
             `<button class="btn" onclick="closeDrawer()">Done</button>`
           );
         }, 200);
@@ -1962,7 +1963,7 @@ async function saveFamilyAll(famId) {
     if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; btn.style.display = 'inline-flex'; }
     if (saved) {
       saved.innerHTML = '✓ Saved';
-      saved.style.cssText = 'font-size:13px;font-weight:600;color:#1a8754;transition:opacity .3s;';
+      saved.style.cssText = 'font-size:13px;font-weight:600;color:var(--accent);transition:opacity .3s;';
       clearTimeout(saved._t);
       saved._t = setTimeout(() => { saved.style.opacity='0'; setTimeout(()=>{saved.innerHTML='';saved.style.opacity='1';},300); }, 2500);
     }
@@ -1978,7 +1979,7 @@ async function famSaveField(famId, field, value) {
     const msg = document.getElementById('fam-saved-' + famId);
     if (msg) {
       msg.innerHTML = '✓ Saved';
-      msg.style.cssText = 'font-size:13px;font-weight:600;color:#1a8754;transition:opacity .3s;';
+      msg.style.cssText = 'font-size:13px;font-weight:600;color:var(--accent);transition:opacity .3s;';
       clearTimeout(msg._t);
       msg._t = setTimeout(() => { msg.style.opacity='0'; setTimeout(()=>{msg.innerHTML='';msg.style.opacity='1';},300); }, 2500);
     }
@@ -2075,7 +2076,7 @@ async function viewFamily(id) {
       topbarBtns += ` <button class="btn btn-outline" onclick="openResetPassword('${famUser.id}','${escJs(famUser.username)}','${escJs(r.name)}')">🔑 Reset Password</button>
           <button class="btn btn-outline" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
     }
-    topbarBtns += ` <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="deleteFamily('${fid}')">🗑 Delete</button>`;
+    topbarBtns += ` <button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="deleteFamily('${fid}')"><i class="ti ti-trash" aria-hidden="true"></i> Delete</button>`;
     document.getElementById('topbar-actions').innerHTML = topbarBtns;
 
     // ── Field helpers ─────────────────────────────────────────────────────────
@@ -2113,7 +2114,7 @@ async function viewFamily(id) {
           ${badge(r.status)}
           ${r.bundle_size ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--gray-1);color:var(--gray-5);">Bundle: ${esc(bundleLabel[r.bundle_size]||r.bundle_size)}</span>` : ''}
         </div>
-        <span id="fam-saved-${fid}" style="font-size:13px;font-weight:600;color:#1a8754;min-width:70px;text-align:right;"></span>
+        <span id="fam-saved-${fid}" style="font-size:13px;font-weight:600;color:var(--accent);min-width:70px;text-align:right;"></span>
       </div>`;
 
     // ── Pending bundle change alert ────────────────────────────────────────────
@@ -2129,9 +2130,9 @@ async function viewFamily(id) {
           </div>
         </div>
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-sm" style="font-size:12px;padding:4px 14px;background:#1a8754;color:#fff;"
+          <button class="btn btn-sm" style="font-size:12px;padding:4px 14px;background:var(--accent);color:#fff;"
             onclick="approveBundleChange('${fid}','approve','${escJs(r.name)}')">✓ Approve</button>
-          <button class="btn btn-sm btn-outline" style="font-size:12px;padding:4px 14px;color:#c00;border-color:#c00;"
+          <button class="btn btn-sm btn-outline" style="font-size:12px;padding:4px 14px;color:var(--danger);border-color:var(--danger);"
             onclick="approveBundleChange('${fid}','deny','${escJs(r.name)}')">✕ Deny</button>
         </div>
       </div>` : '';
@@ -2153,7 +2154,7 @@ async function viewFamily(id) {
       skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
       pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Awaiting Response' },
       delivered:            { bg:'#e3f2fd', color:'#0d47a1', label:'Delivered ✓' },
-      cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
+      cancelled:            { bg:'#fdecea', color:'var(--danger)',    label:'Cancelled' },
     };
 
     const renderOrderRow = o => {
@@ -2161,9 +2162,9 @@ async function viewFamily(id) {
       const btns = o.status === 'confirmed' || o.status === 'auto_confirmed'
         ? `<button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="overrideFoodRequest('${o.id}','skipped','${o.cycle_id}','${fid}')">Mark Skipped</button>`
         : o.status === 'skipped'
-        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${o.id}','confirmed','${o.cycle_id}','${fid}')">Mark Confirmed</button>`
+        ? `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:var(--accent);color:#fff;" onclick="overrideFoodRequest('${o.id}','confirmed','${o.cycle_id}','${fid}')">Mark Confirmed</button>`
         : o.status === 'delivered' ? ''
-        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#1a8754;color:#fff;" onclick="overrideFoodRequest('${o.id}','confirmed','${o.cycle_id}','${fid}')">✓ Confirm</button>
+        : `<button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:var(--accent);color:#fff;" onclick="overrideFoodRequest('${o.id}','confirmed','${o.cycle_id}','${fid}')">✓ Confirm</button>
            <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;margin-left:4px;" onclick="overrideFoodRequest('${o.id}','skipped','${o.cycle_id}','${fid}')">Skip</button>`;
       return `
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--gray-1);">
@@ -2176,7 +2177,7 @@ async function viewFamily(id) {
                 onclick="openEditOrderItems('${o.id}','${escJs(r.name)}','${o.bundle_size||''}','${o.cycle_id}')">✏ Edit</button>` : ''}
             ${btns}
             ${o.status !== 'delivered' ? `
-              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:#c00;border-color:#c00;" onclick="adminCancelOrder('${fid}','${o.cycle_id}','${escJs(r.name)}')">✕ Cancel</button>
+              <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--danger);border-color:var(--danger);" onclick="adminCancelOrder('${fid}','${o.cycle_id}','${escJs(r.name)}')">✕ Cancel</button>
               <button class="btn btn-sm btn-outline" style="font-size:11px;padding:3px 10px;color:var(--gray-4);border-color:var(--gray-3);" onclick="resetFamilyOrder('${fid}','${escJs(r.name)}')">↺ Reset</button>` : ''}
           </div>
         </div>`;
@@ -2190,8 +2191,8 @@ async function viewFamily(id) {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;">
           <span style="font-size:13px;font-weight:700;flex:1;">${esc(unorderedCycle.title)}</span>
           <span style="font-size:11px;color:var(--gray-4);">No order yet</span>
-          <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;margin-left:auto;"
-            onclick="manualConfirmFamily('${fid}','${escJs(r.name)}')">＋ Add to Cycle</button>
+          <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:var(--accent);color:#fff;margin-left:auto;"
+            onclick="manualConfirmFamily('${fid}','${escJs(r.name)}')"><i class="ti ti-plus" aria-hidden="true"></i> Add to Cycle</button>
         </div>` : '';
       cycleStrip = `
         <div style="background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);">
@@ -2205,8 +2206,8 @@ async function viewFamily(id) {
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;">
             <span style="font-size:13px;font-weight:700;flex:1;">${esc(activeCycle.title)}</span>
             <span style="font-size:11px;color:var(--gray-4);">No order yet</span>
-            <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:#1a8754;color:#fff;margin-left:auto;"
-              onclick="manualConfirmFamily('${fid}','${escJs(r.name)}')">＋ Add to Cycle</button>
+            <button class="btn btn-sm" style="font-size:11px;padding:3px 12px;background:var(--accent);color:#fff;margin-left:auto;"
+              onclick="manualConfirmFamily('${fid}','${escJs(r.name)}')"><i class="ti ti-plus" aria-hidden="true"></i> Add to Cycle</button>
           </div>
         </div>`;
     }
@@ -2256,7 +2257,7 @@ async function viewFamily(id) {
       auto_confirmed:       { bg:'#e8f5e9', color:'#1a5e34', label:'Auto-confirmed' },
       skipped:              { bg:'#fffbec', color:'#7a6000', label:'Skipped' },
       pending_confirmation: { bg:'#e8f0ff', color:'#3a3a9a', label:'Pending' },
-      cancelled:            { bg:'#fdecea', color:'#c00',    label:'Cancelled' },
+      cancelled:            { bg:'#fdecea', color:'var(--danger)',    label:'Cancelled' },
     };
 
     const historyRows = orders.map(o => {
@@ -2297,7 +2298,7 @@ async function viewFamily(id) {
       let inlineCallout = '';
       if (lastEdit) {
         const added   = lastEdit.payload?.added?.length   ? `<span style="color:#1a7a3c">+${esc(lastEdit.payload.added.join(', '))}</span>`   : '';
-        const removed = lastEdit.payload?.removed?.length ? `<span style="color:#c00">−${esc(lastEdit.payload.removed.join(', '))}</span>` : '';
+        const removed = lastEdit.payload?.removed?.length ? `<span style="color:var(--danger)">−${esc(lastEdit.payload.removed.join(', '))}</span>` : '';
         const diff    = [added, removed].filter(Boolean).join(' &nbsp;');
         inlineCallout = `
           <div style="margin-top:5px;padding:5px 8px;background:#fff8e1;border:1px solid #ffc107;border-left:3px solid #e0a800;border-radius:3px;font-size:11px;">
@@ -2307,8 +2308,8 @@ async function viewFamily(id) {
           </div>`;
       } else if (lastCancel) {
         inlineCallout = `
-          <div style="margin-top:5px;padding:5px 8px;background:#fdecea;border:1px solid #ef9a9a;border-left:3px solid #c00;border-radius:3px;font-size:11px;">
-            <span style="font-weight:700;color:#c00;">✕ Cancelled by family</span>
+          <div style="margin-top:5px;padding:5px 8px;background:#fdecea;border:1px solid #ef9a9a;border-left:3px solid var(--danger);border-radius:3px;font-size:11px;">
+            <span style="font-weight:700;color:var(--danger);">✕ Cancelled by family</span>
             <span style="color:#888;margin-left:4px;">${fmtEvTs(lastCancel.created_at)}</span>
           </div>`;
       }
@@ -2316,7 +2317,7 @@ async function viewFamily(id) {
       // Full audit trail in collapsible (all events)
       const evLabels = { confirmed:'✓ Confirmed', items_edited:'✏ Edited',
                          cancelled:'✕ Cancelled', auto_skipped:'— Auto-skipped',
-                         admin_override:'⚙ Admin override' };
+                         admin_override:'Admin override' };
       const evHtml = evRows.length ? `
         <details style="margin-top:6px;">
           <summary style="font-size:10px;cursor:pointer;color:#aaa;user-select:none;letter-spacing:.4px;">
@@ -2329,7 +2330,7 @@ async function viewFamily(id) {
               let detail = '';
               if (ev.event_type==='items_edited' && ev.payload) {
                 if (ev.payload.added?.length)   detail += ` <span style="color:#1a7a3c">+${esc(ev.payload.added.join(', '))}</span>`;
-                if (ev.payload.removed?.length) detail += ` <span style="color:#c00">−${esc(ev.payload.removed.join(', '))}</span>`;
+                if (ev.payload.removed?.length) detail += ` <span style="color:var(--danger)">−${esc(ev.payload.removed.join(', '))}</span>`;
               }
               if (ev.event_type==='admin_override' && ev.payload?.new_status) detail = ` <span style="color:#888">→ ${esc(ev.payload.new_status)}</span>`;
               return `<div style="font-size:11px;padding:2px 0;color:#555;">${lbl}${detail||''} <span style="color:#ccc">${ts}</span></div>`;
@@ -2390,7 +2391,7 @@ async function viewFamily(id) {
 
   } catch(e) {
     console.error(e);
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -2413,8 +2414,8 @@ async function renderVolunteers(filter, search) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML = `
-    <button class="btn btn-outline" onclick="renderTaskTypes()" style="margin-right:8px;">⚙ Task Types</button>
-    <button class="btn btn-outline" onclick="renderVolunteerActivityReport()" style="margin-right:8px;">📊 Activity Report</button>
+    <button class="btn btn-outline" onclick="renderTaskTypes()" style="margin-right:8px;"><i class="ti ti-settings" aria-hidden="true"></i> Task Types</button>
+    <button class="btn btn-outline" onclick="renderVolunteerActivityReport()" style="margin-right:8px;"><i class="ti ti-chart-bar" aria-hidden="true"></i> Activity Report</button>
     <button class="btn" onclick="openVolunteerForm()">+ Add Volunteer</button>`;
 
   let url = '/volunteers';
@@ -2459,15 +2460,15 @@ async function renderVolunteers(filter, search) {
                 <td style="font-size:11px;color:var(--gray-4)">${fmtDate(r.created_at)}</td>
                 <td style="white-space:nowrap">
                   ${r.status==='pending' ? `
-                    <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="quickStatusVolunteer('${r.id}','active')">✓ Approve</button>
-                    <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="quickStatusVolunteer('${r.id}','inactive')">✗</button>
+                    <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="quickStatusVolunteer('${r.id}','active')">✓ Approve</button>
+                    <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);margin-left:4px" onclick="quickStatusVolunteer('${r.id}','inactive')">✗</button>
                   ` : `
                     <button class="btn btn-outline btn-sm" onclick="viewVolunteer('${r.id}')">View</button>
                     <button class="btn btn-sm" onclick="openVolunteerForm('${r.id}')" style="margin-left:4px">Edit</button>
                     ${r.status==='active' ? `
-                      <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;margin-left:4px" onclick="if(confirm('Deactivate this volunteer?'))quickStatusVolunteer('${r.id}','inactive')">Deactivate</button>
+                      <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);margin-left:4px" onclick="if(confirm('Deactivate this volunteer?'))quickStatusVolunteer('${r.id}','inactive')">Deactivate</button>
                     ` : `
-                      <button class="btn btn-sm" style="background:#1a8754;color:#fff;margin-left:4px" onclick="quickStatusVolunteer('${r.id}','active')">Activate</button>
+                      <button class="btn btn-sm" style="background:var(--accent);color:#fff;margin-left:4px" onclick="quickStatusVolunteer('${r.id}','active')">Activate</button>
                     `}
                   `}
                 </td>
@@ -2477,7 +2478,7 @@ async function renderVolunteers(filter, search) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -2485,7 +2486,7 @@ async function renderVolunteerActivityReport() {
   document.getElementById('page-title').textContent = 'Volunteer Activity Report';
   document.getElementById('topbar-actions').innerHTML =
     `<button class="btn btn-outline" onclick="renderVolunteers()">← Back to Volunteers</button>
-     <button class="btn btn-outline" onclick="exportVolunteerActivityCSV()">⬇ Export CSV</button>`;
+     <button class="btn btn-outline" onclick="exportVolunteerActivityCSV()"><i class="ti ti-download" aria-hidden="true"></i>Export CSV</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const data = await GET('/reports/volunteer-activity');
@@ -2557,7 +2558,7 @@ async function renderVolunteerActivityReport() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -2634,7 +2635,7 @@ async function renderTaskTypes() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -2913,7 +2914,7 @@ async function renderAssignments(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -2999,12 +3000,12 @@ async function renderReceipts(filter) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px">⚙ Auto-read status</button>
-     <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px">👤 Assign selected</button>
-     <button class="btn btn-outline" onclick="reparseSelected()" style="margin-right:8px">🔄 Re-read selected</button>
-     <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:#1a8754;border-color:#1a8754">✓ Approve selected</button>
-     <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:#c00;border-color:#c00">🗑 Clear all</button>
-     <button class="btn btn-green" onclick="openAddReceiptDrawer()" title="Pick one or more files — hold ⌘/Ctrl or drag to select several">⬆ Upload Receipt(s)</button>`;
+    `<button class="btn btn-outline" onclick="checkAutoRead()" style="margin-right:8px"><i class="ti ti-settings" aria-hidden="true"></i> Auto-read status</button>
+     <button class="btn btn-outline" onclick="assignSelected()" style="margin-right:8px"><i class="ti ti-user-plus" aria-hidden="true"></i> Assign selected</button>
+     <button class="btn btn-outline" onclick="reparseSelected()" style="margin-right:8px"><i class="ti ti-refresh" aria-hidden="true"></i> Re-read selected</button>
+     <button class="btn btn-outline" onclick="approveSelected()" style="margin-right:8px;color:var(--accent);border-color:var(--accent)"><i class="ti ti-check" aria-hidden="true"></i> Approve selected</button>
+     <button class="btn btn-outline" onclick="deleteAllReceipts()" style="margin-right:8px;color:var(--danger);border-color:var(--danger)"><i class="ti ti-trash" aria-hidden="true"></i> Clear all</button>
+     <button class="btn btn-green" onclick="openAddReceiptDrawer()" title="Pick one or more files — hold ⌘/Ctrl or drag to select several"><i class="ti ti-upload" aria-hidden="true"></i> Upload Receipt(s)</button>`;
 
   let url = '/receipts';
   if (filter !== 'all') url += '?status=' + filter;
@@ -3044,7 +3045,7 @@ async function renderReceipts(filter) {
                     : ''}</td>
                 <td style="text-align:center;color:var(--gray-4)">${r.item_count || 0}</td>
                 <td>${r.file_url
-                  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();viewReceiptPhoto('${r.file_url}')" style="color:var(--green);font-size:13px">📷 View</a>`
+                  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();viewReceiptPhoto('${r.file_url}')" style="color:var(--green);font-size:13px"><i class="ti ti-photo" aria-hidden="true"></i> View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td>${badge(r.status)}</td>
                 <td style="white-space:nowrap">
@@ -3056,7 +3057,7 @@ async function renderReceipts(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -3163,7 +3164,7 @@ async function quickUploadReceipts(files) {
   }
   if (notRead && lastReason) {
     setTimeout(() => alert('Some photos could not be auto-read.\n\nReason: ' + lastReason +
-      '\n\nThe receipts were still saved — open one and use "Re-read photo", or check ⚙ Auto-read status.'), 300);
+      '\n\nThe receipts were still saved — open one and use "Re-read photo", or check "Auto-read status".'), 300);
   }
   if (STATE.page === 'receipts') renderReceipts(STATE.filter);
 }
@@ -3243,15 +3244,15 @@ async function openReceiptDetail(rid) {
         ⚠ Amount doesn't match the total read from the photo (${fmtMoney(rec.parsed_total)}). Verify before approving.
       </div>` : '';
     const parsedNote = rec.parse_status==='parsed'
-      ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px">✨ Auto-read${rec.parse_confidence!=null?` · ${Math.round(rec.parse_confidence*100)}% confidence`:''}</div>`
+      ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px"><i class="ti ti-sparkles" aria-hidden="true"></i> Auto-read${rec.parse_confidence!=null?` · ${Math.round(rec.parse_confidence*100)}% confidence`:''}</div>`
       : (rec.parse_status==='failed'
-         ? `<div style="font-size:11px;color:#c0392b;margin-top:2px">⚠ Couldn't auto-read this photo — click "🔄 Re-read photo" below to retry.</div>`
+         ? `<div style="font-size:11px;color:var(--danger);margin-top:2px"><i class="ti ti-alert-triangle" aria-hidden="true"></i> Couldn't auto-read this photo — click "Re-read photo" below to retry.</div>`
          : '');
     const body = `
       ${mismatchNote}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div>${badge(rec.status)}</div>
-        ${rec.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rec.file_url}')" style="color:var(--green);font-size:13px">📷 View photo</a>` : ''}
+        ${rec.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rec.file_url}')" style="color:var(--green);font-size:13px"><i class="ti ti-photo" aria-hidden="true"></i> View photo</a>` : ''}
       </div>
       <div class="form-group"><label>Volunteer</label>
         <select id="rd-volunteer" class="form-control">${volOpts}</select></div>
@@ -3268,13 +3269,13 @@ async function openReceiptDetail(rid) {
         <textarea id="rd-notes" class="form-control" rows="2">${esc(rec.notes||'')}</textarea></div>
       <div style="font-weight:700;font-size:12px;color:#1a5e34;margin-top:6px">Line items</div>
       ${itemsTable}
-      <div id="rd-err" style="color:#c00;font-size:13px;margin-top:6px"></div>`;
+      <div id="rd-err" style="color:var(--danger);font-size:13px;margin-top:6px"></div>`;
     const footer = `
       <button class="btn btn-green" onclick="saveReceiptDetail('${rid}')">Save</button>
-      ${rec.file_url ? `<button class="btn btn-outline" onclick="reparseReceipt('${rid}')">🔄 Re-read photo</button>` : ''}
-      ${rec.status==='pending' ? `<button class="btn" style="background:#1a8754;color:#fff" onclick="setReceiptStatus('${rid}','approved')">✓ Confirm &amp; Approve</button>
-        <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="setReceiptStatus('${rid}','rejected')">✗ Reject</button>` : ''}
-      <button class="btn btn-outline" style="color:#c00;border-color:#c00" onclick="deleteReceipt('${rid}')">🗑 Delete</button>
+      ${rec.file_url ? `<button class="btn btn-outline" onclick="reparseReceipt('${rid}')"><i class="ti ti-refresh" aria-hidden="true"></i> Re-read photo</button>` : ''}
+      ${rec.status==='pending' ? `<button class="btn btn-green" onclick="setReceiptStatus('${rid}','approved')"><i class="ti ti-check" aria-hidden="true"></i> Confirm &amp; Approve</button>
+        <button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="setReceiptStatus('${rid}','rejected')"><i class="ti ti-x" aria-hidden="true"></i> Reject</button>` : ''}
+      <button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="deleteReceipt('${rid}')"><i class="ti ti-trash" aria-hidden="true"></i> Delete</button>
       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>`;
     openDrawer('Receipt', body, footer);
   } catch(e) { alert('Could not load receipt: ' + e.message); }
@@ -3359,7 +3360,7 @@ async function assignSelected() {
   openDrawer('Assign volunteer', `
     <p style="font-size:13px;color:var(--gray-4)">Assign a volunteer to <strong>${ids.length}</strong> selected receipt(s):</p>
     <div class="form-group"><label>Volunteer</label><select id="bulk-vol" class="form-control">${opts}</select></div>
-    <div id="bulk-assign-err" style="color:#c00;font-size:13px"></div>`,
+    <div id="bulk-assign-err" style="color:var(--danger);font-size:13px"></div>`,
     `<button class="btn btn-green" onclick="applyBulkAssign()">Assign</button>
      <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
 }
@@ -3413,7 +3414,7 @@ async function approveReceipt(id) {
   if (el) el.innerHTML = '<span style="color:var(--gray-4);font-size:12px">Saving…</span>';
   try {
     await PUT('/receipts/' + id, { status: 'approved' });
-    if (el) el.innerHTML = '<span style="color:#1a8754;font-size:12px">✓ Approved</span>';
+    if (el) el.innerHTML = '<span style="color:var(--accent);font-size:12px">✓ Approved</span>';
     const row = document.getElementById('rrow-' + id);
     if (row) { const badge = row.querySelector('.badge'); if (badge) badge.outerHTML = '<span class="badge badge-approved">approved</span>'; }
   } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
@@ -3424,14 +3425,14 @@ async function rejectReceipt(id) {
   if (el) el.innerHTML = '<span style="color:var(--gray-4);font-size:12px">Saving…</span>';
   try {
     await PUT('/receipts/' + id, { status: 'rejected' });
-    if (el) el.innerHTML = '<span style="color:#c00;font-size:12px">✗ Rejected</span>';
+    if (el) el.innerHTML = '<span style="color:var(--danger);font-size:12px">✗ Rejected</span>';
     const row = document.getElementById('rrow-' + id);
     if (row) { const badge = row.querySelector('.badge'); if (badge) badge.outerHTML = '<span class="badge badge-rejected">rejected</span>'; }
   } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
 }
 
 // ── Finance (unified: money ledger + spend dashboard) ─────────────────────────
-const SR_PALETTE = ['#1a8754','#2980b9','#6c5ce7','#e67e22','#c0392b','#16a085','#8e44ad','#d35400','#2c3e50','#7f8c8d'];
+const SR_PALETTE = ['#285D4C','#B0863C','#4E8A5E','#C4772E','#337060','#8E6A2A','#6C6A5C','#A7B3A0','#1E4A3C','#C39A4E'];
 
 async function renderFinanceSummary() {
   STATE._srSince = STATE._srSince || '';
@@ -3440,7 +3441,7 @@ async function renderFinanceSummary() {
     <input type="date" id="sr-since" value="${STATE._srSince}" title="Spend from" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
     <input type="date" id="sr-until" value="${STATE._srUntil}" title="Spend to" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
     <button class="btn btn-outline" onclick="applySpendFilter()" style="margin-right:6px">Apply</button>
-    <button class="btn btn-green" onclick="exportSpendReport()">⬇ Excel</button>`;
+    <button class="btn btn-green" onclick="exportSpendReport()"><i class="ti ti-download" aria-hidden="true"></i>Excel</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
     const qs = [];
@@ -3470,12 +3471,12 @@ async function renderFinanceSummary() {
 
         ${sec('Money position')}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
-          ${ledger('Income (donations)', t.income, '#1a8754')}
-          ${ledger('Committed (approved)', t.committed, '#2980b9', `${t.approved_count} receipts`)}
-          ${ledger('Paid out', t.paid_out, '#c0392b')}
-          ${ledger('Owed to volunteers', t.outstanding_payable, '#e67e22', 'approved, unpaid')}
-          ${ledger('Cash balance', t.cash_balance, '#146c43', 'income − paid out')}
-          ${ledger('Pending review', t.pending_review, '#8a8a8a', `${t.pending_count} receipts`)}
+          ${ledger('Income (donations)', t.income, 'var(--gold-deep)')}
+          ${ledger('Committed (approved)', t.committed, 'var(--accent)', `${t.approved_count} receipts`)}
+          ${ledger('Paid out', t.paid_out, 'var(--danger)')}
+          ${ledger('Owed to volunteers', t.outstanding_payable, 'var(--warning)', 'approved, unpaid')}
+          ${ledger('Cash balance', t.cash_balance, 'var(--accent-deep)', 'income − paid out')}
+          ${ledger('Pending review', t.pending_review, 'var(--text-2)', `${t.pending_count} receipts`)}
         </div>
 
         <div class="table-card">
@@ -3489,7 +3490,7 @@ async function renderFinanceSummary() {
                   <td style="font-size:12px;white-space:nowrap">${fmtDate(c.delivery_date_start)}</td>
                   <td style="text-align:center">${c.approved_count||0}</td>
                   <td><strong>${fmtMoney(c.committed_total)}</strong></td>
-                  <td style="color:#1a8754">${fmtMoney(c.paid_total)}</td>
+                  <td style="color:var(--accent)">${fmtMoney(c.paid_total)}</td>
                   <td style="color:${c.outstanding_total>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(c.outstanding_total)}</td>
                 </tr>`).join('')
               : '<tr class="empty-row"><td colspan="6">No approved receipts yet</td></tr>'}
@@ -3543,7 +3544,7 @@ async function renderFinanceSummary() {
       </div>`;
     drawSpendCharts(d);
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -3587,8 +3588,8 @@ function drawSpendCharts(d) {
     window._srLine = new Chart(line.getContext('2d'), {
       type: 'line',
       data: { labels: d.by_month.map(m => m.month),
-        datasets: [{ data: d.by_month.map(m => m.total), borderColor: '#1a8754',
-          backgroundColor: 'rgba(26,135,84,.1)', fill: true, tension: 0.3, pointRadius: 3 }] },
+        datasets: [{ data: d.by_month.map(m => m.total), borderColor: '#285D4C',
+          backgroundColor: 'rgba(40,93,76,.1)', fill: true, tension: 0.3, pointRadius: 3 }] },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtMoney(ctx.parsed.y) } } },
         scales: { y: { ticks: { callback: v => '$' + v.toLocaleString() } }, x: { grid: { display: false } } } }
@@ -3612,7 +3613,7 @@ async function renderPayments(filter) {
     document.getElementById('content').innerHTML = `
       <div class="table-card">
         <div class="table-header">
-          <span class="table-title">Payments${pendingCount ? ` <span style="background:#c00;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px">${pendingCount} pending</span>` : ''}</span>
+          <span class="table-title">Payments${pendingCount ? ` <span style="background:var(--danger);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px">${pendingCount} pending</span>` : ''}</span>
           <div class="filter-tabs">
             ${['pending','paid','all','rejected'].map(f =>
               `<div class="filter-tab ${filter===f?'active':''}"
@@ -3633,7 +3634,7 @@ async function renderPayments(filter) {
                 <td style="font-size:11px;white-space:nowrap">${fmtDate(r.purchase_date)}</td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>${r.receipt_photo
-                  ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${r.receipt_photo}')" style="font-size:12px;color:var(--green);white-space:nowrap">📷 View</a>`
+                  ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${r.receipt_photo}')" style="font-size:12px;color:var(--green);white-space:nowrap"><i class="ti ti-photo" aria-hidden="true"></i> View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td style="font-size:12px">${r.payment_method ? r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1) : '—'}${r.payment_ref ? `<br><span style="color:var(--gray-4);font-size:11px">${esc(r.payment_ref)}</span>` : ''}</td>
                 <td>${badge(r.status)}</td>
@@ -3641,13 +3642,13 @@ async function renderPayments(filter) {
                   ${r.status==='pending' ? `
                     <div style="display:flex;gap:4px;flex-wrap:wrap">
                       ${['venmo','zelle','check','cash'].map(m =>
-                        `<button class="btn btn-sm" style="background:#1a8754;color:#fff;padding:3px 7px;font-size:11px"
+                        `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 7px;font-size:11px"
                           onclick="quickPayReimb('${r.id}','${m}',${r.amount||0})">${m.charAt(0).toUpperCase()+m.slice(1)}</button>`
                       ).join('')}
-                      <button class="btn btn-sm btn-outline" style="color:#c00;border-color:#c00;padding:3px 7px;font-size:11px"
+                      <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);padding:3px 7px;font-size:11px"
                         onclick="rejectReimb('${r.id}')">✗</button>
                     </div>` : r.status==='paid' ? `
-                    <span style="font-size:11px;color:#1a8754">✓ Paid</span>` : ''
+                    <span style="font-size:11px;color:var(--accent)">✓ Paid</span>` : ''
                   }
                 </td>
               </tr>`).join('') :
@@ -3656,7 +3657,7 @@ async function renderPayments(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -3665,8 +3666,8 @@ async function renderDonations(filter) {
   filter = filter || STATE.filter || 'all';
   STATE.filter = filter;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-outline" onclick="syncWixDonations()" id="wix-sync-btn">🔄 Sync Wix</button>
-     <button class="btn btn-outline" onclick="exportDonations()" style="margin-left:8px">⬇ Export Excel</button>
+    `<button class="btn btn-outline" onclick="syncWixDonations()" id="wix-sync-btn"><i class="ti ti-refresh" aria-hidden="true"></i> Sync Wix</button>
+     <button class="btn btn-outline" onclick="exportDonations()" style="margin-left:8px"><i class="ti ti-download" aria-hidden="true"></i>Export Excel</button>
      <button class="btn" onclick="openDonationForm()" style="margin-left:8px">+ Log Donation</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
@@ -3700,7 +3701,7 @@ async function renderDonations(filter) {
           return `
           <div style="min-width:150px;background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;padding:12px 14px;flex-shrink:0;">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px;">${monthLabel(m)}</div>
-            <div style="font-size:20px;font-weight:800;color:#1a8754;">${fmtMoney(d.total)}</div>
+            <div style="font-size:20px;font-weight:800;color:var(--accent);">${fmtMoney(d.total)}</div>
             <div style="font-size:11px;color:#aaa;margin-top:2px;margin-bottom:2px;">${d.count} donation${d.count !== 1 ? 's' : ''}</div>
             ${pillsHTML}
           </div>`;
@@ -3725,7 +3726,7 @@ async function renderDonations(filter) {
                 </td>
                 <td><strong>${fmtMoney(r.amount)}</strong></td>
                 <td>
-                  <span style="font-size:12px;padding:2px 8px;border-radius:10px;background:${r.frequency==='monthly'?'#e8f5e9':'#fff3e0'};color:${r.frequency==='monthly'?'#1a8754':'#e67e22'}">
+                  <span style="font-size:12px;padding:2px 8px;border-radius:10px;background:${r.frequency==='monthly'?'#e8f5e9':'#fff3e0'};color:${r.frequency==='monthly'?'var(--accent)':'#e67e22'}">
                     ${r.frequency||'one-time'}
                   </span>
                 </td>
@@ -3733,7 +3734,7 @@ async function renderDonations(filter) {
                 <td style="font-size:12px;color:var(--gray-4)">${esc(r.notes||r.source||'—')}</td>
                 <td style="white-space:nowrap">
                   <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;" onclick='openDonationForm(${esc(JSON.stringify(r))})'>Edit</button>
-                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;color:#c00;border-color:#c00;margin-left:4px" onclick="deleteDonation('${r.id}','${escJs(r.donor_name||'Anonymous')}')">Delete</button>
+                  <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;color:var(--danger);border-color:var(--danger);margin-left:4px" onclick="deleteDonation('${r.id}','${escJs(r.donor_name||'Anonymous')}')">Delete</button>
                 </td>
               </tr>`).join('') :
               '<tr class="empty-row"><td colspan="6">No donations yet — click Sync Wix to import</td></tr>'}
@@ -3741,7 +3742,7 @@ async function renderDonations(filter) {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -3751,14 +3752,14 @@ async function syncWixDonations() {
   try {
     const res = await POST('/donations/sync-wix', {});
     renderDonations();
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync Wix'; }
+    if (btn) { btn.disabled = false; btn.textContent = '<i class="ti ti-refresh" aria-hidden="true"></i> Sync Wix'; }
     if (res.imported > 0) {
       alert(`✅ Synced ${res.imported} new donation${res.imported>1?'s':''} from Wix.${res.skipped_duplicates>0?' ('+res.skipped_duplicates+' already imported)':''}`);
     } else {
       alert(`✓ Already up to date — no new donations found.`);
     }
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync Wix'; }
+    if (btn) { btn.disabled = false; btn.textContent = '<i class="ti ti-refresh" aria-hidden="true"></i> Sync Wix'; }
     if (e.message.includes('WIX_API_KEY')) {
       alert('Wix API key not configured.\n\nTo set it up:\n1. Go to wix.com → Account Settings → API Keys\n2. Create a key with eCommerce read permissions\n3. Add WIX_API_KEY=<your key> in Railway Variables\n4. Redeploy');
     } else {
@@ -3867,7 +3868,7 @@ async function quickPayReimb(id, method, amount) {
     });
     renderPayments(STATE.filter);
   } catch(e) {
-    if (cell) cell.innerHTML = `<span style="color:#c00;font-size:11px">${esc(e.message)}</span>`;
+    if (cell) cell.innerHTML = `<span style="color:var(--danger);font-size:11px">${esc(e.message)}</span>`;
   }
 }
 
@@ -3945,7 +3946,7 @@ async function renderUsers() {
       if (r.must_change_password) return '<span style="color:#e07b00;font-size:11px;font-weight:700">⚠ Must Change</span>';
       if (!r.password_changed_at) return '<span style="color:#888;font-size:11px">Never set</span>';
       const days = Math.floor((Date.now() - new Date(r.password_changed_at)) / 86400000);
-      const color = days >= 55 ? '#c00' : days >= 45 ? '#e07b00' : '#4caf50';
+      const color = days >= 55 ? 'var(--danger)' : days >= 45 ? '#e07b00' : '#4caf50';
       return `<span style="color:${color};font-size:11px">${days}d ago</span>`;
     }
     function lastLoginLabel(r) {
@@ -3983,7 +3984,7 @@ async function renderUsers() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -4017,8 +4018,8 @@ async function doResetPassword(uid, username) {
          <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">NEW PASSWORD</span><br><strong>${esc(res.new_password)}</strong></div>
        </div>
        <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
-       ${res.email_sent ? `<p style="font-size:12px;color:#1a8754;margin-top:4px">✓ Emailed to ${esc(res.email)}</p>` :
-         res.email ? `<p style="font-size:12px;color:#c00;margin-top:4px">⚠ Email failed — share manually</p>` :
+       ${res.email_sent ? `<p style="font-size:12px;color:var(--accent);margin-top:4px">✓ Emailed to ${esc(res.email)}</p>` :
+         res.email ? `<p style="font-size:12px;color:var(--danger);margin-top:4px">⚠ Email failed — share manually</p>` :
          `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email on file — share manually</p>`}`,
       `<button class="btn" onclick="closeDrawer();renderUsers()">Done</button>`
     );
@@ -4225,7 +4226,7 @@ async function renderOrders() {
 
     if (STATE._ordersCycleId) loadOrders();
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -4252,7 +4253,7 @@ async function loadOrders() {
       confirmed:'background:#e8f5e9;color:#1a5e34', auto_confirmed:'background:#e8f5e9;color:#1a5e34',
       submitted:'background:#fff8e1;color:#7a5200', skipped:'background:var(--gray-1);color:var(--gray-4)',
       pending_confirmation:'background:#e8f0ff;color:#3a3a9a', delivered:'background:#e3f2fd;color:#0d47a1',
-      cancelled:'background:#fdecea;color:#c00', no_order:'background:#fff3e0;color:#8a4000'
+      cancelled:'background:#fdecea;color:var(--danger)', no_order:'background:#fff3e0;color:#8a4000'
     };
     const statusLabel = s => s==='auto_confirmed'?'Confirmed':s==='no_order'?'No Order':s==='pending_confirmation'?'Awaiting':s;
 
@@ -4263,11 +4264,11 @@ async function loadOrders() {
         : `<span style="color:var(--gray-3);font-size:11px;">—</span>`;
       const safeName = escJs(o.family_name||'');
       const actions = o.status === 'no_order' ? `
-        <button class="btn btn-sm" style="background:#1a8754;color:#fff;font-size:11px;"
-          onclick="manualConfirmFamily('${o.id}','${safeName}')">＋ Add to Cycle</button>` : `
+        <button class="btn btn-sm" style="background:var(--accent);color:#fff;font-size:11px;"
+          onclick="manualConfirmFamily('${o.id}','${safeName}')"><i class="ti ti-plus" aria-hidden="true"></i> Add to Cycle</button>` : `
         ${o.id?`<button class="btn btn-sm btn-outline" style="font-size:11px;"
           onclick="openEditOrderItems('${o.id}','${safeName}','${o.bundle_size||''}','${cycleId}')">✏ Edit</button>`:''}
-        ${(o.status==='submitted'||o.status==='pending_confirmation')?`<button class="btn btn-sm" style="background:#1a8754;color:#fff;font-size:11px;margin-left:4px;"
+        ${(o.status==='submitted'||o.status==='pending_confirmation')?`<button class="btn btn-sm" style="background:var(--accent);color:#fff;font-size:11px;margin-left:4px;"
           onclick="overrideFoodRequest('${o.id}','confirmed','${cycleId}','${o.family_id}')">✓</button>`:''}
         ${(o.status==='confirmed'||o.status==='auto_confirmed')?`<button class="btn btn-sm btn-outline" style="font-size:11px;margin-left:4px;"
           onclick="overrideFoodRequest('${o.id}','skipped','${cycleId}','${o.family_id}')">Skip</button>`:''}
@@ -4295,7 +4296,7 @@ async function loadOrders() {
       <div style="padding:10px 16px;font-size:12px;color:var(--gray-4);border-top:1px solid var(--gray-2);">
         ${rows.length} ${filter==='no_order'?'families without orders':'orders'}</div>`;
   } catch(e) {
-    body.innerHTML = `<p style="padding:16px;color:#c00">${esc(e.message)}</p>`;
+    body.innerHTML = `<p style="padding:16px;color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -4339,7 +4340,7 @@ async function renderActiveCycle() {
     document.getElementById('page-title').textContent = active.title;
     await viewCycleDetail(active.id);
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -4381,7 +4382,7 @@ async function renderDeliveries(filterStatus) {
                   ${c.status === 'open'      ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','open')">← Upcoming</button>
                                                <button class="btn btn-sm" style="margin-left:4px;background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>` : ''}
                   ${c.status === 'shopping'  ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','shopping')">← Accepting Orders</button>
-                                               <button class="btn btn-sm" style="margin-left:4px;background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
+                                               <button class="btn btn-sm" style="margin-left:4px;background:var(--accent);color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>` : ''}
                   ${c.status === 'delivered' ? `<button class="btn btn-sm" style="margin-left:4px;background:#888;color:#fff" onclick="revertCycleStatus('${c.id}','delivered')">← Shopping</button>` : ''}
                 </td>
               </tr>`).join('') :
@@ -4392,7 +4393,7 @@ async function renderDeliveries(filterStatus) {
     // Load confirmation counts async
     _cyclesCache.forEach(c => loadConfirmationCount(c.id));
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -4406,7 +4407,7 @@ async function loadConfirmationCount(cycleId) {
     const pending   = orders.filter(o => o.status === 'pending_confirmation').length;
     const el = document.getElementById('conf-' + cycleId);
     if (el) el.innerHTML = total
-      ? `<span style="color:#1a8754;font-weight:600">${confirmed}/${total}</span> confirmed${skipped ? ` · ${skipped} skip` : ''}${pending ? ` · ${pending} pending` : ''}`
+      ? `<span style="color:var(--accent);font-weight:600">${confirmed}/${total}</span> confirmed${skipped ? ` · ${skipped} skip` : ''}${pending ? ` · ${pending} pending` : ''}`
       : `<span style="color:#aaa">0 enrolled</span>`;
   } catch(e) {}
 }
@@ -4472,7 +4473,7 @@ function openCycleForm(id) {
       <select id="cy-status">
         ${[['upcoming','Upcoming'],['open','Accepting Orders'],['shopping','Shopping'],['delivered','Delivered']].map(([v,l]) => `<option value="${v}" ${c?.status===v?'selected':''}>${l}</option>`).join('')}
       </select>
-    </div>` : `<p style="font-size:13px;color:#1a8754;background:#f0faf5;padding:10px 12px;border-radius:8px;margin-top:4px;">
+    </div>` : `<p style="font-size:13px;color:var(--accent);background:#f0faf5;padding:10px 12px;border-radius:8px;margin-top:4px;">
       ✓ All active families will be automatically enrolled when the delivery is created.
     </p>`}
     <div class="form-group">
@@ -4515,7 +4516,7 @@ async function viewCycleDetail(cycleId) {
     if (!c) return '';
     if (c.status === 'upcoming')  return `<button class="btn btn-sm" style="background:#e67e22;color:#fff" onclick="advanceCycleStatus('${c.id}','upcoming')">→ Accepting Orders</button>`;
     if (c.status === 'open')      return `<button class="btn btn-sm btn-outline" onclick="revertCycleStatus('${c.id}','open')">← Upcoming</button> <button class="btn btn-sm" style="background:#2e86c1;color:#fff" onclick="advanceCycleStatus('${c.id}','open')">→ Shopping</button>`;
-    if (c.status === 'shopping')  return `<button class="btn btn-sm btn-outline" onclick="revertCycleStatus('${c.id}','shopping')">← Accepting Orders</button> <button class="btn btn-sm" style="background:#1a8754;color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>`;
+    if (c.status === 'shopping')  return `<button class="btn btn-sm btn-outline" onclick="revertCycleStatus('${c.id}','shopping')">← Accepting Orders</button> <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="advanceCycleStatus('${c.id}','shopping')">→ Delivered</button>`;
     return '';
   })();
   document.getElementById('topbar-actions').innerHTML =
@@ -4525,8 +4526,8 @@ async function viewCycleDetail(cycleId) {
      ${_statusAdvanceBtns}
      <button class="btn btn-outline" onclick="viewShoppingList('${cycleId}')">Shopping List</button>
      <button class="btn btn-outline" onclick="viewSlotBoard('${cycleId}')">Slot Board</button>
-     <button class="btn btn-outline" onclick="downloadPDF('/reports/shopping-list/${cycleId}')">⬇ Shopping PDF</button>
-     <button class="btn btn-outline" onclick="downloadPDF('/reports/cycle-summary/${cycleId}')">⬇ Summary PDF</button>
+     <button class="btn btn-outline" onclick="downloadPDF('/reports/shopping-list/${cycleId}')"><i class="ti ti-download" aria-hidden="true"></i>Shopping PDF</button>
+     <button class="btn btn-outline" onclick="downloadPDF('/reports/cycle-summary/${cycleId}')"><i class="ti ti-download" aria-hidden="true"></i>Summary PDF</button>
      <button class="btn" onclick="generateSlots('${cycleId}')">Generate Slots</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
@@ -4626,8 +4627,8 @@ async function viewCycleDetail(cycleId) {
         });
 
         const slotBadge = slot => {
-          if (!slot) return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:#c00">⚠ No slot</span>';
-          if (slot.status === 'open')      return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:#c00">⚠ Open</span>';
+          if (!slot) return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:var(--danger)">⚠ No slot</span>';
+          if (slot.status === 'open')      return '<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fdecea;color:var(--danger)">⚠ Open</span>';
           if (slot.status === 'claimed')   return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#fff8e6;color:#7a6000">⏳ ${esc(slot.claimed_by_name||'?')}</span>`;
           if (slot.status === 'confirmed') return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ ${esc(slot.claimed_by_name||'?')}</span>`;
           if (slot.status === 'complete')  return `<span style="font-size:11px;font-weight:700;padding:2px 8px;background:#e8f5e9;color:#1a5e34">✓ Done</span>`;
@@ -4638,8 +4639,8 @@ async function viewCycleDetail(cycleId) {
         const needsDelivery = confirmedOrders.filter(o => { const s = slotMap[o.family_id]?.delivery; return !s || s.status === 'open'; }).length;
 
         const summaryParts = [];
-        if (needsShopper)  summaryParts.push(`<span style="color:#c00;font-weight:700">${needsShopper}</span> need a shopper`);
-        if (needsDelivery) summaryParts.push(`<span style="color:#c00;font-weight:700">${needsDelivery}</span> need a deliverer`);
+        if (needsShopper)  summaryParts.push(`<span style="color:var(--danger);font-weight:700">${needsShopper}</span> need a shopper`);
+        if (needsDelivery) summaryParts.push(`<span style="color:var(--danger);font-weight:700">${needsDelivery}</span> need a deliverer`);
         const summaryHtml = summaryParts.length
           ? summaryParts.join(' · ')
           : '<span style="color:#1a5e34;font-weight:700">All families have volunteers ✓</span>';
@@ -4671,7 +4672,7 @@ async function viewCycleDetail(cycleId) {
         </div>`;
       })()}`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -4871,7 +4872,7 @@ async function renderRequests() {
     const renderRow = (cr, showActions) => {
       const itemList = (cr.selected_items||[]).map(i => `<span style="display:inline-block;background:#f5f5f5;border-radius:3px;padding:1px 6px;margin:2px;font-size:11px;">${esc(i.name)}</span>`).join('');
       return `
-        <div style="background:#fff;border:1px solid #eee;border-left:3px solid ${cr.status==='pending'?'#f0c040':cr.status==='approved'?'#1a8754':'#ccc'};padding:14px 16px;margin-bottom:10px;">
+        <div style="background:#fff;border:1px solid #eee;border-left:3px solid ${cr.status==='pending'?'#f0c040':cr.status==='approved'?'var(--accent)':'#ccc'};padding:14px 16px;margin-bottom:10px;">
           <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <div style="flex:1;min-width:200px;">
               <div style="font-weight:700;font-size:14px;">${esc(cr.family_name)} <span style="font-weight:400;font-size:12px;color:#888;font-family:monospace;">${esc(cr.family_code||'')}</span></div>
@@ -4882,12 +4883,12 @@ async function renderRequests() {
           </div>
           ${cr.family_notes ? `<div style="background:#f9f9f9;border-left:2px solid #ddd;padding:6px 10px;font-size:13px;margin-bottom:8px;color:#333;">💬 "${esc(cr.family_notes)}"</div>` : ''}
           ${itemList ? `<div style="margin-bottom:8px;"><div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Requested items:</div>${itemList}</div>` : ''}
-          ${cr.admin_notes ? `<div style="background:#f0faf5;border-left:2px solid #1a8754;padding:6px 10px;font-size:12px;color:#1a5e34;margin-bottom:8px;">📝 Admin note: "${esc(cr.admin_notes)}"</div>` : ''}
+          ${cr.admin_notes ? `<div style="background:#f0faf5;border-left:2px solid var(--accent);padding:6px 10px;font-size:12px;color:#1a5e34;margin-bottom:8px;">📝 Admin note: "${esc(cr.admin_notes)}"</div>` : ''}
           ${showActions && cr.status === 'pending' ? `
             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
               <input type="text" id="note-${cr.id}" placeholder="Admin note (optional)" style="flex:1;min-width:200px;border:1px solid #ddd;padding:5px 8px;font-size:12px;font-family:inherit;">
-              <button onclick="approveRequest('${cr.id}')" style="background:#1a8754;color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✓ Approve</button>
-              <button onclick="rejectRequest('${cr.id}')" style="background:#c00;color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✕ Reject</button>
+              <button onclick="approveRequest('${cr.id}')" style="background:var(--accent);color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✓ Approve</button>
+              <button onclick="rejectRequest('${cr.id}')" style="background:var(--danger);color:#fff;border:none;padding:6px 16px;font-size:12px;cursor:pointer;font-family:inherit;">✕ Reject</button>
               <button onclick="viewFamily('${cr.family_id}')" style="background:none;border:1px solid #ccc;color:#555;padding:6px 12px;font-size:12px;cursor:pointer;font-family:inherit;">View Family →</button>
             </div>` : ''}
         </div>`;
@@ -4897,7 +4898,7 @@ async function renderRequests() {
       <div style="max-width:780px;">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
           <h2 style="font-size:18px;font-weight:800;">Change Requests</h2>
-          ${pending.length > 0 ? `<span style="background:#f0c040;color:#7a4a00;font-size:12px;font-weight:700;padding:3px 10px;">${pending.length} pending</span>` : '<span style="background:#e8f5ee;color:#1a8754;font-size:12px;padding:3px 10px;">All clear</span>'}
+          ${pending.length > 0 ? `<span style="background:#f0c040;color:#7a4a00;font-size:12px;font-weight:700;padding:3px 10px;">${pending.length} pending</span>` : '<span style="background:#e8f5ee;color:var(--accent);font-size:12px;padding:3px 10px;">All clear</span>'}
         </div>
 
         ${pending.length === 0 ? `
@@ -4911,7 +4912,7 @@ async function renderRequests() {
         ` : ''}
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00;padding:20px">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger);padding:20px">${esc(e.message)}</p>`;
   }
 }
 
@@ -4976,7 +4977,7 @@ async function viewShoppingList(cycleId) {
             </table>
           </div>`).join('')}`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -5035,7 +5036,7 @@ async function viewSlotBoard(cycleId) {
         </div>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -5107,7 +5108,7 @@ async function renderCatalog() {
     // Load and display bundle quantities
     loadBundleQtysIntoTable();
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
@@ -5531,7 +5532,7 @@ async function renderPricingTable() {
         </table>
       </div>`;
   } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+    document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
