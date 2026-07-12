@@ -3743,6 +3743,20 @@ def bulk_assign_receipts():
     return jsonify({'ok': True, 'assigned': n})
 
 
+@app.route('/api/receipt-items/<item_id>', methods=['PUT'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def update_receipt_item(item_id):
+    """Manually set/override a line item's spending category (from the food catalog,
+    'Other', or blank to clear). Lets an admin correct what the model guessed."""
+    db = get_db()
+    if not db.execute("SELECT id FROM receipt_items WHERE id=?", (item_id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    cat = ((request.json or {}).get('category') or '').strip()[:60] or None
+    db.execute("UPDATE receipt_items SET category=? WHERE id=?", (cat, item_id))
+    db.commit()
+    return jsonify({'ok': True, 'category': cat})
+
+
 @app.route('/api/receipts/<rid>', methods=['DELETE'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def delete_receipt(rid):

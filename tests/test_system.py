@@ -2323,6 +2323,21 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_manual_item_category_override(self, client, auth):
+        rid = client.post('/api/receipts', headers=auth, json={
+            'amount': 20, 'store': 'X',
+            'parsed': {'total': 20, 'confidence': 0.9,
+                       'line_items': [{'name': 'Mystery', 'line_total': 20, 'qty': 1, 'unit_price': 20, 'category': 'Other'}]},
+        }).get_json()['id']
+        iid = client.get('/api/receipts/' + rid, headers=auth).get_json()['items'][0]['id']
+        r = client.put('/api/receipt-items/' + iid, headers=auth, json={'category': 'Protein'})
+        assert r.status_code == 200 and r.get_json()['category'] == 'Protein'
+        assert client.get('/api/receipts/' + rid, headers=auth).get_json()['items'][0]['category'] == 'Protein'
+        # blank clears it
+        client.put('/api/receipt-items/' + iid, headers=auth, json={'category': ''})
+        assert client.get('/api/receipts/' + rid, headers=auth).get_json()['items'][0]['category'] is None
+        assert client.put('/api/receipt-items/nope', headers=auth, json={'category': 'X'}).status_code == 404
+
     def test_spend_report_metrics_and_drilldown(self, client, auth):
         rid = client.post('/api/receipts', headers=auth, json={
             'amount': 80, 'store': 'ReportMart', 'purchase_date': '2026-05-02',

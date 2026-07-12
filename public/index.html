@@ -557,10 +557,7 @@
 
       <div class="nav-section">Finance</div>
       <div class="nav-item" onclick="nav('summary')" id="nav-summary">
-        <span class="icon">≡</span> Summary
-      </div>
-      <div class="nav-item" onclick="nav('spend-report')" id="nav-spend-report">
-        <span class="icon">📊</span> Spend Report
+        <span class="icon">📊</span> Finance
       </div>
       <div class="nav-item" onclick="nav('payments')" id="nav-payments">
         <span class="icon">◫</span> Payments
@@ -723,7 +720,7 @@ function nav(page) {
   if (navEl) navEl.classList.add('active');
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
-    summary: 'Finance Summary', 'spend-report': 'Spend Report',
+    summary: 'Finance',
     payments: 'Payments', receipts: 'Receipts', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
     catalog: 'Food Catalog', pricing: 'Pricing Table',
@@ -735,7 +732,7 @@ function nav(page) {
   const renders = {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
-    summary: renderFinanceSummary, 'spend-report': renderSpendReport,
+    summary: renderFinanceSummary,
     payments: renderPayments, receipts: renderReceipts, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, 'active-cycle': renderActiveCycle,
     catalog: renderCatalog, pricing: renderPricingTable, orders: renderOrders,
@@ -3138,11 +3135,22 @@ async function viewReceiptPhoto(url) {
 // Editable receipt detail: assign a volunteer, fix store/date/amount, review line items.
 async function openReceiptDetail(rid) {
   try {
-    const [rec, vols, cycles] = await Promise.all([
+    const [rec, vols, cycles, foodCats] = await Promise.all([
       GET('/receipts/' + rid),
       GET('/volunteers'),
-      GET('/delivery-cycles')
+      GET('/delivery-cycles'),
+      GET('/food-categories').catch(() => [])
     ]);
+    const catNames = (foodCats || []).filter(c => c.is_active !== 0).map(c => c.name);
+    const catSelect = (itemId, current) => {
+      const opts = ['<option value="">— none —</option>']
+        .concat(catNames.map(n => `<option value="${esc(n)}" ${current===n?'selected':''}>${esc(n)}</option>`))
+        .concat([`<option value="Other" ${current==='Other'?'selected':''}>Other</option>`]);
+      // keep an unknown/legacy category selectable too
+      if (current && current!=='Other' && !catNames.includes(current))
+        opts.splice(1, 0, `<option value="${esc(current)}" selected>${esc(current)}</option>`);
+      return `<select onchange="updateItemCategory('${itemId}', this.value)" style="font-size:11px;padding:1px 3px;max-width:120px">${opts.join('')}</select>`;
+    };
     // Volunteers use a status field ('active'/'pending'/'inactive'), not a boolean.
     // Show everyone who isn't retired, active first, sorted by name.
     const selectable = vols
@@ -3165,7 +3173,7 @@ async function openReceiptDetail(rid) {
         <tbody>${items.map(it => `
           <tr style="border-top:1px solid #eee">
             <td style="padding:3px 4px">${esc(it.name||'—')}</td>
-            <td style="padding:3px 4px;color:var(--gray-4)">${esc(it.category||'—')}</td>
+            <td style="padding:3px 4px">${catSelect(it.id, it.category)}</td>
             <td style="padding:3px 4px;text-align:right">${it.qty!=null?esc(String(it.qty)):''}</td>
             <td style="padding:3px 4px;text-align:right">${it.unit_price!=null?fmtMoney(it.unit_price):''}</td>
             <td style="padding:3px 4px;text-align:right">${it.line_total!=null?fmtMoney(it.line_total):''}</td>
@@ -3223,6 +3231,11 @@ function _collectReceiptEdits() {
     amount:        a !== '' ? parseFloat(a) : null,
     notes:         document.getElementById('rd-notes').value.trim() || null
   };
+}
+
+async function updateItemCategory(itemId, category) {
+  try { await PUT('/receipt-items/' + itemId, { category: category || null }); }
+  catch(e) { alert('Could not save category: ' + e.message); }
 }
 
 async function saveReceiptDetail(rid) {
@@ -3358,42 +3371,52 @@ async function rejectReceipt(id) {
   } catch(e) { alert(e.message); renderReceipts(STATE.filter); }
 }
 
-// ── Finance Summary ───────────────────────────────────────────────────────────
+// ── Finance (unified: money ledger + spend dashboard) ─────────────────────────
+const SR_PALETTE = ['#1a8754','#2980b9','#6c5ce7','#e67e22','#c0392b','#16a085','#8e44ad','#d35400','#2c3e50','#7f8c8d'];
+
 async function renderFinanceSummary() {
-  document.getElementById('topbar-actions').innerHTML = '';
+  STATE._srSince = STATE._srSince || '';
+  STATE._srUntil = STATE._srUntil || '';
+  document.getElementById('topbar-actions').innerHTML = `
+    <input type="date" id="sr-since" value="${STATE._srSince}" title="Spend from" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
+    <input type="date" id="sr-until" value="${STATE._srUntil}" title="Spend to" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
+    <button class="btn btn-outline" onclick="applySpendFilter()" style="margin-right:6px">Apply</button>
+    <button class="btn btn-green" onclick="exportSpendReport()">⬇ Excel</button>`;
   document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
   try {
-    const [data, an] = await Promise.all([GET('/finance/summary'), GET('/receipts/analytics')]);
-    const t = data.totals, cycles = data.cycles;
-
-    const card = (label, val, color, sub) => `
-      <div class="stat-card" style="border-left:4px solid ${color};padding:14px 16px;min-width:0">
+    const qs = [];
+    if (STATE._srSince) qs.push('since=' + STATE._srSince);
+    if (STATE._srUntil) qs.push('until=' + STATE._srUntil);
+    const [data, d] = await Promise.all([
+      GET('/finance/summary'),
+      GET('/finance/spend-report' + (qs.length ? '?' + qs.join('&') : '')),
+    ]);
+    const t = data.totals, cycles = data.cycles, m = d.metrics;
+    const ledger = (label, val, color, sub) => `
+      <div class="stat-card" style="border-left:4px solid ${color};padding:14px 16px;min-width:0;cursor:default">
         <div class="stat-label" style="margin-bottom:6px">${label}</div>
-        <div style="color:${color};font-size:23px;font-weight:700;line-height:1.1;letter-spacing:-0.5px;overflow-wrap:break-word">${fmtMoney(val)}</div>
+        <div style="color:${color};font-size:23px;font-weight:700;line-height:1.1;overflow-wrap:break-word">${fmtMoney(val)}</div>
         ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:3px">${sub}</div>` : ''}
       </div>`;
-    const bar = (label, val, max, color) => `
-      <div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px">
-        <div style="width:120px;color:var(--gray-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(label)}">${esc(label)}</div>
-        <div style="flex:1;background:#f0f0f0;border-radius:4px;height:16px">
-          <div style="width:${Math.max(2, 100*val/max)}%;background:${color};height:100%;border-radius:4px"></div>
-        </div>
-        <div style="width:82px;text-align:right;font-weight:600">${fmtMoney(val)}</div>
+    const kpi = (label, val, sub) => `
+      <div class="stat-card" style="padding:14px 16px;min-width:0;cursor:default">
+        <div class="stat-label">${label}</div>
+        <div style="font-size:23px;font-weight:700;line-height:1.1;overflow-wrap:break-word">${val}</div>
+        ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:3px">${sub}</div>` : ''}
       </div>`;
-    const storeMax = Math.max(1, ...an.by_store.map(x => x.total));
-    const monthMax = Math.max(1, ...an.by_month.map(x => x.total));
-    const catMax   = Math.max(1, ...(an.by_category || []).map(x => x.total));
+    const sec = txt => `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin:4px 0 -6px 2px">${txt}</div>`;
 
     document.getElementById('content').innerHTML = `
       <div style="display:flex;flex-direction:column;gap:20px">
 
+        ${sec('Money position')}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
-          ${card('Income (donations)', t.income, '#1a8754')}
-          ${card('Committed (approved)', t.committed, '#2980b9', `${t.approved_count} receipts`)}
-          ${card('Paid out', t.paid_out, '#c0392b')}
-          ${card('Owed to volunteers', t.outstanding_payable, '#e67e22', 'approved, unpaid')}
-          ${card('Cash balance', t.cash_balance, '#146c43', 'income − paid out')}
-          ${card('Pending review', t.pending_review, '#8a8a8a', `${t.pending_count} receipts`)}
+          ${ledger('Income (donations)', t.income, '#1a8754')}
+          ${ledger('Committed (approved)', t.committed, '#2980b9', `${t.approved_count} receipts`)}
+          ${ledger('Paid out', t.paid_out, '#c0392b')}
+          ${ledger('Owed to volunteers', t.outstanding_payable, '#e67e22', 'approved, unpaid')}
+          ${ledger('Cash balance', t.cash_balance, '#146c43', 'income − paid out')}
+          ${ledger('Pending review', t.pending_review, '#8a8a8a', `${t.pending_count} receipts`)}
         </div>
 
         <div class="table-card">
@@ -3415,89 +3438,7 @@ async function renderFinanceSummary() {
           </table>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
-          <div class="table-card">
-            <div class="table-header"><span class="table-title">Spend by category</span></div>
-            <div style="padding:12px 16px">
-              ${(an.by_category && an.by_category.length) ? an.by_category.map(cprev => bar(cprev.category, cprev.total, catMax, '#6c5ce7')).join('')
-                : '<div style="color:var(--gray-4);font-size:12px">No categorized items yet — re-read receipts after setting up the food catalog.</div>'}
-            </div>
-          </div>
-          <div class="table-card">
-            <div class="table-header"><span class="table-title">Spend by store</span></div>
-            <div style="padding:12px 16px">
-              ${an.by_store.length ? an.by_store.slice(0,10).map(s => bar(s.store, s.total, storeMax, '#2980b9')).join('')
-                : '<div style="color:var(--gray-4);font-size:12px">No approved receipts yet</div>'}
-            </div>
-          </div>
-          <div class="table-card">
-            <div class="table-header"><span class="table-title">Spend by volunteer</span></div>
-            <table>
-              <thead><tr><th>Volunteer</th><th>Spent</th><th>Owed</th><th>#</th></tr></thead>
-              <tbody>
-                ${an.by_volunteer.length ? an.by_volunteer.map(v => `
-                  <tr><td>${esc(v.volunteer_name)}</td><td><strong>${fmtMoney(v.total)}</strong></td>
-                  <td style="color:${v.owed>0?'#e67e22':'var(--gray-3)'}">${fmtMoney(v.owed)}</td>
-                  <td style="text-align:center">${v.count}</td></tr>`).join('')
-                : '<tr class="empty-row"><td colspan="4">None yet</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
-          <div class="table-card">
-            <div class="table-header"><span class="table-title">Monthly spend</span></div>
-            <div style="padding:12px 16px">
-              ${an.by_month.length ? an.by_month.map(m => bar(m.month, m.total, monthMax, '#1a8754')).join('')
-                : '<div style="color:var(--gray-4);font-size:12px">No data yet</div>'}
-            </div>
-          </div>
-          <div class="table-card">
-            <div class="table-header"><span class="table-title">Top items purchased</span></div>
-            <table>
-              <thead><tr><th>Item</th><th>Total</th><th>#</th></tr></thead>
-              <tbody>
-                ${an.top_items.length ? an.top_items.slice(0,15).map(i => `
-                  <tr><td>${esc(i.name)}</td><td>${fmtMoney(i.total)}</td><td style="text-align:center">${i.count}</td></tr>`).join('')
-                : '<tr class="empty-row"><td colspan="3">No line items yet</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </div>`;
-  } catch(e) {
-    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
-  }
-}
-
-// ── Spend Report (categorized dashboard) ──────────────────────────────────────
-const SR_PALETTE = ['#1a8754','#2980b9','#6c5ce7','#e67e22','#c0392b','#16a085','#8e44ad','#d35400','#2c3e50','#7f8c8d'];
-
-async function renderSpendReport() {
-  STATE._srSince = STATE._srSince || '';
-  STATE._srUntil = STATE._srUntil || '';
-  document.getElementById('topbar-actions').innerHTML = `
-    <input type="date" id="sr-since" value="${STATE._srSince}" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
-    <input type="date" id="sr-until" value="${STATE._srUntil}" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
-    <button class="btn btn-outline" onclick="applySpendFilter()" style="margin-right:6px">Apply</button>
-    <button class="btn btn-green" onclick="exportSpendReport()">⬇ Excel</button>`;
-  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
-  try {
-    const qs = [];
-    if (STATE._srSince) qs.push('since=' + STATE._srSince);
-    if (STATE._srUntil) qs.push('until=' + STATE._srUntil);
-    const d = await GET('/finance/spend-report' + (qs.length ? '?' + qs.join('&') : ''));
-    const m = d.metrics;
-    const kpi = (label, val, sub) => `
-      <div class="stat-card" style="padding:14px 16px;min-width:0;cursor:default">
-        <div class="stat-label">${label}</div>
-        <div style="font-size:23px;font-weight:700;line-height:1.1;overflow-wrap:break-word">${val}</div>
-        ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:3px">${sub}</div>` : ''}
-      </div>`;
-    document.getElementById('content').innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:20px">
+        ${sec('Spending breakdown' + (STATE._srSince || STATE._srUntil ? ' (filtered)' : ''))}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px">
           ${kpi('Total spend', fmtMoney(m.total_spend), m.receipt_count + ' receipts')}
           ${kpi('Avg receipt', fmtMoney(m.avg_receipt))}
@@ -3507,7 +3448,7 @@ async function renderSpendReport() {
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
           <div class="table-card"><div class="table-header"><span class="table-title">Spend by category</span></div>
-            <div style="padding:16px;height:300px">${d.categories.length ? '<canvas id="sr-donut"></canvas>' : '<div style="color:var(--gray-4);font-size:13px">No categorized spend yet.</div>'}</div></div>
+            <div style="padding:16px;height:300px">${d.categories.length ? '<canvas id="sr-donut"></canvas>' : '<div style="color:var(--gray-4);font-size:13px">No categorized spend yet — re-read receipts (Receipts → Re-read selected) after adding categories in Food Catalog.</div>'}</div></div>
           <div class="table-card"><div class="table-header"><span class="table-title">Monthly spend</span></div>
             <div style="padding:16px;height:300px">${d.by_month.length ? '<canvas id="sr-line"></canvas>' : '<div style="color:var(--gray-4);font-size:13px">No data yet.</div>'}</div></div>
         </div>
@@ -3554,7 +3495,7 @@ function toggleCatItems(idx) {
 function applySpendFilter() {
   STATE._srSince = document.getElementById('sr-since').value;
   STATE._srUntil = document.getElementById('sr-until').value;
-  renderSpendReport();
+  renderFinanceSummary();
 }
 function exportSpendReport() {
   const qs = [];
