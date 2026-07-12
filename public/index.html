@@ -3139,9 +3139,14 @@ async function openReceiptDetail(rid) {
       GET('/volunteers'),
       GET('/delivery-cycles')
     ]);
-    const activeVols = vols.filter(v => v.active);
+    // Volunteers use a status field ('active'/'pending'/'inactive'), not a boolean.
+    // Show everyone who isn't retired, active first, sorted by name.
+    const selectable = vols
+      .filter(v => v.status !== 'inactive')
+      .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1)
+                       || (a.name || '').localeCompare(b.name || ''));
     const volOpts = ['<option value="">— unassigned —</option>'].concat(
-      activeVols.map(v => `<option value="${v.id}" ${v.id===rec.volunteer_id?'selected':''}>${esc(v.name)}</option>`)
+      selectable.map(v => `<option value="${v.id}" ${v.id===rec.volunteer_id?'selected':''}>${esc(v.name)}${v.status!=='active'?' ('+v.status+')':''}</option>`)
     ).join('');
     const cycleOpts = ['<option value="">— none —</option>'].concat(
       cycles.map(c => `<option value="${c.id}" ${c.id===rec.cycle_id?'selected':''}>${esc(c.title)}</option>`)
