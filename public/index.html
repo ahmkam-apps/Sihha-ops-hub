@@ -3155,11 +3155,13 @@ async function openReceiptDetail(rid) {
     const itemsTable = items.length ? `
       <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px">
         <thead><tr style="color:var(--gray-4);text-align:left">
-          <th style="padding:3px 4px">Item</th><th style="padding:3px 4px;text-align:right">Qty</th>
+          <th style="padding:3px 4px">Item</th><th style="padding:3px 4px">Category</th>
+          <th style="padding:3px 4px;text-align:right">Qty</th>
           <th style="padding:3px 4px;text-align:right">Unit</th><th style="padding:3px 4px;text-align:right">Line</th></tr></thead>
         <tbody>${items.map(it => `
           <tr style="border-top:1px solid #eee">
             <td style="padding:3px 4px">${esc(it.name||'—')}</td>
+            <td style="padding:3px 4px;color:var(--gray-4)">${esc(it.category||'—')}</td>
             <td style="padding:3px 4px;text-align:right">${it.qty!=null?esc(String(it.qty)):''}</td>
             <td style="padding:3px 4px;text-align:right">${it.unit_price!=null?fmtMoney(it.unit_price):''}</td>
             <td style="padding:3px 4px;text-align:right">${it.line_total!=null?fmtMoney(it.line_total):''}</td>
@@ -3346,10 +3348,10 @@ async function renderFinanceSummary() {
     const t = data.totals, cycles = data.cycles;
 
     const card = (label, val, color, sub) => `
-      <div class="stat-card" style="border-left:4px solid ${color}">
-        <div class="stat-label">${label}</div>
-        <div class="stat-value" style="color:${color}">${fmtMoney(val)}</div>
-        ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:2px">${sub}</div>` : ''}
+      <div class="stat-card" style="border-left:4px solid ${color};padding:14px 16px;min-width:0">
+        <div class="stat-label" style="margin-bottom:6px">${label}</div>
+        <div style="color:${color};font-size:23px;font-weight:700;line-height:1.1;letter-spacing:-0.5px;overflow-wrap:break-word">${fmtMoney(val)}</div>
+        ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:3px">${sub}</div>` : ''}
       </div>`;
     const bar = (label, val, max, color) => `
       <div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px">
@@ -3361,11 +3363,12 @@ async function renderFinanceSummary() {
       </div>`;
     const storeMax = Math.max(1, ...an.by_store.map(x => x.total));
     const monthMax = Math.max(1, ...an.by_month.map(x => x.total));
+    const catMax   = Math.max(1, ...(an.by_category || []).map(x => x.total));
 
     document.getElementById('content').innerHTML = `
       <div style="display:flex;flex-direction:column;gap:20px">
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
           ${card('Income (donations)', t.income, '#1a8754')}
           ${card('Committed (approved)', t.committed, '#2980b9', `${t.approved_count} receipts`)}
           ${card('Paid out', t.paid_out, '#c0392b')}
@@ -3394,6 +3397,13 @@ async function renderFinanceSummary() {
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+          <div class="table-card">
+            <div class="table-header"><span class="table-title">Spend by category</span></div>
+            <div style="padding:12px 16px">
+              ${(an.by_category && an.by_category.length) ? an.by_category.map(cprev => bar(cprev.category, cprev.total, catMax, '#6c5ce7')).join('')
+                : '<div style="color:var(--gray-4);font-size:12px">No categorized items yet — re-read receipts after setting up the food catalog.</div>'}
+            </div>
+          </div>
           <div class="table-card">
             <div class="table-header"><span class="table-title">Spend by store</span></div>
             <div style="padding:12px 16px">

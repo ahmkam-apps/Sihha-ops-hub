@@ -3122,19 +3122,41 @@ def update_volunteer(vid):
 
 # ── Receipt vision parsing (Phase A) ──────────────────────────────────────────
 
-_RECEIPT_PARSE_PROMPT = (
-    "You are extracting structured data from a photo of a store receipt. "
-    "Return ONLY a single minified JSON object, no prose, no markdown fences. "
-    "Schema: {\"store\":string|null, \"purchase_date\":\"YYYY-MM-DD\"|null, "
-    "\"subtotal\":number|null, \"tax\":number|null, \"total\":number|null, "
-    "\"currency\":string|null, \"confidence\":number (0..1), "
-    "\"line_items\":[{\"name\":string, \"qty\":number|null, "
-    "\"unit_price\":number|null, \"line_total\":number|null}]}. "
-    "Use the receipt's grand total for \"total\". Omit loyalty/discount summary lines "
-    "that are not products. The image or PDF may be rotated, sideways, or UPSIDE DOWN, "
-    "or a low-quality scan — mentally rotate it and read it regardless of orientation. "
-    "Only if it is genuinely unreadable, set confidence to 0 and null fields."
-)
+def _active_food_category_names():
+    """Live food-catalog category names (for tagging receipt line items). Returns []
+    outside a request or if the table is missing — parsing then just skips categories."""
+    try:
+        rows = get_db().execute(
+            "SELECT name FROM food_categories WHERE is_active=1 ORDER BY display_order, name"
+        ).fetchall()
+        return [r['name'] for r in rows if (r['name'] or '').strip()]
+    except Exception:
+        return []
+
+
+def _build_receipt_prompt(category_names):
+    """Extraction prompt; when catalog categories exist, ask the model to tag each
+    line item with the best-matching category (or 'Other')."""
+    cat_field = ', "category":string|null' if category_names else ''
+    cat_rule = ''
+    if category_names:
+        cat_rule = (" For each line item also set \"category\" to the SINGLE best match "
+                    "from EXACTLY this list: [" + ", ".join(category_names) + "]. "
+                    "If none of these fit the product, use \"Other\".")
+    return (
+        "You are extracting structured data from a photo of a store receipt. "
+        "Return ONLY a single minified JSON object, no prose, no markdown fences. "
+        "Schema: {\"store\":string|null, \"purchase_date\":\"YYYY-MM-DD\"|null, "
+        "\"subtotal\":number|null, \"tax\":number|null, \"total\":number|null, "
+        "\"currency\":string|null, \"confidence\":number (0..1), "
+        "\"line_items\":[{\"name\":string, \"qty\":number|null, "
+        "\"unit_price\":number|null, \"line_total\":number|null" + cat_field + "}]}. "
+        "Use the receipt's grand total for \"total\". Omit loyalty/discount summary lines "
+        "that are not products." + cat_rule +
+        " The image or PDF may be rotated, sideways, or UPSIDE DOWN, or a low-quality "
+        "scan — mentally rotate it and read it regardless of orientation. "
+        "Only if it is genuinely unreadable, set confidence to 0 and null fields."
+    )
 
 
 def _prepare_receipt_image(image_bytes, ext):
@@ -3222,6 +3244,7 @@ def _parse_receipt_image_ex(image_bytes, filename):
     if not prepared:
         return None, f'could not decode a .{ext or "?"} file (HEIC needs the plugin)'
     b64, media_type, block_type = prepared
+    category_names = _active_food_category_names()
     import urllib.request as _req, urllib.error as _uerr, json as _json
     body = {
         'model': RECEIPT_PARSE_MODEL,
@@ -3230,7 +3253,7 @@ def _parse_receipt_image_ex(image_bytes, filename):
             'role': 'user',
             'content': [
                 {'type': block_type, 'source': {'type': 'base64', 'media_type': media_type, 'data': b64}},
-                {'type': 'text', 'text': _RECEIPT_PARSE_PROMPT},
+                {'type': 'text', 'text': _build_receipt_prompt(category_names)},
             ],
         }],
     }
@@ -3252,7 +3275,15 @@ def _parse_receipt_image_ex(image_bytes, filename):
         if not parsed:
             log.warning('_parse_receipt_image: model returned no parseable JSON')
             return None, 'the model reply had no readable data'
-        return _normalize_parsed_receipt(parsed), None
+        norm = _normalize_parsed_receipt(parsed)
+        # Snap each item's category to a canonical catalog name (or 'Other'); leave
+        # None if the model gave nothing. Keeps analytics from fragmenting on variants.
+        if category_names:
+            allowed = {c.lower(): c for c in category_names}
+            for it in norm['line_items']:
+                c = (it.get('category') or '').strip().lower()
+                it['category'] = None if not c else allowed.get(c, 'Other')
+        return norm, None
     except _uerr.HTTPError as e:
         detail = e.read().decode('utf-8', 'replace')[:200]
         log.warning(f'_parse_receipt_image HTTP {e.code}: {detail}')
@@ -3283,6 +3314,7 @@ def _normalize_parsed_receipt(p):
             'qty':        _to_float(it.get('qty')),
             'unit_price': _to_float(it.get('unit_price')),
             'line_total': _to_float(it.get('line_total')),
+            'category':   (it.get('category') or '').strip()[:60] or None,
         })
     conf = _to_float(p.get('confidence'))
     if conf is not None:
@@ -3325,10 +3357,10 @@ def _persist_receipt_parse(db, receipt_id, parsed, confirmed_amount=None):
     db.execute("DELETE FROM receipt_items WHERE receipt_id=?", (receipt_id,))
     for i, it in enumerate(parsed.get('line_items') or []):
         db.execute(
-            "INSERT INTO receipt_items (id, receipt_id, line_no, name, qty, unit_price, line_total, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_items (id, receipt_id, line_no, name, qty, unit_price, line_total, category, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), receipt_id, i + 1, it['name'], it['qty'],
-             it['unit_price'], it['line_total'], now())
+             it['unit_price'], it['line_total'], it.get('category'), now())
         )
     return mismatch
 
@@ -3799,8 +3831,16 @@ def receipts_analytics():
         FROM receipts WHERE status='approved'
         GROUP BY month ORDER BY month
     ''').fetchall()]
+    # Spend by food-catalog category (from the model-tagged line items).
+    by_category = [dict(r) for r in db.execute('''
+        SELECT COALESCE(NULLIF(TRIM(ri.category),''),'(uncategorized)') as category,
+               ROUND(COALESCE(SUM(ri.line_total),0),2) as total, COUNT(*) as count
+        FROM receipt_items ri JOIN receipts r ON ri.receipt_id = r.id
+        WHERE r.status='approved'
+        GROUP BY LOWER(TRIM(COALESCE(ri.category,''))) ORDER BY total DESC
+    ''').fetchall()]
     return jsonify({'by_store': by_store, 'by_volunteer': by_volunteer,
-                    'top_items': top_items, 'by_month': by_month})
+                    'top_items': top_items, 'by_month': by_month, 'by_category': by_category})
 
 
 # ── Reimbursements ────────────────────────────────────────────────────────────

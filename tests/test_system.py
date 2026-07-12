@@ -2323,6 +2323,22 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_line_item_category_rolls_up_in_analytics(self, client, auth):
+        rid = client.post('/api/receipts', headers=auth, json={
+            'amount': 75, 'store': 'CatStore',
+            'parsed': {'total': 75, 'confidence': 0.9, 'line_items': [
+                {'name': 'CatRice', 'qty': 1, 'unit_price': 45, 'line_total': 45, 'category': 'Grains'},
+                {'name': 'CatEggs', 'qty': 1, 'unit_price': 30, 'line_total': 30, 'category': 'Protein'}]},
+        }).get_json()['id']
+        # category is stored on the line item
+        det = client.get('/api/receipts/' + rid, headers=auth).get_json()
+        assert {i['category'] for i in det['items']} == {'Grains', 'Protein'}
+        # …but only rolls into analytics once approved
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        an = client.get('/api/receipts/analytics', headers=auth).get_json()
+        cats = {c['category']: c['total'] for c in an['by_category']}
+        assert cats.get('Grains', 0) >= 45 and cats.get('Protein', 0) >= 30
+
     def test_bulk_approve_only_pending(self, client, auth):
         ids = [client.post('/api/receipts', headers=auth,
                            json={'amount': i + 5, 'store': f'Bulk{i}'}).get_json()['id']
