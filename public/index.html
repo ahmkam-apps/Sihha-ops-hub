@@ -640,15 +640,9 @@
         <i class="ti ti-basket icon" aria-hidden="true"></i> Food Catalog
       </div>
 
-      <div class="nav-section">Public Links</div>
-      <a class="nav-item" href="/family" target="_blank" rel="noopener" style="font-size:12px;text-decoration:none;color:inherit">
-        <i class="ti ti-external-link icon" aria-hidden="true"></i> My Order (Families)
-      </a>
+      <div class="nav-section">Public Sign-up Links</div>
       <a class="nav-item" href="/intake" target="_blank" rel="noopener" style="font-size:12px;text-decoration:none;color:inherit">
         <i class="ti ti-external-link icon" aria-hidden="true"></i> Family Registration
-      </a>
-      <a class="nav-item" href="/portal" target="_blank" rel="noopener" style="font-size:12px;text-decoration:none;color:inherit">
-        <i class="ti ti-external-link icon" aria-hidden="true"></i> Volunteer Portal
       </a>
       <a class="nav-item" href="/volunteer-signup" target="_blank" rel="noopener" style="font-size:12px;text-decoration:none;color:inherit">
         <i class="ti ti-external-link icon" aria-hidden="true"></i> Volunteer Sign Up
@@ -1785,6 +1779,20 @@ async function previewFamilyPortal(familyId) {
   }
 }
 
+async function previewVolunteerPortal(volId) {
+  try {
+    const res = await fetch('/api/volunteers/' + volId + '/preview-token', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed'); }
+    const { token } = await res.json();
+    window.open('/portal?preview_token=' + encodeURIComponent(token), '_blank');
+  } catch(e) {
+    alert('Could not open preview: ' + e.message);
+  }
+}
+
 function familyFormHTML(r) {
   r = r || {};
   return `
@@ -2464,6 +2472,7 @@ async function renderVolunteers(filter, search) {
                     <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);margin-left:4px" onclick="quickStatusVolunteer('${r.id}','inactive')">✗</button>
                   ` : `
                     <button class="btn btn-outline btn-sm" onclick="viewVolunteer('${r.id}')">View</button>
+                    <button class="btn btn-outline btn-sm" style="margin-left:4px" title="Open the volunteer portal as this person" onclick="previewVolunteerPortal('${r.id}')"><i class="ti ti-eye" aria-hidden="true"></i> Preview</button>
                     <button class="btn btn-sm" onclick="openVolunteerForm('${r.id}')" style="margin-left:4px">Edit</button>
                     ${r.status==='active' ? `
                       <button class="btn btn-sm btn-outline" style="color:var(--danger);border-color:var(--danger);margin-left:4px" onclick="if(confirm('Deactivate this volunteer?'))quickStatusVolunteer('${r.id}','inactive')">Deactivate</button>

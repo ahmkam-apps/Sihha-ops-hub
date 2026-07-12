@@ -2834,6 +2834,41 @@ def family_preview_token(fid):
     log.info(f'Admin preview token minted for family {fid} ({fam["name"]})')
     return jsonify({'token': token, 'family_name': fam['name'], 'expires_at': expires})
 
+@app.route('/api/volunteers/<vid>/preview-token', methods=['POST'])
+@require_auth(roles=['admin'])
+def volunteer_preview_token(vid):
+    """Admin-only: mint a short-lived (2h) volunteer portal session for testing —
+    lets an admin open /portal as this volunteer."""
+    db = get_db()
+    vol = db.execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone()
+    if not vol:
+        return jsonify({'error': 'Volunteer not found'}), 404
+    import hashlib, secrets, re
+    user = db.execute("SELECT id FROM users WHERE linked_id=? AND role='volunteer'", (vid,)).fetchone()
+    if not user:
+        uid = str(uuid.uuid4())
+        base = 'vol_' + re.sub(r'[^a-z0-9]', '', (vol['name'] or 'volunteer').lower())[:16]
+        username, n = base, 1
+        while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+            username = f'{base}{n}'; n += 1
+        db.execute(
+            "INSERT INTO users (id, username, password_hash, name, role, active, linked_id, linked_type, created_at) "
+            "VALUES (?,?,?,?,?,1,?,?,?)",
+            (uid, username, hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+             vol['name'], 'volunteer', vid, 'volunteer', now()))
+        db.commit()
+        user_id = uid
+    else:
+        user_id = user['id']
+    token = secrets.token_urlsafe(32)
+    expires = (datetime.utcnow() + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S')
+    db.execute("INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
+               (token, user_id, expires, now()))
+    db.commit()
+    log.info(f'Admin preview token minted for volunteer {vid} ({vol["name"]})')
+    return jsonify({'token': token, 'volunteer_name': vol['name'], 'expires_at': expires})
+
+
 @app.route('/api/families/<fid>', methods=['PUT'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def update_family(fid):

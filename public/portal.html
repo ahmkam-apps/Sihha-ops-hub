@@ -331,6 +331,16 @@
 <script>
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
+// Admin preview: ?preview_token=<token> injects a short-lived volunteer session
+(function checkPreviewToken() {
+  const pt = new URLSearchParams(window.location.search).get('preview_token');
+  if (pt) {
+    localStorage.setItem('portalToken', pt);
+    localStorage.setItem('portalVolunteer', JSON.stringify({ preview: true }));
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
+
 let TOKEN = localStorage.getItem('portalToken') || localStorage.getItem('portal_token');
 let VOL   = JSON.parse(localStorage.getItem('portalVolunteer') || localStorage.getItem('portal_vol') || 'null');
 
