@@ -2324,6 +2324,27 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_reimbursement_report_by_volunteer(self, client, auth):
+        vid = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Report Vol', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'role': 'shopper', 'status': 'active'}).get_json()['id']
+        fam = client.post('/api/families', headers=auth, json={
+            'name': 'Report Fam', 'phone': f'585{uuid.uuid4().hex[:7]}',
+            'family_size': 3, 'status': 'active'}).get_json()
+        rid = client.post('/api/receipts', headers=auth, json={
+            'volunteer_id': vid, 'family_id': fam['id'], 'store': 'RptStore',
+            'amount': 60, 'purchase_date': '2026-07-05'}).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        # needs a token — reports accept ?token=
+        tok = auth['Authorization'].split()[1]
+        r = client.get('/api/reports/reimbursements?status=all&token=' + tok)
+        assert r.status_code == 200
+        h = r.get_data(as_text=True)
+        assert 'Report Vol' in h and 'RptStore' in h and '$60.00' in h
+        assert fam['family_code'] in h            # family ID appears
+        assert 'Approved — owed' in h
+        assert client.get('/api/reports/reimbursements').status_code == 401   # token required
+
     def test_store_fuzzy_matching(self):
         def tc(n):
             t = _server._store_tokens(n)

@@ -5660,6 +5660,125 @@ def report_shopping_list(cid):
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
+@app.route('/api/reports/reimbursements', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def report_reimbursements():
+    """Printable reimbursement report grouped by volunteer — date, family, store,
+    cycle, amount spent, and pay status. Filters: ?since, &until (purchase date),
+    &status (all|pending|approved|paid), &cycle_id. Browser prints to PDF."""
+    from collections import defaultdict
+    db = get_db()
+    since    = (request.args.get('since') or '').strip()
+    until    = (request.args.get('until') or '').strip()
+    status_f = (request.args.get('status') or 'all').strip()
+    cycle_id = (request.args.get('cycle_id') or '').strip()
+    date_expr = "COALESCE(NULLIF(r.purchase_date,''), substr(r.created_at,1,10))"
+
+    where, params = ["r.status != 'rejected'"], []
+    if since:    where.append(f"{date_expr} >= ?"); params.append(since)
+    if until:    where.append(f"{date_expr} <= ?"); params.append(until)
+    if cycle_id:
+        where.append("COALESCE(r.cycle_id,(SELECT vs2.cycle_id FROM volunteer_slots vs2 WHERE vs2.id=r.slot_id))=?")
+        params.append(cycle_id)
+    if status_f == 'pending':
+        where.append("r.status='pending'")
+    elif status_f == 'approved':
+        where.append("r.status='approved' AND (rb.status IS NULL OR rb.status='pending')")
+    elif status_f == 'paid':
+        where.append("rb.status='paid'")
+    w = " AND ".join(where)
+
+    rows = db.execute(f'''
+        SELECT r.id, {date_expr} as date, r.store, r.amount, r.status as rstatus,
+               v.name as volunteer_name,
+               f.family_code as family_code, f.name as family_name,
+               rb.status as reimb_status, rb.payment_method, rb.payment_ref, rb.paid_date,
+               COALESCE(dc.title, dc2.title) as cycle_title
+        FROM receipts r
+        LEFT JOIN volunteers v  ON r.volunteer_id = v.id
+        LEFT JOIN families   f  ON r.family_id = f.id
+        LEFT JOIN reimbursements rb ON rb.receipt_id = r.id
+        LEFT JOIN delivery_cycles dc  ON r.cycle_id = dc.id
+        LEFT JOIN volunteer_slots vs  ON r.slot_id = vs.id
+        LEFT JOIN delivery_cycles dc2 ON vs.cycle_id = dc2.id
+        WHERE {w}
+        ORDER BY (v.name IS NULL), v.name, date
+    ''', params).fetchall()
+
+    def _money(x):
+        return f"${(x or 0):,.2f}"
+
+    def _status(r):
+        if r['rstatus'] == 'pending':
+            return ('Pending review', '#C4772E')
+        if r['reimb_status'] == 'paid':
+            m = (r['payment_method'] or '').title()
+            ref = f" ({r['payment_ref']})" if r['payment_ref'] else ''
+            dt = f" · {r['paid_date']}" if r['paid_date'] else ''
+            return (f"Paid · {m}{ref}{dt}", '#4E8A5E')
+        return ('Approved — owed', '#B0863C')
+
+    groups = defaultdict(list)
+    for r in rows:
+        groups[r['volunteer_name'] or '(unassigned)'].append(r)
+
+    tot_spent = sum((r['amount'] or 0) for r in rows)
+    tot_owed  = sum((r['amount'] or 0) for r in rows if r['rstatus'] == 'approved' and (r['reimb_status'] or 'pending') == 'pending')
+    tot_paid  = sum((r['amount'] or 0) for r in rows if r['reimb_status'] == 'paid')
+
+    body = f"""
+    <div class="meta">
+      <div class="meta-box"><div class="label">Volunteers</div><div class="value">{len(groups)}</div><div class="hint">{len(rows)} receipts</div></div>
+      <div class="meta-box"><div class="label">Total spent</div><div class="value">{_money(tot_spent)}</div></div>
+      <div class="meta-box"><div class="label">Owed (unpaid)</div><div class="value">{_money(tot_owed)}</div></div>
+      <div class="meta-box"><div class="label">Paid out</div><div class="value">{_money(tot_paid)}</div></div>
+    </div>"""
+
+    if not rows:
+        body += '<p style="color:#888;padding:20px 0;">No receipts match this filter.</p>'
+    else:
+        for vol in sorted(groups.keys(), key=lambda k: (k == '(unassigned)', k.lower())):
+            recs = groups[vol]
+            v_spent = sum((r['amount'] or 0) for r in recs)
+            v_owed  = sum((r['amount'] or 0) for r in recs if r['rstatus'] == 'approved' and (r['reimb_status'] or 'pending') == 'pending')
+            v_paid  = sum((r['amount'] or 0) for r in recs if r['reimb_status'] == 'paid')
+            rows_html = ''
+            for r in recs:
+                label, color = _status(r)
+                fam = r['family_code'] or ''
+                if r['family_name']:
+                    fam = (fam + ' · ' if fam else '') + r['family_name']
+                rows_html += f"""<tr>
+                  <td style="white-space:nowrap">{r['date'] or '—'}</td>
+                  <td>{fam or '—'}</td>
+                  <td>{r['store'] or '—'}</td>
+                  <td>{r['cycle_title'] or '—'}</td>
+                  <td style="text-align:right">{_money(r['amount'])}</td>
+                  <td style="color:{color};font-weight:600">{label}</td>
+                </tr>"""
+            body += f"""
+            <h2>{vol} <span style="font-weight:400;color:#888;font-size:13px">· spent {_money(v_spent)} · owed {_money(v_owed)} · paid {_money(v_paid)}</span></h2>
+            <table>
+              <thead><tr><th>Date</th><th>Family</th><th>Store</th><th>Cycle</th>
+                <th style="text-align:right">Amount</th><th>Status</th></tr></thead>
+              <tbody>{rows_html}
+                <tr style="background:#f5f2ea;font-weight:600">
+                  <td colspan="4" style="text-align:right">Subtotal</td>
+                  <td style="text-align:right">{_money(v_spent)}</td><td></td>
+                </tr>
+              </tbody>
+            </table>"""
+
+    rng = []
+    if since: rng.append(f"from {since}")
+    if until: rng.append(f"to {until}")
+    sub = 'Reimbursements by volunteer'
+    if status_f != 'all': sub += f' · {status_f}'
+    if rng: sub += ' · ' + ' '.join(rng)
+    html = _print_page('Reimbursement Report', sub, body, 'Reimbursement Report')
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
 @app.route('/api/reports/cycle-summary/<cid>', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def report_cycle_summary(cid):

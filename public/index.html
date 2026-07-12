@@ -3690,7 +3690,9 @@ function drawSpendCharts(d) {
 async function renderPayments(filter) {
   filter = filter || STATE.filter || 'pending';
   STATE.filter = filter;
-  document.getElementById('topbar-actions').innerHTML = '';
+  const rptStatus = (filter === 'rejected' || filter === 'all') ? 'all' : filter;
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-outline" onclick="downloadPDF('/reports/reimbursements?status=${rptStatus}')" title="Printable reimbursement report grouped by volunteer"><i class="ti ti-file-text" aria-hidden="true"></i> Volunteer report (PDF)</button>`;
 
   let url = '/reimbursements';
   if (filter !== 'all') url += '?status=' + filter;
