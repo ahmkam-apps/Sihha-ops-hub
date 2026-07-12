@@ -3122,27 +3122,46 @@ def update_volunteer(vid):
 
 # ── Receipt vision parsing (Phase A) ──────────────────────────────────────────
 
-def _active_food_category_names():
-    """Live food-catalog category names (for tagging receipt line items). Returns []
-    outside a request or if the table is missing — parsing then just skips categories."""
+def _active_food_categories_with_items():
+    """Live catalog categories, each with its example item names — used to teach the
+    model what belongs in each category. Returns [] outside a request / if tables are
+    missing. Shape: [{'name': 'Grains', 'items': ['Rice','Pasta','Bread']}, ...]."""
     try:
-        rows = get_db().execute(
-            "SELECT name FROM food_categories WHERE is_active=1 ORDER BY display_order, name"
+        db = get_db()
+        cats = db.execute(
+            "SELECT id, name FROM food_categories WHERE is_active=1 ORDER BY display_order, name"
         ).fetchall()
-        return [r['name'] for r in rows if (r['name'] or '').strip()]
+        out = []
+        for c in cats:
+            if not (c['name'] or '').strip():
+                continue
+            items = db.execute(
+                "SELECT name FROM food_items WHERE category_id=? AND is_active=1 ORDER BY display_order, name",
+                (c['id'],)
+            ).fetchall()
+            out.append({'name': c['name'], 'items': [i['name'] for i in items if (i['name'] or '').strip()]})
+        return out
     except Exception:
         return []
 
 
-def _build_receipt_prompt(category_names):
-    """Extraction prompt; when catalog categories exist, ask the model to tag each
-    line item with the best-matching category (or 'Other')."""
+def _build_receipt_prompt(categories):
+    """Extraction prompt. `categories` is [{'name','items':[...]}]; when present, teach
+    the model each category with its example products and ask it to tag each line item."""
+    category_names = [c['name'] for c in categories] if categories else []
     cat_field = ', "category":string|null' if category_names else ''
     cat_rule = ''
     if category_names:
+        catalog = '; '.join(
+            c['name'] + (' (e.g. ' + ', '.join(c['items'][:8]) + ')' if c['items'] else '')
+            for c in categories
+        )
         cat_rule = (" For each line item also set \"category\" to the SINGLE best match "
-                    "from EXACTLY this list: [" + ", ".join(category_names) + "]. "
-                    "If none of these fit the product, use \"Other\".")
+                    "from EXACTLY this list of food-program categories: [" + ", ".join(category_names) + "]. "
+                    "Here is what each category contains — match by the KIND of product, even if the "
+                    "receipt uses an abbreviated brand name: " + catalog + ". "
+                    "Use \"Other\" ONLY for products that clearly don't belong to any of these "
+                    "(e.g. household/cleaning supplies, toiletries, bags).")
     return (
         "You are extracting structured data from a photo of a store receipt. "
         "Return ONLY a single minified JSON object, no prose, no markdown fences. "
@@ -3246,7 +3265,8 @@ def _parse_receipt_image_ex(image_bytes, filename):
     if not prepared:
         return None, f'could not decode a .{ext or "?"} file (HEIC needs the plugin)'
     b64, media_type, block_type = prepared
-    category_names = _active_food_category_names()
+    categories = _active_food_categories_with_items()
+    category_names = [c['name'] for c in categories]
     import urllib.request as _req, urllib.error as _uerr, json as _json
     body = {
         'model': RECEIPT_PARSE_MODEL,
@@ -3255,7 +3275,7 @@ def _parse_receipt_image_ex(image_bytes, filename):
             'role': 'user',
             'content': [
                 {'type': block_type, 'source': {'type': 'base64', 'media_type': media_type, 'data': b64}},
-                {'type': 'text', 'text': _build_receipt_prompt(category_names)},
+                {'type': 'text', 'text': _build_receipt_prompt(categories)},
             ],
         }],
     }
@@ -3860,6 +3880,128 @@ def receipts_analytics():
     ''').fetchall()]
     return jsonify({'by_store': by_store, 'by_volunteer': by_volunteer,
                     'top_items': top_items, 'by_month': by_month, 'by_category': by_category})
+
+
+def _spend_report_data(db, since, until):
+    """Assemble the spend-report dashboard data (approved receipts, optional date
+    window on purchase_date→created_at fallback). Used by both the JSON + Excel routes."""
+    date_expr = "COALESCE(NULLIF(r.purchase_date,''), substr(r.created_at,1,10))"
+    where, params = ["r.status='approved'"], []
+    if since:
+        where.append(f"{date_expr} >= ?"); params.append(since)
+    if until:
+        where.append(f"{date_expr} <= ?"); params.append(until)
+    w = " AND ".join(where)
+
+    head = db.execute(f"SELECT COALESCE(SUM(r.amount),0) t, COUNT(*) c FROM receipts r WHERE {w}", params).fetchone()
+    total_spend, receipt_count = round(head['t'], 2), head['c']
+    avg_receipt = round(total_spend / receipt_count, 2) if receipt_count else 0
+
+    cov = db.execute(
+        f"""SELECT COALESCE(SUM(CASE WHEN ri.category IS NOT NULL AND TRIM(ri.category)!=''
+                       AND ri.category!='Other' THEN ri.line_total ELSE 0 END),0) cat,
+                   COALESCE(SUM(ri.line_total),0) allv
+            FROM receipt_items ri JOIN receipts r ON ri.receipt_id=r.id WHERE {w}""", params).fetchone()
+    itemized_spend = round(cov['allv'], 2)
+    categorized_pct = round(100 * cov['cat'] / cov['allv'], 1) if cov['allv'] else 0
+
+    cat_rows = db.execute(
+        f"""SELECT COALESCE(NULLIF(TRIM(ri.category),''),'(uncategorized)') category,
+                   ROUND(SUM(ri.line_total),2) total, COUNT(*) count
+            FROM receipt_items ri JOIN receipts r ON ri.receipt_id=r.id WHERE {w}
+            GROUP BY LOWER(TRIM(COALESCE(ri.category,''))) ORDER BY total DESC""", params).fetchall()
+    item_rows = db.execute(
+        f"""SELECT COALESCE(NULLIF(TRIM(ri.category),''),'(uncategorized)') category,
+                   ri.name, ri.qty, ROUND(ri.line_total,2) line_total, r.store,
+                   {date_expr} as date
+            FROM receipt_items ri JOIN receipts r ON ri.receipt_id=r.id WHERE {w}
+            ORDER BY ri.line_total DESC""", params).fetchall()
+    items_by_cat = {}
+    for it in item_rows:
+        items_by_cat.setdefault(it['category'], []).append(
+            {'name': it['name'], 'qty': it['qty'], 'line_total': it['line_total'],
+             'store': it['store'], 'date': it['date']})
+    denom = sum(c['total'] for c in cat_rows) or 1
+    categories = [{
+        'category': c['category'], 'total': c['total'], 'count': c['count'],
+        'pct': round(100 * c['total'] / denom, 1),
+        'items': items_by_cat.get(c['category'], [])[:100],
+    } for c in cat_rows]
+
+    by_month = [dict(r) for r in db.execute(
+        f"""SELECT substr({date_expr},1,7) as month, ROUND(SUM(r.amount),2) total, COUNT(*) count
+            FROM receipts r WHERE {w} GROUP BY month ORDER BY month""", params).fetchall()]
+    by_store = [dict(r) for r in db.execute(
+        f"""SELECT COALESCE(NULLIF(TRIM(r.store),''),'(unknown)') store, ROUND(SUM(r.amount),2) total, COUNT(*) count
+            FROM receipts r WHERE {w} GROUP BY LOWER(COALESCE(TRIM(r.store),''))
+            ORDER BY total DESC LIMIT 12""", params).fetchall()]
+    top_items = [dict(r) for r in db.execute(
+        f"""SELECT ri.name, COUNT(*) count, ROUND(SUM(ri.line_total),2) total
+            FROM receipt_items ri JOIN receipts r ON ri.receipt_id=r.id WHERE {w}
+            AND ri.name IS NOT NULL AND TRIM(ri.name)!=''
+            GROUP BY LOWER(TRIM(ri.name)) ORDER BY total DESC LIMIT 15""", params).fetchall()]
+
+    return {
+        'metrics': {
+            'total_spend': total_spend, 'receipt_count': receipt_count, 'avg_receipt': avg_receipt,
+            'itemized_spend': itemized_spend, 'categorized_pct': categorized_pct,
+            'category_count': len([c for c in categories if c['category'] != '(uncategorized)']),
+            'top_category': categories[0]['category'] if categories else None,
+            'top_store': by_store[0]['store'] if by_store else None,
+        },
+        'categories': categories, 'by_month': by_month, 'by_store': by_store, 'top_items': top_items,
+    }
+
+
+@app.route('/api/finance/spend-report', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def spend_report():
+    since = (request.args.get('since') or '').strip()
+    until = (request.args.get('until') or '').strip()
+    return jsonify(_spend_report_data(get_db(), since, until))
+
+
+@app.route('/api/finance/spend-report.xlsx', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def spend_report_xlsx():
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from flask import send_file
+    import io
+    since = (request.args.get('since') or '').strip()
+    until = (request.args.get('until') or '').strip()
+    d = _spend_report_data(get_db(), since, until)
+
+    wb = openpyxl.Workbook()
+    hf = Font(bold=True, color='FFFFFF'); hfill = PatternFill('solid', fgColor='1A3A2A')
+    def _hdr(ws, cols):
+        for i, h in enumerate(cols, 1):
+            c = ws.cell(row=1, column=i, value=h); c.font = hf; c.fill = hfill
+            c.alignment = Alignment(horizontal='center')
+
+    ws1 = wb.active; ws1.title = 'By Category'
+    _hdr(ws1, ['Category', 'Total ($)', 'Items', '% of itemized'])
+    for r, c in enumerate(d['categories'], 2):
+        ws1.cell(row=r, column=1, value=c['category']); ws1.cell(row=r, column=2, value=c['total'])
+        ws1.cell(row=r, column=3, value=c['count']); ws1.cell(row=r, column=4, value=c['pct'])
+    for i, wdt in enumerate([26, 14, 10, 14], 1):
+        ws1.column_dimensions[openpyxl.utils.get_column_letter(i)].width = wdt
+
+    ws2 = wb.create_sheet('Line Items')
+    _hdr(ws2, ['Category', 'Item', 'Qty', 'Amount ($)', 'Store', 'Date'])
+    r = 2
+    for cat in d['categories']:
+        for it in cat['items']:
+            ws2.cell(row=r, column=1, value=cat['category']); ws2.cell(row=r, column=2, value=it['name'])
+            ws2.cell(row=r, column=3, value=it['qty']); ws2.cell(row=r, column=4, value=it['line_total'])
+            ws2.cell(row=r, column=5, value=it['store']); ws2.cell(row=r, column=6, value=it['date']); r += 1
+    for i, wdt in enumerate([22, 30, 8, 12, 20, 12], 1):
+        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = wdt
+
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"sihaa_spend_report_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return send_file(buf, as_attachment=True, download_name=fname,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
 # ── Reimbursements ────────────────────────────────────────────────────────────

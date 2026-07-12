@@ -2323,6 +2323,23 @@ class TestReceiptParsing:
         assert any(v['volunteer_name'] == 'Analytics Vol' and v['owed'] == pytest.approx(900)
                    for v in an['by_volunteer'])
 
+    def test_spend_report_metrics_and_drilldown(self, client, auth):
+        rid = client.post('/api/receipts', headers=auth, json={
+            'amount': 80, 'store': 'ReportMart', 'purchase_date': '2026-05-02',
+            'parsed': {'total': 80, 'purchase_date': '2026-05-02', 'confidence': 0.9, 'line_items': [
+                {'name': 'RepRice', 'line_total': 50, 'qty': 1, 'unit_price': 50, 'category': 'Grains'},
+                {'name': 'RepSoap', 'line_total': 30, 'qty': 1, 'unit_price': 30, 'category': 'Other'}]},
+        }).get_json()['id']
+        client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
+        rep = client.get('/api/finance/spend-report', headers=auth).get_json()
+        assert rep['metrics']['receipt_count'] >= 1
+        assert rep['metrics']['total_spend'] >= 80
+        grains = next(c for c in rep['categories'] if c['category'] == 'Grains')
+        assert grains['total'] >= 50 and any(i['name'] == 'RepRice' for i in grains['items'])
+        # Excel export downloads
+        x = client.get('/api/finance/spend-report.xlsx', headers=auth)
+        assert x.status_code == 200 and 'spreadsheet' in x.headers.get('Content-Type', '')
+
     def test_line_item_category_rolls_up_in_analytics(self, client, auth):
         rid = client.post('/api/receipts', headers=auth, json={
             'amount': 75, 'store': 'CatStore',

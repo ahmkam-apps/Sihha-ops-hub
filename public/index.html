@@ -559,6 +559,9 @@
       <div class="nav-item" onclick="nav('summary')" id="nav-summary">
         <span class="icon">≡</span> Summary
       </div>
+      <div class="nav-item" onclick="nav('spend-report')" id="nav-spend-report">
+        <span class="icon">📊</span> Spend Report
+      </div>
       <div class="nav-item" onclick="nav('payments')" id="nav-payments">
         <span class="icon">◫</span> Payments
       </div>
@@ -720,7 +723,7 @@ function nav(page) {
   if (navEl) navEl.classList.add('active');
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
-    summary: 'Finance Summary',
+    summary: 'Finance Summary', 'spend-report': 'Spend Report',
     payments: 'Payments', receipts: 'Receipts', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
     catalog: 'Food Catalog', pricing: 'Pricing Table',
@@ -732,7 +735,7 @@ function nav(page) {
   const renders = {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
-    summary: renderFinanceSummary,
+    summary: renderFinanceSummary, 'spend-report': renderSpendReport,
     payments: renderPayments, receipts: renderReceipts, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, 'active-cycle': renderActiveCycle,
     catalog: renderCatalog, pricing: renderPricingTable, orders: renderOrders,
@@ -3466,6 +3469,130 @@ async function renderFinanceSummary() {
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+  }
+}
+
+// ── Spend Report (categorized dashboard) ──────────────────────────────────────
+const SR_PALETTE = ['#1a8754','#2980b9','#6c5ce7','#e67e22','#c0392b','#16a085','#8e44ad','#d35400','#2c3e50','#7f8c8d'];
+
+async function renderSpendReport() {
+  STATE._srSince = STATE._srSince || '';
+  STATE._srUntil = STATE._srUntil || '';
+  document.getElementById('topbar-actions').innerHTML = `
+    <input type="date" id="sr-since" value="${STATE._srSince}" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
+    <input type="date" id="sr-until" value="${STATE._srUntil}" style="height:32px;padding:2px 8px;border:1.5px solid var(--gray-3);border-radius:4px;margin-right:6px">
+    <button class="btn btn-outline" onclick="applySpendFilter()" style="margin-right:6px">Apply</button>
+    <button class="btn btn-green" onclick="exportSpendReport()">⬇ Excel</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const qs = [];
+    if (STATE._srSince) qs.push('since=' + STATE._srSince);
+    if (STATE._srUntil) qs.push('until=' + STATE._srUntil);
+    const d = await GET('/finance/spend-report' + (qs.length ? '?' + qs.join('&') : ''));
+    const m = d.metrics;
+    const kpi = (label, val, sub) => `
+      <div class="stat-card" style="padding:14px 16px;min-width:0;cursor:default">
+        <div class="stat-label">${label}</div>
+        <div style="font-size:23px;font-weight:700;line-height:1.1;overflow-wrap:break-word">${val}</div>
+        ${sub ? `<div style="font-size:11px;color:var(--gray-4);margin-top:3px">${sub}</div>` : ''}
+      </div>`;
+    document.getElementById('content').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:20px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px">
+          ${kpi('Total spend', fmtMoney(m.total_spend), m.receipt_count + ' receipts')}
+          ${kpi('Avg receipt', fmtMoney(m.avg_receipt))}
+          ${kpi('Categories tracked', m.category_count, 'top: ' + (m.top_category || '—'))}
+          ${kpi('Categorized', m.categorized_pct + '%', 'of itemized spend')}
+          ${kpi('Top store', m.top_store || '—')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+          <div class="table-card"><div class="table-header"><span class="table-title">Spend by category</span></div>
+            <div style="padding:16px;height:300px">${d.categories.length ? '<canvas id="sr-donut"></canvas>' : '<div style="color:var(--gray-4);font-size:13px">No categorized spend yet.</div>'}</div></div>
+          <div class="table-card"><div class="table-header"><span class="table-title">Monthly spend</span></div>
+            <div style="padding:16px;height:300px">${d.by_month.length ? '<canvas id="sr-line"></canvas>' : '<div style="color:var(--gray-4);font-size:13px">No data yet.</div>'}</div></div>
+        </div>
+        <div class="table-card">
+          <div class="table-header"><span class="table-title">Category breakdown</span><span style="font-size:11px;color:var(--gray-4)">click a row to see items</span></div>
+          <div style="padding:4px 0">
+            ${d.categories.length ? d.categories.map((c, idx) => `
+              <div style="border-bottom:1px solid #f0f0f0">
+                <div onclick="toggleCatItems(${idx})" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 16px">
+                  <div style="width:12px;height:12px;border-radius:3px;flex-shrink:0;background:${SR_PALETTE[idx % SR_PALETTE.length]}"></div>
+                  <div style="flex:1;font-weight:600">${esc(c.category)} <span style="color:var(--gray-4);font-weight:400;font-size:12px">· ${c.count} item${c.count!==1?'s':''}</span></div>
+                  <div style="flex:2;max-width:280px;background:#f0f0f0;border-radius:4px;height:8px"><div style="width:${c.pct}%;height:100%;border-radius:4px;background:${SR_PALETTE[idx % SR_PALETTE.length]}"></div></div>
+                  <div style="width:88px;text-align:right;font-weight:700">${fmtMoney(c.total)}</div>
+                  <div style="width:48px;text-align:right;color:var(--gray-4);font-size:12px">${c.pct}%</div>
+                </div>
+                <div id="sr-cat-${idx}" style="display:none;padding:0 16px 12px 40px">
+                  <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead><tr style="color:var(--gray-4);text-align:left"><th style="padding:3px">Item</th><th style="padding:3px">Store</th><th style="padding:3px">Date</th><th style="padding:3px;text-align:right">Amount</th></tr></thead>
+                    <tbody>${c.items.map(it => `<tr style="border-top:1px solid #f5f5f5"><td style="padding:3px">${esc(it.name||'—')}</td><td style="padding:3px;color:var(--gray-4)">${esc(it.store||'—')}</td><td style="padding:3px;color:var(--gray-4);white-space:nowrap">${fmtDate(it.date)}</td><td style="padding:3px;text-align:right">${fmtMoney(it.line_total)}</td></tr>`).join('')}</tbody>
+                  </table>
+                </div>
+              </div>`).join('') : '<div style="padding:16px;color:var(--gray-4)">No approved spend in this range yet.</div>'}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+          <div class="table-card"><div class="table-header"><span class="table-title">Top stores</span></div>
+            <table><thead><tr><th>Store</th><th>Spend</th><th>#</th></tr></thead><tbody>
+            ${d.by_store.length ? d.by_store.map(s => `<tr><td>${esc(s.store)}</td><td><strong>${fmtMoney(s.total)}</strong></td><td style="text-align:center">${s.count}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="3">None</td></tr>'}</tbody></table></div>
+          <div class="table-card"><div class="table-header"><span class="table-title">Top items</span></div>
+            <table><thead><tr><th>Item</th><th>Spend</th><th>#</th></tr></thead><tbody>
+            ${d.top_items.length ? d.top_items.map(i => `<tr><td>${esc(i.name)}</td><td>${fmtMoney(i.total)}</td><td style="text-align:center">${i.count}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="3">None</td></tr>'}</tbody></table></div>
+        </div>
+      </div>`;
+    drawSpendCharts(d);
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#c00">${esc(e.message)}</p>`;
+  }
+}
+
+function toggleCatItems(idx) {
+  const el = document.getElementById('sr-cat-' + idx);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function applySpendFilter() {
+  STATE._srSince = document.getElementById('sr-since').value;
+  STATE._srUntil = document.getElementById('sr-until').value;
+  renderSpendReport();
+}
+function exportSpendReport() {
+  const qs = [];
+  if (STATE._srSince) qs.push('since=' + STATE._srSince);
+  if (STATE._srUntil) qs.push('until=' + STATE._srUntil);
+  fetch('/api/finance/spend-report.xlsx' + (qs.length ? '?' + qs.join('&') : ''),
+        { headers: { 'Authorization': 'Bearer ' + STATE.token } })
+    .then(r => { if (!r.ok) throw new Error('Export failed'); return r.blob(); })
+    .then(b => { const u = URL.createObjectURL(b); const a = document.createElement('a');
+      a.href = u; a.download = 'sihaa_spend_report.xlsx'; a.click(); URL.revokeObjectURL(u); })
+    .catch(e => alert(e.message));
+}
+function drawSpendCharts(d) {
+  const donut = document.getElementById('sr-donut');
+  if (window._srDonut) { window._srDonut.destroy(); window._srDonut = null; }
+  if (donut && d.categories.length) {
+    window._srDonut = new Chart(donut.getContext('2d'), {
+      type: 'doughnut',
+      data: { labels: d.categories.map(c => c.category),
+        datasets: [{ data: d.categories.map(c => c.total),
+          backgroundColor: d.categories.map((c, i) => SR_PALETTE[i % SR_PALETTE.length]), borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, cutout: '58%',
+        plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: ctx => ctx.label + ': ' + fmtMoney(ctx.parsed) } } } }
+    });
+  }
+  const line = document.getElementById('sr-line');
+  if (window._srLine) { window._srLine.destroy(); window._srLine = null; }
+  if (line && d.by_month.length) {
+    window._srLine = new Chart(line.getContext('2d'), {
+      type: 'line',
+      data: { labels: d.by_month.map(m => m.month),
+        datasets: [{ data: d.by_month.map(m => m.total), borderColor: '#1a8754',
+          backgroundColor: 'rgba(26,135,84,.1)', fill: true, tension: 0.3, pointRadius: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtMoney(ctx.parsed.y) } } },
+        scales: { y: { ticks: { callback: v => '$' + v.toLocaleString() } }, x: { grid: { display: false } } } }
+    });
   }
 }
 
