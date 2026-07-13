@@ -632,6 +632,9 @@
       <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
         <i class="ti ti-receipt icon" aria-hidden="true"></i> Receipts
       </div>
+      <div class="nav-item" onclick="nav('expenses')" id="nav-expenses">
+        <i class="ti ti-building-store icon" aria-hidden="true"></i> Expenses
+      </div>
       <div class="nav-item" onclick="nav('donations')" id="nav-donations">
         <i class="ti ti-gift icon" aria-hidden="true"></i> Donations
       </div>
@@ -782,7 +785,7 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', families: 'Families', volunteers: 'Volunteers',
     summary: 'Finance',
-    payments: 'Volunteer Reimbursement', receipts: 'Receipts', donations: 'Donations', users: 'Users',
+    payments: 'Volunteer Reimbursement', receipts: 'Receipts', expenses: 'Operating Expenses', donations: 'Donations', users: 'Users',
     deliveries: 'Deliveries', 'active-cycle': 'Active Cycle',
     catalog: 'Food Catalog', pricing: 'Pricing Table',
     cycle_detail: 'Delivery Detail', orders: 'Orders',
@@ -794,7 +797,7 @@ function nav(page) {
     dashboard: renderDashboard, families: renderFamilies,
     volunteers: renderVolunteers,
     summary: renderFinanceSummary,
-    payments: renderPayments, receipts: renderReceipts, donations: renderDonations,
+    payments: renderPayments, receipts: renderReceipts, expenses: renderExpenses, donations: renderDonations,
     users: renderUsers, deliveries: renderDeliveries, 'active-cycle': renderActiveCycle,
     catalog: renderCatalog, pricing: renderPricingTable, orders: renderOrders,
     requests: renderRequests
@@ -3535,6 +3538,131 @@ function goFinance(page, filter) {
   else if (page === 'payments') renderPayments(filter);
 }
 
+// ── Operating Expenses (org overhead: hosting, supplies, admin fees) ────────────
+const EXPENSE_METHODS = ['bank_transfer', 'card', 'check', 'cash', 'venmo', 'zelle', 'other'];
+function _prettyMethod(m) { return m ? m.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '—'; }
+
+async function renderExpenses(filter) {
+  filter = (filter || STATE.expFilter || 'all');
+  if (!['all', 'paid', 'pending'].includes(filter)) filter = 'all';
+  STATE.expFilter = filter;
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-green" onclick="openExpenseDrawer()"><i class="ti ti-plus" aria-hidden="true"></i> Add expense</button>`;
+  document.getElementById('content').innerHTML = '<p style="color:var(--gray-4)">Loading…</p>';
+  try {
+    const [rows, sum] = await Promise.all([
+      GET('/expenses' + (filter !== 'all' ? '?status=' + filter : '')),
+      GET('/expenses/summary')
+    ]);
+    window._expCats = sum.categories || ['Web hosting / software', 'Supplies', 'Admin / fees', 'Other'];
+    const catChips = (sum.by_category || []).map(c =>
+      `<span class="badge badge-info" style="margin:2px 4px 2px 0">${esc(c.category)}: ${fmtMoney(c.total)}</span>`).join('');
+    document.getElementById('content').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
+          <div class="stat-card" style="cursor:default;border-left:4px solid var(--accent)"><div class="stat-label">Paid (cash out)</div><div class="stat-value">${fmtMoney(sum.total_paid)}</div><div style="font-size:11px;color:var(--text-3)">${sum.paid_count} item${sum.paid_count!==1?'s':''}</div></div>
+          <div class="stat-card" style="cursor:default;border-left:4px solid var(--warning)"><div class="stat-label">Pending (committed)</div><div class="stat-value" style="color:var(--warning)">${fmtMoney(sum.total_pending)}</div><div style="font-size:11px;color:var(--text-3)">${sum.pending_count} item${sum.pending_count!==1?'s':''}</div></div>
+          <div class="stat-card" style="cursor:default;border-left:4px solid var(--gold)"><div class="stat-label">Total overhead</div><div class="stat-value" style="color:var(--gold-deep)">${fmtMoney((sum.total_paid||0)+(sum.total_pending||0))}</div></div>
+        </div>
+        ${catChips ? `<div style="padding:0 2px">${catChips}</div>` : ''}
+        <div class="table-card">
+          <div class="table-header">
+            <span class="table-title">Operating expenses</span>
+            <div class="filter-tabs">${['all','paid','pending'].map(f => `<div class="filter-tab ${filter===f?'active':''}" onclick="renderExpenses('${f}')">${f}</div>`).join('')}</div>
+          </div>
+          <table>
+            <thead><tr><th>Date</th><th>Category</th><th>Vendor / description</th><th>Method</th><th style="text-align:right">Amount</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              ${rows.length ? rows.map(e => `
+                <tr>
+                  <td style="white-space:nowrap;color:var(--text-3);font-size:12px">${e.expense_date?fmtDate(e.expense_date):'—'}</td>
+                  <td>${esc(e.category||'Other')}</td>
+                  <td style="font-size:12px">${esc(e.vendor||'')}${e.description?`<div style="color:var(--text-3)">${esc(e.description)}</div>`:''}</td>
+                  <td style="font-size:12px">${_prettyMethod(e.payment_method)}${e.payment_ref?`<div style="color:var(--text-3);font-size:11px">${esc(e.payment_ref)}</div>`:''}</td>
+                  <td style="text-align:right;font-weight:600">${fmtMoney(e.amount)}</td>
+                  <td><span class="badge ${e.status==='paid'?'badge-approved':'badge-pending'}">${e.status==='paid'?'Paid':'Pending'}</span></td>
+                  <td style="text-align:right;white-space:nowrap">
+                    ${e.status==='pending'?`<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 10px;font-size:11px" onclick="markExpensePaid('${e.id}')">Mark paid</button>`:''}
+                    <a href="javascript:void(0)" onclick='openExpenseDrawer(${JSON.stringify(e).replace(/'/g, "&#39;")})' style="color:var(--text-3);font-size:13px;margin:0 8px" title="Edit"><i class="ti ti-pencil" aria-hidden="true"></i></a>
+                    <a href="javascript:void(0)" onclick="deleteExpense('${e.id}')" style="color:var(--danger);font-size:13px" title="Delete"><i class="ti ti-trash" aria-hidden="true"></i></a>
+                  </td>
+                </tr>`).join('') : '<tr class="empty-row"><td colspan="7" style="text-align:center;color:var(--text-3);padding:30px">No expenses yet. Click “Add expense”.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch(e) { document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`; }
+}
+
+function openExpenseDrawer(existing) {
+  const e = existing || {};
+  const cats = window._expCats || ['Web hosting / software', 'Supplies', 'Admin / fees', 'Other'];
+  const today = new Date().toISOString().slice(0, 10);
+  const catOpts = cats.map(c => `<option value="${esc(c)}" ${e.category===c?'selected':''}>${esc(c)}</option>`).join('');
+  const methOpts = ['<option value="">—</option>'].concat(
+    EXPENSE_METHODS.map(m => `<option value="${m}" ${e.payment_method===m?'selected':''}>${_prettyMethod(m)}</option>`)).join('');
+  const body = `
+    <input type="hidden" id="ex-id" value="${e.id||''}">
+    <div class="form-group"><label>Date</label>
+      <input type="date" id="ex-date" class="form-control" value="${e.expense_date||today}"></div>
+    <div class="form-group"><label>Category</label>
+      <select id="ex-category" class="form-control">${catOpts}</select></div>
+    <div class="form-group"><label>Vendor / payee</label>
+      <input type="text" id="ex-vendor" class="form-control" placeholder="e.g. Railway, Costco Business" value="${esc(e.vendor||'')}"></div>
+    <div class="form-group"><label>Description <span style="color:var(--text-3);font-weight:400">(optional)</span></label>
+      <input type="text" id="ex-description" class="form-control" value="${esc(e.description||'')}"></div>
+    <div class="form-group"><label>Amount ($)</label>
+      <input type="number" id="ex-amount" class="form-control" step="0.01" min="0" value="${e.amount!=null?e.amount:''}"></div>
+    <div class="form-group"><label>Payment method</label>
+      <select id="ex-method" class="form-control">${methOpts}</select></div>
+    <div class="form-group"><label>Reference <span style="color:var(--text-3);font-weight:400">(optional)</span></label>
+      <input type="text" id="ex-ref" class="form-control" placeholder="invoice / confirmation #" value="${esc(e.payment_ref||'')}"></div>
+    <div class="form-group"><label>Status</label>
+      <select id="ex-status" class="form-control">
+        <option value="paid" ${e.status!=='pending'?'selected':''}>Paid (money out)</option>
+        <option value="pending" ${e.status==='pending'?'selected':''}>Pending (owed)</option>
+      </select></div>
+    <div id="ex-err" style="color:var(--danger);font-size:13px"></div>`;
+  openDrawer(existing ? 'Edit expense' : 'Add expense', body,
+    `<button class="btn btn-green" onclick="saveExpense()">Save</button>
+     <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`);
+}
+
+async function saveExpense() {
+  const id = document.getElementById('ex-id').value;
+  const a = document.getElementById('ex-amount').value;
+  const payload = {
+    expense_date:   document.getElementById('ex-date').value || null,
+    category:       document.getElementById('ex-category').value,
+    vendor:         document.getElementById('ex-vendor').value.trim() || null,
+    description:    document.getElementById('ex-description').value.trim() || null,
+    amount:         a !== '' ? parseFloat(a) : null,
+    payment_method: document.getElementById('ex-method').value || null,
+    payment_ref:    document.getElementById('ex-ref').value.trim() || null,
+    status:         document.getElementById('ex-status').value,
+  };
+  try {
+    if (id) await PUT('/expenses/' + id, payload);
+    else await POST('/expenses', payload);
+    closeDrawer();
+    renderExpenses(STATE.expFilter);
+  } catch(e) { document.getElementById('ex-err').textContent = e.message; }
+}
+
+async function markExpensePaid(id) {
+  try {
+    await PUT('/expenses/' + id, { status: 'paid' });
+    showToast('Expense marked paid.');
+    renderExpenses(STATE.expFilter);
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteExpense(id) {
+  if (!confirm('Delete this expense? This cannot be undone.')) return;
+  try { await DEL('/expenses/' + id); renderExpenses(STATE.expFilter); }
+  catch(e) { alert(e.message); }
+}
+
 async function renderFinanceSummary() {
   STATE._srSince = STATE._srSince || '';
   STATE._srUntil = STATE._srUntil || '';
@@ -3578,7 +3706,7 @@ async function renderFinanceSummary() {
           <i class="ti ti-arrow-right" style="color:var(--gray-4)" aria-hidden="true"></i>
         </div>
       </div>`;
-    const attn = (t.pending_count || t.owed_count || t.mismatch_count);
+    const attn = (t.pending_count || t.owed_count || t.mismatch_count || t.opex_pending_count);
 
     document.getElementById('content').innerHTML = `
       <div style="display:flex;flex-direction:column;gap:20px">
@@ -3587,7 +3715,7 @@ async function renderFinanceSummary() {
           <div>
             <div class="stat-label">Cash balance</div>
             <div style="font-family:var(--font-serif);font-size:40px;font-weight:500;color:var(--gold-deep);line-height:1.05">${fmtMoney(t.cash_balance)}</div>
-            <div style="font-size:12px;color:var(--gray-4);margin-top:6px">Raised ${fmtMoney(t.income)} · Committed ${fmtMoney(t.committed)} · Owe volunteers ${fmtMoney(t.outstanding_payable)}</div>
+            <div style="font-size:12px;color:var(--gray-4);margin-top:6px">Raised ${fmtMoney(t.income)} · Committed ${fmtMoney(t.committed)} · Owe volunteers ${fmtMoney(t.outstanding_payable)} · Operating costs ${fmtMoney(t.opex_paid)}${t.opex_pending>0?' (+'+fmtMoney(t.opex_pending)+' pending)':''}</div>
           </div>
           <div style="text-align:right">
             <div class="stat-label">Available after commitments</div>
@@ -3600,15 +3728,17 @@ async function renderFinanceSummary() {
           ${t.pending_count ? action('ti-inbox', `${t.pending_count} receipt${t.pending_count!=1?'s':''} to review`, fmtMoney(t.pending_review)+' pending', 'var(--warning)', "goFinance('receipts','pending')") : ''}
           ${t.owed_count ? action('ti-cash-banknote', `Owed to ${t.owed_count} volunteer${t.owed_count!=1?'s':''}`, fmtMoney(t.outstanding_payable)+' to pay', 'var(--warning)', "nav('payments')") : ''}
           ${t.mismatch_count ? action('ti-alert-triangle', `${t.mismatch_count} amount mismatch${t.mismatch_count!=1?'es':''}`, 'typed vs photo — verify', 'var(--danger)', "goFinance('receipts','all')") : ''}
+          ${t.opex_pending_count ? action('ti-building-store', `${t.opex_pending_count} unpaid expense${t.opex_pending_count!=1?'s':''}`, fmtMoney(t.opex_pending)+' to pay', 'var(--warning)', "nav('expenses')") : ''}
         </div>` : `<div class="stat-card" style="padding:14px 18px;color:var(--accent);font-size:13px;cursor:default"><i class="ti ti-circle-check" aria-hidden="true"></i> All caught up — nothing needs attention.</div>`}
 
         ${sec('Money position')}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
           ${ledger('Income (donations)', t.income, 'var(--gold-deep)')}
           ${ledger('Committed (approved)', t.committed, 'var(--accent)', `${t.approved_count} receipts`)}
-          ${ledger('Paid out', t.paid_out, 'var(--danger)')}
+          ${ledger('Paid out (reimbursements)', t.paid_out, 'var(--danger)')}
           ${ledger('Owed to volunteers', t.outstanding_payable, 'var(--warning)', 'approved, unpaid')}
-          ${ledger('Cash balance', t.cash_balance, 'var(--accent-deep)', 'income − paid out')}
+          ${ledger('Operating costs', t.opex_paid, 'var(--danger)', (t.opex_pending>0?fmtMoney(t.opex_pending)+' pending':'overhead paid'))}
+          ${ledger('Cash balance', t.cash_balance, 'var(--accent-deep)', 'income − paid out − expenses')}
           ${ledger('Pending review', t.pending_review, 'var(--text-2)', `${t.pending_count} receipts`)}
         </div>
 

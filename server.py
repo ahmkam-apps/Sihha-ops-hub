@@ -726,6 +726,29 @@ def bootstrap_db():
     except sqlite3.OperationalError:
         pass
 
+    # Operating expenses — organizational overhead paid by the charity directly
+    # (web hosting, supplies, admin fees), separate from volunteer food reimbursements.
+    # status: pending (committed, not yet paid) | paid (money out). Both hit the ledger.
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS operating_expenses (
+            id             TEXT PRIMARY KEY,
+            expense_date   TEXT,
+            category       TEXT,
+            vendor         TEXT,
+            description    TEXT,
+            amount         REAL NOT NULL,
+            payment_method TEXT,
+            payment_ref    TEXT,
+            status         TEXT NOT NULL DEFAULT 'paid',
+            paid_date      TEXT,
+            created_by     TEXT,
+            created_at     TEXT NOT NULL,
+            updated_at     TEXT
+        )
+    ''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_opex_status ON operating_expenses(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_opex_date   ON operating_expenses(expense_date)')
+
     # Add email/wa_phone/wa_apikey to users (treasurer notification channels)
     for _col, _def in [('email', 'TEXT'), ('wa_phone', 'TEXT'), ('wa_apikey', 'TEXT')]:
         try:
@@ -4072,6 +4095,124 @@ def upload_receipt():
 
 # ── Finance Summary ───────────────────────────────────────────────────────────
 
+OPEX_CATEGORIES = ['Web hosting / software', 'Supplies', 'Admin / fees', 'Other']
+
+
+@app.route('/api/expenses', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def list_expenses():
+    """Operating expenses (org overhead), newest first. Optional ?status= and ?category=."""
+    db = get_db()
+    where, params = [], []
+    st = (request.args.get('status') or '').strip()
+    if st in ('paid', 'pending'):
+        where.append('status=?'); params.append(st)
+    cat = (request.args.get('category') or '').strip()
+    if cat:
+        where.append('category=?'); params.append(cat)
+    sql = 'SELECT * FROM operating_expenses'
+    if where:
+        sql += ' WHERE ' + ' AND '.join(where)
+    sql += " ORDER BY COALESCE(NULLIF(expense_date,''), substr(created_at,1,10)) DESC, created_at DESC"
+    return jsonify([dict(r) for r in db.execute(sql, params).fetchall()])
+
+
+@app.route('/api/expenses/summary', methods=['GET'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def expenses_summary():
+    db = get_db()
+    paid    = db.execute("SELECT COALESCE(SUM(amount),0) s, COUNT(*) c FROM operating_expenses WHERE status='paid'").fetchone()
+    pending = db.execute("SELECT COALESCE(SUM(amount),0) s, COUNT(*) c FROM operating_expenses WHERE status='pending'").fetchone()
+    by_cat = [dict(r) for r in db.execute('''
+        SELECT COALESCE(NULLIF(TRIM(category),''),'Other') as category,
+               ROUND(COALESCE(SUM(amount),0),2) as total, COUNT(*) as count
+        FROM operating_expenses GROUP BY category ORDER BY total DESC''').fetchall()]
+    return jsonify({
+        'total_paid':    round(paid['s'], 2),    'paid_count':    paid['c'],
+        'total_pending': round(pending['s'], 2), 'pending_count': pending['c'],
+        'by_category':   by_cat, 'categories': OPEX_CATEGORIES,
+    })
+
+
+def _expense_payload(d, existing=None):
+    """Validate + assemble an operating-expense row from request JSON."""
+    def val(k, default=None):
+        return d[k] if k in d else (existing[k] if existing else default)
+    amount = val('amount')
+    try:
+        amount = float(amount)
+        if amount < 0:
+            return None, 'Amount cannot be negative'
+    except (TypeError, ValueError):
+        return None, 'Amount is required and must be a number'
+    status = (val('status') or 'paid').strip()
+    if status not in ('paid', 'pending'):
+        return None, 'Status must be paid or pending'
+    row = {
+        'expense_date':   (val('expense_date') or None),
+        'category':       (val('category') or 'Other'),
+        'vendor':         (val('vendor') or None),
+        'description':    (val('description') or None),
+        'amount':         round(amount, 2),
+        'payment_method': (val('payment_method') or None),
+        'payment_ref':    (val('payment_ref') or None),
+        'status':         status,
+    }
+    # paid_date: set when paid (keep provided or default to today), clear when pending
+    row['paid_date'] = (val('paid_date') or (val('expense_date') or now()[:10])) if status == 'paid' else None
+    return row, None
+
+
+@app.route('/api/expenses', methods=['POST'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def create_expense():
+    row, err = _expense_payload(request.json or {})
+    if err:
+        return jsonify({'error': err}), 422
+    db = get_db()
+    eid = str(uuid.uuid4())
+    db.execute('''INSERT INTO operating_expenses
+        (id, expense_date, category, vendor, description, amount, payment_method,
+         payment_ref, status, paid_date, created_by, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (eid, row['expense_date'], row['category'], row['vendor'], row['description'],
+         row['amount'], row['payment_method'], row['payment_ref'], row['status'],
+         row['paid_date'], g.user['user_id'], now()))
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM operating_expenses WHERE id=?", (eid,)).fetchone())), 201
+
+
+@app.route('/api/expenses/<eid>', methods=['PUT'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def update_expense(eid):
+    db = get_db()
+    existing = db.execute("SELECT * FROM operating_expenses WHERE id=?", (eid,)).fetchone()
+    if not existing:
+        return jsonify({'error': 'Not found'}), 404
+    row, err = _expense_payload(request.json or {}, existing=existing)
+    if err:
+        return jsonify({'error': err}), 422
+    db.execute('''UPDATE operating_expenses SET expense_date=?, category=?, vendor=?,
+        description=?, amount=?, payment_method=?, payment_ref=?, status=?, paid_date=?,
+        updated_at=? WHERE id=?''',
+        (row['expense_date'], row['category'], row['vendor'], row['description'],
+         row['amount'], row['payment_method'], row['payment_ref'], row['status'],
+         row['paid_date'], now(), eid))
+    db.commit()
+    return jsonify(dict(db.execute("SELECT * FROM operating_expenses WHERE id=?", (eid,)).fetchone()))
+
+
+@app.route('/api/expenses/<eid>', methods=['DELETE'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
+def delete_expense(eid):
+    db = get_db()
+    if not db.execute("SELECT id FROM operating_expenses WHERE id=?", (eid,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    db.execute("DELETE FROM operating_expenses WHERE id=?", (eid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
 @app.route('/api/finance/summary', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer'])
 def finance_summary():
@@ -4098,6 +4239,12 @@ def finance_summary():
     pending_count   = _sum("SELECT COUNT(*) FROM receipts WHERE status='pending'")
     owed_count      = _sum("SELECT COUNT(*) FROM reimbursements WHERE status='pending'")
     mismatch_count  = _sum("SELECT COUNT(*) FROM receipts WHERE status!='rejected' AND amount_mismatch=1")
+
+    # Operating expenses (org overhead) — paid ones spend cash now, pending ones are
+    # committed but not yet disbursed. Both reduce what's available.
+    opex_paid          = _sum("SELECT COALESCE(SUM(amount),0) FROM operating_expenses WHERE status='paid'")
+    opex_pending       = _sum("SELECT COALESCE(SUM(amount),0) FROM operating_expenses WHERE status='pending'")
+    opex_pending_count = _sum("SELECT COUNT(*) FROM operating_expenses WHERE status='pending'")
 
     # Per-cycle spend (approved receipts, resolved to a cycle via cycle_id or slot).
     cycles = db.execute('''
@@ -4157,12 +4304,17 @@ def finance_summary():
             'committed':           round(committed, 2),
             'paid_out':            round(paid_out, 2),
             'outstanding_payable': round(outstanding, 2),
-            'cash_balance':        round(income - paid_out, 2),
-            'available':           round(income - committed, 2),
+            'opex_paid':           round(opex_paid, 2),
+            'opex_pending':        round(opex_pending, 2),
+            # Cash truly left after every disbursement (reimbursements + operating costs).
+            'cash_balance':        round(income - paid_out - opex_paid, 2),
+            # Left after honoring all commitments (approved payables + operating costs).
+            'available':           round(income - committed - opex_paid - opex_pending, 2),
             'pending_count':       pending_count,
             'approved_count':      approved_count,
             'owed_count':          owed_count,
             'mismatch_count':      mismatch_count,
+            'opex_pending_count':  opex_pending_count,
         },
         'cycles': cyc_list
     })

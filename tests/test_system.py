@@ -2053,7 +2053,8 @@ class TestFinanceSummary:
         assert set(data['totals'].keys()) == {
             'income', 'pending_review', 'committed', 'paid_out', 'outstanding_payable',
             'cash_balance', 'available', 'pending_count', 'approved_count',
-            'owed_count', 'mismatch_count'}
+            'owed_count', 'mismatch_count',
+            'opex_paid', 'opex_pending', 'opex_pending_count'}
         assert isinstance(data['cycles'], list)
         if data['cycles']:
             assert {'id', 'title', 'cycle_status', 'approved_count',
@@ -2061,6 +2062,43 @@ class TestFinanceSummary:
         viewer = _make_role_headers(client, auth, 'viewer')
         assert client.get('/api/finance/summary', headers=viewer).status_code == 403
         assert client.get('/api/finance/summary').status_code == 401
+
+    def test_operating_expense_crud_and_ledger_impact(self, client, auth):
+        base = self._summary()['totals']
+        # create a PAID expense → cash balance drops by that amount
+        e = client.post('/api/expenses', headers=auth, json={
+            'expense_date': '2026-07-01', 'category': 'Web hosting / software',
+            'vendor': 'Railway', 'amount': 20, 'payment_method': 'card', 'status': 'paid'})
+        assert e.status_code == 201
+        eid = e.get_json()['id']
+        t1 = self._summary()['totals']
+        assert t1['opex_paid'] - base['opex_paid'] == pytest.approx(20)
+        assert base['cash_balance'] - t1['cash_balance'] == pytest.approx(20)
+        # a PENDING expense → no cash hit, but shows as pending + reduces available
+        client.post('/api/expenses', headers=auth, json={
+            'category': 'Supplies', 'vendor': 'Bags', 'amount': 15, 'status': 'pending'})
+        t2 = self._summary()['totals']
+        assert t2['opex_pending'] - t1['opex_pending'] == pytest.approx(15)
+        assert t2['opex_pending_count'] == t1['opex_pending_count'] + 1
+        assert t2['cash_balance'] == pytest.approx(t1['cash_balance'])   # pending doesn't touch cash
+        assert t1['available'] - t2['available'] == pytest.approx(15)
+        # mark the paid one back to pending → cash returns
+        client.put('/api/expenses/' + eid, headers=auth, json={'status': 'pending'})
+        t3 = self._summary()['totals']
+        assert t3['cash_balance'] == pytest.approx(base['cash_balance'])
+        # summary + filters
+        summ = client.get('/api/expenses/summary', headers=auth).get_json()
+        assert summ['pending_count'] >= 2 and any(c['category'] == 'Supplies' for c in summ['by_category'])
+        assert all(x['status'] == 'pending' for x in client.get('/api/expenses?status=pending', headers=auth).get_json())
+        # delete + validation
+        assert client.delete('/api/expenses/' + eid, headers=auth).status_code == 200
+        assert client.post('/api/expenses', headers=auth, json={'amount': -5}).status_code == 422
+        assert client.post('/api/expenses', headers=auth, json={'category': 'X'}).status_code == 422  # no amount
+
+    def test_expenses_role_gated(self, client, auth):
+        viewer = _make_role_headers(client, auth, 'viewer')
+        assert client.get('/api/expenses', headers=viewer).status_code == 403
+        assert client.get('/api/expenses').status_code == 401
 
 
 class TestPortalReceiptFlow:
