@@ -3,7 +3,7 @@ Sihha Ops Hub — Full System Test Suite
 Covers all API routes, business rules, privacy rules, and portal flows.
 Run: pytest tests/ -v
 """
-import uuid, pytest
+import secrets, uuid, pytest
 from datetime import datetime, timedelta
 
 
@@ -2668,6 +2668,8 @@ class TestAuditRegressions:
             'idx_families_phone', 'idx_vs_family_id', 'idx_receipts_slot',
             'idx_receipts_vol', 'idx_receipts_cycle', 'idx_sessions_expires',
             'idx_donations_cycle', 'idx_donations_ref', 'idx_rl_slot_sent',
+            'idx_rate_limit_bucket', 'idx_rate_limit_time',
+            'idx_upload_user_time', 'idx_upload_vol_time', 'idx_upload_claimed',
         }
         db = _server.make_conn()
         try:
@@ -2956,3 +2958,295 @@ class TestAuditRegressions:
         _vol, volunteer = self._active_volunteer(client, auth)
         assert client.get('/api/admin/change-requests', headers=viewer).status_code == 200
         assert client.get('/api/admin/change-requests', headers=volunteer).status_code == 403
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PRODUCTION HARDENING REGRESSIONS (2026-08-06)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestProductionHardening:
+    def _family(self, client, auth, **overrides):
+        payload = {
+            'name': f'Hardening Family {uuid.uuid4().hex[:6]}',
+            'phone': f'5856{uuid.uuid4().int % 1000000:06d}',
+            'address': '12 Safe Street', 'city': 'Rochester',
+            'family_size': 4, 'status': 'active',
+        }
+        payload.update(overrides)
+        result = client.post('/api/families', headers=auth, json=payload)
+        assert result.status_code == 201, result.get_json()
+        return result.get_json()
+
+    def _cycle(self, client, auth, **overrides):
+        payload = _cycle_payload(status='open')
+        payload.update(overrides)
+        result = client.post('/api/delivery-cycles', headers=auth, json=payload)
+        assert result.status_code == 201, result.get_json()
+        return result.get_json()
+
+    def _volunteer_headers(self, client, auth):
+        vol = client.post('/api/volunteers', headers=auth, json={
+            'name': f'Upload Volunteer {uuid.uuid4().hex[:6]}',
+            'phone': f'5855{uuid.uuid4().int % 1000000:06d}',
+            'email': f'upload_{uuid.uuid4().hex[:8]}@test.sihha.org',
+            'role': 'shopper', 'status': 'active',
+        }).get_json()
+        token = _get_volunteer_token(client, vol['id'], auth)
+        return vol, {'Authorization': f'Bearer {token}'}
+
+    def test_health_fails_when_database_is_missing(self, client, monkeypatch, tmp_path):
+        monkeypatch.setattr(_server, 'DB_PATH', str(tmp_path / 'missing.db'))
+        response = client.get('/api/health')
+        assert response.status_code == 503
+        assert response.get_json()['status'] == 'error'
+
+    def test_existing_database_guard_refuses_blank_production_db(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(_server, 'DB_PATH', str(tmp_path / 'missing-prod.db'))
+        monkeypatch.setattr(_server, 'REQUIRE_EXISTING_DB', True)
+        with pytest.raises(RuntimeError, match='REQUIRE_EXISTING_DB'):
+            _server.bootstrap_db()
+        assert not (tmp_path / 'missing-prod.db').exists()
+
+    def test_hardening_migrations_are_idempotent_on_fresh_database(self, monkeypatch, tmp_path):
+        db_path = tmp_path / 'fresh.db'
+        monkeypatch.setattr(_server, 'DB_PATH', str(db_path))
+        monkeypatch.setattr(_server, 'REQUIRE_EXISTING_DB', False)
+        _server.bootstrap_db()
+        _server.bootstrap_db()
+        db = _server.make_conn()
+        try:
+            tables = {
+                row['name'] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert {'rate_limit_events', 'uploaded_files'} <= tables
+            columns = {
+                row['name'] for row in db.execute('PRAGMA table_info(food_requests)').fetchall()
+            }
+            assert 'confirmation_expires_at' in columns
+        finally:
+            db.close()
+
+    def test_login_rate_limit_is_persisted_in_database(self, client):
+        username = f'unknown_{uuid.uuid4().hex}'
+        for _ in range(_server.LOGIN_MAX_FAILS):
+            assert client.post('/api/auth/login', json={
+                'username': username, 'password': 'WrongPass1!'
+            }).status_code == 401
+        blocked = client.post('/api/auth/login', json={
+            'username': username, 'password': 'WrongPass1!'
+        })
+        assert blocked.status_code == 429
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT COUNT(*) FROM rate_limit_events WHERE scope='login_user'"
+            ).fetchone()[0] >= _server.LOGIN_MAX_FAILS
+            db.execute(
+                "DELETE FROM rate_limit_events WHERE bucket_key=?",
+                (_server._rate_bucket(username),)
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def test_public_duplicate_response_does_not_disclose_membership(self, client):
+        phone = f'5853{uuid.uuid4().int % 1000000:06d}'
+        payload = {'name': 'Private Applicant', 'phone': phone, 'family_size': 2}
+        first = client.post('/api/intake', json=payload)
+        duplicate = client.post('/api/intake', json=payload)
+        assert first.status_code == duplicate.status_code == 201
+        assert first.get_json() == duplicate.get_json()
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT COUNT(*) FROM families WHERE phone=?", (phone,)
+            ).fetchone()[0] == 1
+        finally:
+            db.close()
+
+    def test_family_delete_revokes_sessions_and_is_transactional(self, client, auth):
+        family = self._family(client, auth)
+        family_token = _get_family_token(client, family)
+        assert family_token
+        deleted = client.delete(f'/api/families/{family["id"]}', headers=auth)
+        assert deleted.status_code == 200, deleted.get_json()
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT 1 FROM families WHERE id=?", (family['id'],)
+            ).fetchone() is None
+            assert db.execute(
+                "SELECT 1 FROM users WHERE linked_id=?", (family['id'],)
+            ).fetchone() is None
+            assert db.execute(
+                "SELECT 1 FROM sessions WHERE token=?", (family_token,)
+            ).fetchone() is None
+        finally:
+            db.close()
+
+    def test_family_delete_preserves_financial_records(self, client, auth):
+        family = self._family(client, auth)
+        receipt = client.post('/api/receipts', headers=auth, json={
+            'family_id': family['id'], 'amount': 12.50, 'store': 'Audit Store'
+        })
+        assert receipt.status_code == 201
+        blocked = client.delete(f'/api/families/{family["id"]}', headers=auth)
+        assert blocked.status_code == 409
+        assert blocked.get_json()['financial_records'] == 1
+        assert client.get(f'/api/families/{family["id"]}', headers=auth).status_code == 200
+
+    def test_order_rejects_bad_quantities_and_past_cycles(self, client, auth):
+        family = self._family(client, auth)
+        headers = {'Authorization': f'Bearer {_get_family_token(client, family)}'}
+        cycle = self._cycle(client, auth)
+        item_id = client.get('/api/food-items', headers=auth).get_json()[0]['id']
+        bad = client.post('/api/food-order', headers=headers, json={
+            'family_id': family['id'], 'cycle_id': cycle['id'],
+            'selected_items': [item_id], 'item_quantities': {item_id: 'not-a-number'},
+        })
+        assert bad.status_code == 422
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT 1 FROM food_requests WHERE family_id=? AND cycle_id=?",
+                (family['id'], cycle['id'])
+            ).fetchone() is None
+        finally:
+            db.close()
+
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        past_cycle = self._cycle(
+            client, auth, delivery_date_start=yesterday,
+            delivery_date_end=datetime.now().strftime('%Y-%m-%d')
+        )
+        assert client.post('/api/food-order', headers=headers, json={
+            'family_id': family['id'], 'cycle_id': past_cycle['id'],
+            'selected_items': [],
+        }).status_code == 409
+
+    def test_confirmation_token_expires_and_is_single_use(self, client, auth):
+        family = self._family(client, auth)
+        cycle = self._cycle(client, auth, status='upcoming')
+        db = _server.make_conn()
+        try:
+            item_id = db.execute(
+                "SELECT id FROM food_items WHERE is_active=1 LIMIT 1"
+            ).fetchone()['id']
+            token = secrets.token_urlsafe(32)
+            request_id = str(uuid.uuid4())
+            db.execute(
+                """INSERT INTO food_requests
+                   (id,cycle_id,family_id,bundle_size,submitted_at,status,
+                    confirmation_token,confirmation_expires_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (request_id, cycle['id'], family['id'], 'M', _server.now(),
+                 'pending_confirmation', token,
+                 (datetime.utcnow() + timedelta(hours=1)).isoformat())
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        token_view = client.get(f'/api/family/confirm/{token}')
+        assert token_view.status_code == 200
+        assert token_view.headers['Cache-Control'] == 'no-store'
+        assert token_view.headers['Referrer-Policy'] == 'no-referrer'
+        confirmed = client.post(f'/api/family/confirm/{token}', json={
+            'action': 'confirm', 'selected_items': [item_id]
+        })
+        assert confirmed.status_code == 200, confirmed.get_json()
+        assert client.get(f'/api/family/confirm/{token}').status_code == 404
+
+        other_family = self._family(client, auth)
+        other_cycle = self._cycle(client, auth, status='upcoming')
+        expired_token = secrets.token_urlsafe(32)
+        db = _server.make_conn()
+        try:
+            db.execute(
+                """INSERT INTO food_requests
+                   (id,cycle_id,family_id,bundle_size,submitted_at,status,
+                    confirmation_token,confirmation_expires_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), other_cycle['id'], other_family['id'], 'M',
+                 _server.now(), 'pending_confirmation', expired_token,
+                 (datetime.utcnow() - timedelta(minutes=1)).isoformat())
+            )
+            db.commit()
+        finally:
+            db.close()
+        assert client.get(f'/api/family/confirm/{expired_token}').status_code == 410
+
+    def test_uploads_are_verified_registered_and_single_claim(self, client, auth,
+                                                               monkeypatch, tmp_path):
+        from io import BytesIO
+        from PIL import Image
+        monkeypatch.setattr(_server, 'UPLOAD_FOLDER', str(tmp_path))
+
+        bad = client.post('/api/receipts/upload', headers=auth, data={
+            'file': (BytesIO(b'not really an image'), 'fake.jpg')
+        }, content_type='multipart/form-data')
+        assert bad.status_code == 422
+        assert not list(tmp_path.iterdir())
+
+        image = BytesIO()
+        Image.new('RGB', (20, 20), 'white').save(image, format='JPEG')
+        image_bytes = image.getvalue()
+        uploaded = client.post('/api/receipts/upload', headers=auth, data={
+            'file': (BytesIO(image_bytes), 'receipt.jpg')
+        }, content_type='multipart/form-data')
+        assert uploaded.status_code == 201, uploaded.get_json()
+        file_url = uploaded.get_json()['file_url']
+        assert (tmp_path / file_url.rsplit('/', 1)[-1]).exists()
+        first = client.post('/api/receipts', headers=auth, json={
+            'amount': 10, 'file_url': file_url
+        })
+        assert first.status_code == 201
+        assert client.post('/api/receipts', headers=auth, json={
+            'amount': 11, 'file_url': file_url
+        }).status_code == 422
+
+    def test_volunteer_upload_quota_and_orphan_cleanup(self, client, auth,
+                                                        monkeypatch, tmp_path):
+        from io import BytesIO
+        from PIL import Image
+        monkeypatch.setattr(_server, 'UPLOAD_FOLDER', str(tmp_path))
+        monkeypatch.setattr(_server, 'UPLOAD_FILES_PER_DAY', 1)
+        volunteer, headers = self._volunteer_headers(client, auth)
+        image = BytesIO()
+        Image.new('RGB', (20, 20), 'white').save(image, format='JPEG')
+        payload = image.getvalue()
+        first_upload = client.post('/api/portal/receipts/upload', headers=headers, data={
+            'file': (BytesIO(payload), 'one.jpg')
+        }, content_type='multipart/form-data')
+        assert first_upload.status_code == 201
+        file_url = first_upload.get_json()['file_url']
+
+        _other_volunteer, other_headers = self._volunteer_headers(client, auth)
+        assert client.post('/api/portal/receipts', headers=other_headers, json={
+            'amount': 10, 'file_url': file_url
+        }).status_code == 422
+        assert client.post('/api/portal/receipts', headers=headers, json={
+            'amount': 10, 'file_url': file_url
+        }).status_code == 201
+        assert client.post('/api/portal/receipts/upload', headers=headers, data={
+            'file': (BytesIO(payload), 'two.jpg')
+        }, content_type='multipart/form-data').status_code == 429
+
+        orphan = f'{uuid.uuid4()}.jpg'
+        (tmp_path / orphan).write_bytes(payload)
+        db = _server.make_conn()
+        try:
+            db.execute(
+                """INSERT INTO uploaded_files
+                   (filename,volunteer_id,size_bytes,created_at)
+                   VALUES (?,?,?,?)""",
+                (orphan, volunteer['id'], len(payload),
+                 (datetime.utcnow() - timedelta(hours=25)).isoformat())
+            )
+            db.commit()
+            assert _server._cleanup_orphan_uploads(db) == 1
+            assert not (tmp_path / orphan).exists()
+        finally:
+            db.close()

@@ -234,6 +234,9 @@
     <h1 class="page-title">Volunteer with Sihha</h1>
     <p class="page-sub">Fill out this form to join our volunteer team. A coordinator will review your application and reach out within 48 hours.</p>
 
+    <input type="text" id="_website" tabindex="-1" autocomplete="off" aria-hidden="true"
+           style="position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden">
+
     <!-- Section: About you -->
     <div class="form-section">
       <div class="section-label">About You</div>
@@ -359,7 +362,8 @@
       const res = await fetch('/api/volunteer-signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone, email, role: selectedRole, availability: avail.join(', '), notes })
+        body: JSON.stringify({ name, phone, email, role: selectedRole, availability: avail.join(', '), notes,
+                               _website: document.getElementById('_website').value })
       });
       const data = await res.json();
 

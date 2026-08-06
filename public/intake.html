@@ -261,6 +261,9 @@
 
     <form id="intake-form" onsubmit="submitForm(event)" novalidate>
 
+      <input type="text" id="_website" tabindex="-1" autocomplete="off" aria-hidden="true"
+             style="position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden">
+
       <div class="section-label">Personal Information</div>
 
       <div class="field">
@@ -476,6 +479,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name, phone,
+          _website: document.getElementById('_website').value,
           email: (document.getElementById('email').value || '').trim() || null,
           address: address + (city ? ', ' + city : ''),
           city,

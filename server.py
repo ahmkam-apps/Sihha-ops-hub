@@ -1,4 +1,5 @@
 import os
+import hashlib
 import secrets
 import sqlite3
 import uuid
@@ -29,7 +30,7 @@ except ImportError:
 # to X-Forwarded-For. Trust exactly ONE hop (x_for=1) so request.remote_addr is the
 # real client and cannot be spoofed by a client-supplied X-Forwarded-For (audit P1.5:
 # login-throttle bypass). Do NOT raise x_for above 1 — that would re-open the spoof.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 # CORS restricted to known origins (audit 2.3) — override with CORS_ORIGINS env var
 # (comma-separated) if domains change. Same-origin SPA/iframe traffic is unaffected
 # by CORS; this only blocks third-party sites from scripting the API.
@@ -39,6 +40,21 @@ _CORS_ORIGINS = [o.strip() for o in os.environ.get(
     'https://sihha.org,https://www.sihha.org'
 ).split(',') if o.strip()]
 CORS(app, origins=_CORS_ORIGINS)
+
+@app.after_request
+def add_security_headers(response):
+    """Low-risk baseline headers; frame policy/CSP need a separate widget/inline-JS migration."""
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('Referrer-Policy', 'same-origin')
+    response.headers.setdefault(
+        'Permissions-Policy', 'camera=(self), geolocation=(), microphone=(), payment=()'
+    )
+    if request.path.startswith('/confirm/') or request.path.startswith('/api/family/confirm/'):
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Cache-Control'] = 'no-store'
+    if request.is_secure:
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
+    return response
 # Cap request body size (receipt photos incl. HEIC) — prevents disk-fill DoS on the
 # Railway volume that also holds the DB. Flask returns 413 automatically when exceeded.
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
@@ -48,8 +64,26 @@ UPLOAD_FOLDER   = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
 SESSION_HOURS   = int(os.environ.get('SESSION_EXPIRY_HOURS', 24))
 PORT            = int(os.environ.get('PORT', 5000))
 ALLOWED_EXT     = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'heic'}
+MAX_UPLOAD_BYTES = int(os.environ.get('MAX_UPLOAD_BYTES', 12 * 1024 * 1024))
+MAX_IMAGE_PIXELS = int(os.environ.get('MAX_IMAGE_PIXELS', 40_000_000))
+UPLOAD_FILES_PER_DAY = int(os.environ.get('UPLOAD_FILES_PER_DAY', 20))
+UPLOAD_BYTES_PER_DAY = int(os.environ.get('UPLOAD_BYTES_PER_DAY', 64 * 1024 * 1024))
+UPLOAD_TOTAL_BYTES = int(os.environ.get('UPLOAD_TOTAL_BYTES', 2 * 1024 * 1024 * 1024))
+CONFIRMATION_TOKEN_HOURS = int(os.environ.get('CONFIRMATION_TOKEN_HOURS', 168))
 SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '')
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
+
+def _env_flag(name, default=False):
+    """Parse a conventional boolean environment variable."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+# Production sets REQUIRE_EXISTING_DB=1. Staging intentionally leaves it off so
+# its synthetic database can be rebuilt. This prevents a missing Railway volume
+# from silently bootstrapping an empty production database that still looks healthy.
+REQUIRE_EXISTING_DB = _env_flag('REQUIRE_EXISTING_DB', False)
 
 # ── Receipt vision-parsing (Phase A) ──────────────────────────────────────────
 # Auto-extract store/date/total/line-items from an uploaded receipt photo via the
@@ -156,6 +190,23 @@ def bootstrap_db():
     db_dir = os.path.dirname(abs_db)
     log.info(f'DB_PATH={DB_PATH}  →  absolute={abs_db}')
     log.info(f'Working directory: {os.getcwd()}')
+
+    # A production volume outage must stop the release. Without this guard,
+    # sqlite3.connect() creates a new empty file and the health check can report
+    # success even though all operational data is absent.
+    if REQUIRE_EXISTING_DB:
+        valid_existing_db = False
+        try:
+            with open(abs_db, 'rb') as existing_db:
+                valid_existing_db = existing_db.read(16) == b'SQLite format 3\x00'
+        except OSError:
+            pass
+        if not valid_existing_db:
+            raise RuntimeError(
+                'REQUIRE_EXISTING_DB is enabled but DB_PATH is missing or is not a valid '
+                'SQLite database. Refusing to create an empty production database; verify '
+                'the Railway volume mount and DB_PATH.'
+            )
 
     if os.path.exists(abs_db):
         size_kb = os.path.getsize(abs_db) / 1024
@@ -376,6 +427,7 @@ def bootstrap_db():
             assigned_volunteer_id TEXT,
             delivered_at        TEXT,
             notes               TEXT,
+            confirmation_expires_at TEXT,
             UNIQUE(cycle_id, family_id),
             FOREIGN KEY (cycle_id) REFERENCES delivery_cycles(id),
             FOREIGN KEY (family_id) REFERENCES families(id)
@@ -465,6 +517,27 @@ def bootstrap_db():
             description     TEXT,
             synced_at       TEXT NOT NULL
         );
+
+        -- Persistent security counters shared by every gunicorn worker.
+        -- bucket_key is a SHA-256 digest; raw usernames, phone numbers and IPs
+        -- are not retained in this operational table.
+        CREATE TABLE IF NOT EXISTS rate_limit_events (
+            id         TEXT PRIMARY KEY,
+            scope      TEXT NOT NULL,
+            bucket_key TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        -- Registry for new files supports per-uploader quotas and safe cleanup
+        -- of uploads that were never attached to a receipt.
+        CREATE TABLE IF NOT EXISTS uploaded_files (
+            filename         TEXT PRIMARY KEY,
+            uploader_user_id TEXT,
+            volunteer_id     TEXT,
+            size_bytes       INTEGER NOT NULL,
+            created_at       TEXT NOT NULL,
+            claimed_at       TEXT
+        );
     ''')
 
     # ── Performance indexes ───────────────────────────────────────────────────
@@ -503,6 +576,12 @@ def bootstrap_db():
         "CREATE INDEX IF NOT EXISTS idx_donations_ref     ON donations(reference_id)",
         # reminder_log: idempotency guards query by (slot_id, sent_to)
         "CREATE INDEX IF NOT EXISTS idx_rl_slot_sent      ON reminder_log(slot_id, sent_to)",
+        # persistent request throttling and upload quota/cleanup lookups
+        "CREATE INDEX IF NOT EXISTS idx_rate_limit_bucket ON rate_limit_events(scope, bucket_key, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_rate_limit_time   ON rate_limit_events(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_upload_user_time  ON uploaded_files(uploader_user_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_upload_vol_time   ON uploaded_files(volunteer_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_upload_claimed    ON uploaded_files(claimed_at, created_at)",
     ]
     for _idx_sql in _performance_indexes:
         try:
@@ -669,6 +748,7 @@ def bootstrap_db():
     # Ensure food_requests has all expected columns (safety net in case table recreation failed)
     for _col, _def in [
         ('confirmation_token',    'TEXT'),
+        ('confirmation_expires_at', 'TEXT'),
         ('confirmed_at',          'TEXT'),
         ('confirmation_sent_at',  'TEXT'),
         ('updated_at',            'TEXT'),
@@ -911,7 +991,10 @@ def bootstrap_db():
             pass
 
     # Add confirmation fields to food_requests
-    for _col, _def in [('confirmation_token', 'TEXT'), ('confirmed_at', 'TEXT'), ('confirmation_sent_at', 'TEXT')]:
+    for _col, _def in [('confirmation_token', 'TEXT'),
+                       ('confirmation_expires_at', 'TEXT'),
+                       ('confirmed_at', 'TEXT'),
+                       ('confirmation_sent_at', 'TEXT')]:
         try:
             conn.execute(f'ALTER TABLE food_requests ADD COLUMN {_col} {_def}')
             log.info(f'Migration: added {_col} to food_requests')
@@ -984,6 +1067,7 @@ def bootstrap_db():
                     delivered_at         TEXT,
                     notes                TEXT,
                     confirmation_token   TEXT,
+                    confirmation_expires_at TEXT,
                     confirmed_at         TEXT,
                     confirmation_sent_at TEXT,
                     updated_at           TEXT,
@@ -995,11 +1079,13 @@ def bootstrap_db():
                 INSERT OR IGNORE INTO food_requests_new
                     (id, cycle_id, family_id, bundle_size, submitted_at, status,
                      assigned_volunteer_id, delivered_at, notes,
-                     confirmation_token, confirmed_at, confirmation_sent_at,
+                     confirmation_token, confirmation_expires_at,
+                     confirmed_at, confirmation_sent_at,
                      updated_at, family_notes)
                 SELECT id, cycle_id, family_id, bundle_size, submitted_at, status,
                        assigned_volunteer_id, delivered_at, notes,
-                       confirmation_token, confirmed_at, confirmation_sent_at,
+                       confirmation_token, confirmation_expires_at,
+                       confirmed_at, confirmation_sent_at,
                        NULL, NULL
                 FROM food_requests;
                 DROP TABLE IF EXISTS food_requests;
@@ -1012,6 +1098,17 @@ def bootstrap_db():
             log.info(f'Migration: food_requests already upgraded — skipping ({_e})')
 
     conn.commit()
+
+    # Give still-pending legacy confirmation links a short migration grace
+    # period. Links for already processed orders remain unusable because the
+    # public confirmation route accepts pending_confirmation only.
+    conn.execute(
+        """UPDATE food_requests
+           SET confirmation_expires_at=datetime('now', '+24 hours')
+           WHERE confirmation_token IS NOT NULL
+             AND confirmation_expires_at IS NULL
+             AND status='pending_confirmation'"""
+    )
 
     # Back-fill family_code for existing families that don't have one
     existing = conn.execute(
@@ -1682,10 +1779,13 @@ def require_auth(roles=None):
             # threshold guards small SESSION_HOURS values (never goes below half-life)
             slide_threshold = (datetime.utcnow() + timedelta(
                 hours=max(SESSION_HOURS - 1, SESSION_HOURS * 0.5))).isoformat()
-            cur = get_db().execute(
-                "UPDATE sessions SET expires_at=? WHERE token=? AND expires_at < ?",
-                (new_expiry, token, slide_threshold))
-            if cur.rowcount:
+            # Avoid issuing a zero-row UPDATE: Python's sqlite driver still opens
+            # a transaction for it, which breaks routes that correctly start an
+            # explicit atomic transaction (for example family deletion).
+            if session['expires_at'] < slide_threshold:
+                get_db().execute(
+                    "UPDATE sessions SET expires_at=? WHERE token=?",
+                    (new_expiry, token))
                 get_db().commit()
             g.user = dict(session)
             return f(*args, **kwargs)
@@ -1706,6 +1806,156 @@ def _normalize_upload_url(value):
             or secure_filename(filename) != filename or not allowed_file(filename)):
         return None
     return f'/uploads/{filename}'
+
+def _validate_receipt_upload(original_filename, raw):
+    """Verify size, signature, decodability and dimensions before persistence."""
+    if not original_filename or not allowed_file(original_filename):
+        return None, 'Invalid file type. Use JPG, PNG, GIF, PDF, or HEIC.'
+    if not raw:
+        return None, 'The uploaded file is empty.'
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return None, f'File is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.'
+    ext = secure_filename(original_filename).rsplit('.', 1)[-1].lower()
+    signatures = {
+        'jpg': raw.startswith(b'\xff\xd8\xff'),
+        'jpeg': raw.startswith(b'\xff\xd8\xff'),
+        'png': raw.startswith(b'\x89PNG\r\n\x1a\n'),
+        'gif': raw.startswith((b'GIF87a', b'GIF89a')),
+        'pdf': raw.startswith(b'%PDF-'),
+        'heic': len(raw) >= 12 and raw[4:8] == b'ftyp' and raw[8:12] in {
+            b'heic', b'heix', b'hevc', b'hevx', b'mif1', b'msf1'
+        },
+    }
+    if not signatures.get(ext, False):
+        return None, 'File contents do not match the selected file type.'
+    if ext == 'pdf':
+        return ext, None
+
+    try:
+        from io import BytesIO
+        if ext == 'heic':
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        from PIL import Image
+        with Image.open(BytesIO(raw)) as image:
+            width, height = image.size
+            if width < 1 or height < 1 or width * height > MAX_IMAGE_PIXELS:
+                return None, 'Image dimensions are invalid or too large.'
+            image.verify()
+    except Exception as exc:
+        log.warning(f'Upload image verification failed: {exc}')
+        return None, 'The uploaded image is damaged or unsupported.'
+    return ext, None
+
+def _cleanup_orphan_uploads(db, older_than_hours=24):
+    """Delete only registered files that no receipt references after the grace period."""
+    cutoff = (datetime.utcnow() - timedelta(hours=older_than_hours)).isoformat()
+    rows = db.execute(
+        "SELECT filename FROM uploaded_files WHERE created_at<?",
+        (cutoff,)
+    ).fetchall()
+    removed = 0
+    for row in rows:
+        filename = row['filename']
+        file_url = f'/uploads/{filename}'
+        if db.execute("SELECT 1 FROM receipts WHERE file_url=? LIMIT 1", (file_url,)).fetchone():
+            db.execute(
+                "UPDATE uploaded_files SET claimed_at=? WHERE filename=?", (now(), filename)
+            )
+            continue
+        if secure_filename(filename) == filename:
+            try:
+                os.remove(os.path.join(UPLOAD_FOLDER, filename))
+                removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning(f'Orphan upload cleanup failed for {filename}: {exc}')
+                continue
+        db.execute("DELETE FROM uploaded_files WHERE filename=?", (filename,))
+    if rows:
+        db.commit()
+    return removed
+
+def _upload_quota_error(db, size_bytes, uploader_user_id=None, volunteer_id=None):
+    cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+    if volunteer_id:
+        where, identity = 'volunteer_id=?', volunteer_id
+        max_files, max_bytes = UPLOAD_FILES_PER_DAY, UPLOAD_BYTES_PER_DAY
+    else:
+        where, identity = 'uploader_user_id=?', uploader_user_id
+        # Staff may use the bulk uploader, but still receive a finite safety cap.
+        max_files, max_bytes = UPLOAD_FILES_PER_DAY * 5, UPLOAD_BYTES_PER_DAY * 4
+    usage = db.execute(
+        f"SELECT COUNT(*) files, COALESCE(SUM(size_bytes),0) bytes FROM uploaded_files "
+        f"WHERE {where} AND created_at>?",
+        (identity, cutoff)
+    ).fetchone()
+    if usage['files'] >= max_files or usage['bytes'] + size_bytes > max_bytes:
+        return 'Daily upload quota reached. Please try again later or contact a coordinator.'
+    try:
+        total_bytes = sum(
+            entry.stat().st_size for entry in os.scandir(UPLOAD_FOLDER)
+            if entry.is_file(follow_symlinks=False)
+        )
+    except OSError as exc:
+        log.error(f'Unable to inspect upload storage: {exc}')
+        return 'Upload storage is temporarily unavailable.'
+    if total_bytes + size_bytes > UPLOAD_TOTAL_BYTES:
+        return 'Upload storage is full. Please contact a coordinator.'
+    return None
+
+def _store_receipt_upload(db, file_storage, uploader_user_id=None, volunteer_id=None):
+    raw = file_storage.read()
+    ext, validation_error = _validate_receipt_upload(file_storage.filename, raw)
+    if validation_error:
+        return None, None, validation_error
+    _cleanup_orphan_uploads(db)
+    quota_error = _upload_quota_error(
+        db, len(raw), uploader_user_id=uploader_user_id, volunteer_id=volunteer_id
+    )
+    if quota_error:
+        return None, None, quota_error
+
+    filename = f'{uuid.uuid4()}.{ext}'
+    path = os.path.join(UPLOAD_FOLDER, filename)
+    try:
+        with open(path, 'xb') as out:
+            out.write(raw)
+        db.execute(
+            """INSERT INTO uploaded_files
+               (filename,uploader_user_id,volunteer_id,size_bytes,created_at)
+               VALUES (?,?,?,?,?)""",
+            (filename, uploader_user_id, volunteer_id, len(raw), now())
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+    return filename, raw, None
+
+def _claim_registered_upload(db, file_url, volunteer_id=None):
+    """Claim a new upload; volunteer claims must match the uploader identity."""
+    if not file_url:
+        return True
+    filename = file_url.rsplit('/', 1)[-1]
+    row = db.execute(
+        "SELECT volunteer_id, claimed_at FROM uploaded_files WHERE filename=?", (filename,)
+    ).fetchone()
+    if not row:
+        # Staff may attach pre-registry legacy files; portal callers may not.
+        return volunteer_id is None
+    if volunteer_id and row['volunteer_id'] != volunteer_id:
+        return False
+    if row['claimed_at']:
+        # A file is a one-receipt capability and cannot be replayed.
+        return False
+    db.execute("UPDATE uploaded_files SET claimed_at=? WHERE filename=?", (now(), filename))
+    return True
 
 # ── Portal Auth (volunteer self-service, phone-based) ─────────────────────────
 
@@ -1912,6 +2162,23 @@ def _today_central():
         from datetime import date as _d
         return _d.today()
 
+def _confirmation_expiry_iso(delivery_date_start=None):
+    """Create a UTC expiry, capped at the start of delivery day in Chicago."""
+    expiry = datetime.utcnow() + timedelta(hours=CONFIRMATION_TOKEN_HOURS)
+    if delivery_date_start:
+        try:
+            from datetime import date as _date, time as _time
+            from zoneinfo import ZoneInfo
+            local_deadline = datetime.combine(
+                _date.fromisoformat(str(delivery_date_start)), _time.min,
+                tzinfo=ZoneInfo('America/Chicago')
+            )
+            utc_deadline = local_deadline.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+            expiry = min(expiry, utc_deadline)
+        except (TypeError, ValueError):
+            pass
+    return expiry.isoformat()
+
 def _log_order_event(db, request_id, event_type, actor='system', payload=None):
     """Append an event to food_request_events. Never raises — failures are logged only.
     event_type: confirmed | items_edited | cancelled | admin_override | auto_skipped
@@ -2000,14 +2267,47 @@ def _notify_treasurers(db, subject, message):
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'ok', 'version': '1.0.0', 'time': now()})
+    """Readiness check used by Railway; never creates a missing database."""
+    conn = None
+    try:
+        from urllib.parse import quote as _urlquote
+        abs_db = os.path.abspath(DB_PATH)
+        if not os.path.isfile(abs_db):
+            raise RuntimeError('database file is missing')
+        conn = sqlite3.connect(
+            f'file:{_urlquote(abs_db)}?mode=rw', uri=True, timeout=2
+        )
+        required = {'users', 'sessions', 'families', 'volunteers',
+                    'delivery_cycles', 'food_requests'}
+        found = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if not required.issubset(found):
+            raise RuntimeError('required database tables are missing')
+        quick_check = conn.execute('PRAGMA quick_check').fetchone()
+        if not quick_check or quick_check[0] != 'ok':
+            raise RuntimeError('database integrity check failed')
+        conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+        return jsonify({
+            'status': 'ok', 'version': '1.1.0', 'time': now(),
+            'checks': {'database': 'ok', 'schema': 'ok'}
+        })
+    except Exception as exc:
+        log.error(f'Readiness check failed: {exc}')
+        return jsonify({
+            'status': 'error', 'time': now(),
+            'checks': {'database': 'unavailable'}
+        }), 503
+    finally:
+        if conn is not None:
+            conn.close()
 
 # ── Auth Routes ───────────────────────────────────────────────────────────────
 
-# Failed-login throttle (audit 2.2). In-memory per worker — with 2 workers the
-# effective cap is ~2x the threshold, still a hard stop for online guessing.
-_LOGIN_FAILS = {}            # (ip, username) -> [utc datetimes of recent failures]
-_LOGIN_FAILS_USER = {}       # username -> [utc datetimes] — IP-independent ceiling
+# Failed-login throttle shared by every worker through SQLite. The stored key is
+# a one-way digest, not a raw username/IP/phone value.
 LOGIN_MAX_FAILS       = 5    # per (ip, username)
 LOGIN_MAX_FAILS_USER  = 20   # absolute per-username cap across ALL IPs (audit P1.5)
 LOGIN_WINDOW_MIN      = 15
@@ -2018,32 +2318,56 @@ def _client_ip():
     # to rotate the throttle key. Read remote_addr directly.
     return request.remote_addr or '?'
 
-def _recent(store, key):
-    cutoff = datetime.utcnow() - timedelta(minutes=LOGIN_WINDOW_MIN)
-    recent = [t for t in store.get(key, []) if t > cutoff]
-    if recent:
-        store[key] = recent
-    else:
-        store.pop(key, None)
-    return recent
+def _rate_bucket(value):
+    return hashlib.sha256(str(value).encode('utf-8')).hexdigest()
 
-def _login_blocked(key):
-    # key = (ip, username). Blocked if EITHER the per-IP window OR the absolute
-    # per-username window is exceeded — the username ceiling defeats distributed
-    # brute force that rotates source IPs.
-    username = key[1]
-    per_ip   = len(_recent(_LOGIN_FAILS, key)) >= LOGIN_MAX_FAILS
-    per_user = len(_recent(_LOGIN_FAILS_USER, username)) >= LOGIN_MAX_FAILS_USER
-    return per_ip or per_user
+def _rate_limit_count(db, scope, identity, window_seconds):
+    cutoff = (datetime.utcnow() - timedelta(seconds=window_seconds)).isoformat()
+    return db.execute(
+        "SELECT COUNT(*) FROM rate_limit_events WHERE scope=? AND bucket_key=? AND created_at>?",
+        (scope, _rate_bucket(identity), cutoff)
+    ).fetchone()[0]
 
-def _login_failed(key):
-    if len(_LOGIN_FAILS) > 10000:   # bound memory under abuse
-        _LOGIN_FAILS.clear()
-    if len(_LOGIN_FAILS_USER) > 10000:
-        _LOGIN_FAILS_USER.clear()
-    now_utc = datetime.utcnow()
-    _LOGIN_FAILS.setdefault(key, []).append(now_utc)
-    _LOGIN_FAILS_USER.setdefault(key[1], []).append(now_utc)
+def _rate_limit_blocked(db, scope, identity, limit, window_seconds):
+    return _rate_limit_count(db, scope, identity, window_seconds) >= limit
+
+def _rate_limit_record(db, scope, identity):
+    db.execute(
+        "INSERT INTO rate_limit_events (id,scope,bucket_key,created_at) VALUES (?,?,?,?)",
+        (str(uuid.uuid4()), scope, _rate_bucket(identity), now())
+    )
+    # Keep the table bounded. All configured windows are at most 24 hours.
+    db.execute(
+        "DELETE FROM rate_limit_events WHERE created_at<?",
+        ((datetime.utcnow() - timedelta(hours=48)).isoformat(),)
+    )
+
+def _rate_limit_reset(db, scope, identity):
+    db.execute(
+        "DELETE FROM rate_limit_events WHERE scope=? AND bucket_key=?",
+        (scope, _rate_bucket(identity))
+    )
+
+def _consume_rate_limit(db, scope, identity, limit, window_seconds):
+    """Record a public request and return False when the window is exhausted."""
+    if _rate_limit_blocked(db, scope, identity, limit, window_seconds):
+        return False
+    _rate_limit_record(db, scope, identity)
+    db.commit()
+    return True
+
+def _rate_limit_response(retry_after):
+    response = jsonify({'error': 'Too many requests. Please try again later.'})
+    response.status_code = 429
+    response.headers['Retry-After'] = str(retry_after)
+    return response
+
+def _valid_public_email(value):
+    """Small syntax check; deliverability is still determined by the mail provider."""
+    import re
+    if not value:
+        return True
+    return bool(re.fullmatch(r'[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}', value))
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -2053,22 +2377,31 @@ def login():
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
 
-    throttle_key = (_client_ip(), username.lower())
-    if _login_blocked(throttle_key):
-        log.warning(f'Login throttled: {username} from {throttle_key[0]}')
+    db = get_db()
+    normalized_username = username.lower()
+    client_ip = _client_ip()
+    ip_user_identity = f'{client_ip}\0{normalized_username}'
+    if (
+        _rate_limit_blocked(db, 'login_ip_user', ip_user_identity,
+                            LOGIN_MAX_FAILS, LOGIN_WINDOW_MIN * 60)
+        or _rate_limit_blocked(db, 'login_user', normalized_username,
+                               LOGIN_MAX_FAILS_USER, LOGIN_WINDOW_MIN * 60)
+    ):
+        log.warning(f'Login throttled: {username} from {client_ip}')
         return jsonify({'error': 'Too many failed attempts. Try again in 15 minutes.'}), 429
 
-    db = get_db()
     user = db.execute(
         "SELECT * FROM users WHERE username=? AND active=1", (username,)
     ).fetchone()
     if not user or not check_password_hash(user['password_hash'], password):
-        _login_failed(throttle_key)
+        _rate_limit_record(db, 'login_ip_user', ip_user_identity)
+        _rate_limit_record(db, 'login_user', normalized_username)
+        db.commit()
         return jsonify({'error': 'Invalid credentials'}), 401
     if not _linked_account_is_active(db, user):
         return jsonify({'error': 'Account inactive'}), 403
-    _LOGIN_FAILS.pop(throttle_key, None)       # success — reset per-IP counter
-    _LOGIN_FAILS_USER.pop(username.lower(), None)  # …and the per-username ceiling
+    _rate_limit_reset(db, 'login_ip_user', ip_user_identity)
+    _rate_limit_reset(db, 'login_user', normalized_username)
 
     # Update last login timestamp
     db.execute("UPDATE users SET last_login_at=? WHERE id=?", (now(), user['id']))
@@ -3078,20 +3411,64 @@ def delete_family(fid):
     row = db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    # Cascade delete all related data
-    request_ids = [r['id'] for r in db.execute(
-        "SELECT id FROM food_requests WHERE family_id=?", (fid,)).fetchall()]
-    for rid in request_ids:
-        db.execute("DELETE FROM food_request_events   WHERE request_id=?", (rid,))
-        db.execute("DELETE FROM food_request_items    WHERE request_id=?", (rid,))
-        db.execute("DELETE FROM order_change_requests WHERE request_id=?", (rid,))
-    db.execute("DELETE FROM food_requests   WHERE family_id=?", (fid,))
-    db.execute("DELETE FROM volunteer_slots WHERE family_id=?", (fid,))
-    db.execute("DELETE FROM receipts        WHERE family_id=?", (fid,))
-    db.execute("DELETE FROM assignments     WHERE family_id=?", (fid,))
-    db.execute("DELETE FROM users           WHERE role='family' AND linked_id=?", (fid,))
-    db.execute("DELETE FROM families        WHERE id=?", (fid,))
-    db.commit()
+
+    # Financial records are audit evidence, not disposable family children. A
+    # hard delete is blocked when any receipt is linked directly, through an
+    # assignment, or through a volunteer slot. The coordinator can deactivate
+    # the family instead without changing receipt/reimbursement history.
+    financial_records = db.execute(
+        """SELECT COUNT(DISTINCT r.id)
+           FROM receipts r
+           LEFT JOIN assignments a ON r.assignment_id=a.id
+           LEFT JOIN volunteer_slots vs ON r.slot_id=vs.id
+           WHERE r.family_id=? OR a.family_id=? OR vs.family_id=?""",
+        (fid, fid, fid)
+    ).fetchone()[0]
+    if financial_records:
+        return jsonify({
+            'error': 'This family has financial records and cannot be permanently deleted. '
+                     'Set the family to inactive instead.',
+            'financial_records': financial_records,
+        }), 409
+
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        request_ids = [r['id'] for r in db.execute(
+            "SELECT id FROM food_requests WHERE family_id=?", (fid,)
+        ).fetchall()]
+        slot_ids = [r['id'] for r in db.execute(
+            "SELECT id FROM volunteer_slots WHERE family_id=?", (fid,)
+        ).fetchall()]
+        user_ids = [r['id'] for r in db.execute(
+            "SELECT id FROM users WHERE role='family' AND linked_id=?", (fid,)
+        ).fetchall()]
+
+        for rid in request_ids:
+            db.execute("DELETE FROM food_request_events WHERE request_id=?", (rid,))
+            db.execute("DELETE FROM food_request_items WHERE request_id=?", (rid,))
+        for sid in slot_ids:
+            db.execute("DELETE FROM reminder_log WHERE slot_id=?", (sid,))
+        for uid in user_ids:
+            db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+
+        db.execute("DELETE FROM order_change_requests WHERE family_id=?", (fid,))
+        db.execute("DELETE FROM food_requests          WHERE family_id=?", (fid,))
+        db.execute("DELETE FROM volunteer_slots        WHERE family_id=?", (fid,))
+        db.execute("DELETE FROM cycle_assignments      WHERE family_id=?", (fid,))
+        db.execute("DELETE FROM assignments            WHERE family_id=?", (fid,))
+        db.execute("DELETE FROM users WHERE role='family' AND linked_id=?", (fid,))
+        db.execute("DELETE FROM families WHERE id=?", (fid,))
+        db.commit()
+    except sqlite3.IntegrityError as exc:
+        db.rollback()
+        log.warning(f'delete_family blocked by related records for {fid}: {exc}')
+        return jsonify({
+            'error': 'This family still has related records and cannot be permanently deleted. '
+                     'Set the family to inactive instead.'
+        }), 409
+    except Exception:
+        db.rollback()
+        raise
     log.info(f'delete_family: family {fid} ({row["name"]}) permanently deleted by admin')
     return jsonify({'ok': True})
 
@@ -3794,6 +4171,8 @@ def create_receipt():
             return jsonify({'error': 'Invalid amount'}), 422
     rid = str(uuid.uuid4())
     db = get_db()
+    if not _claim_registered_upload(db, file_url):
+        return jsonify({'error': 'Receipt file is already attached or unavailable'}), 422
     # Auto-match a delivery cycle from the purchase date when the caller didn't set one
     # (dashboard uploads) — keeps them out of the "Unassigned" bucket.
     cycle_id = data.get('cycle_id')
@@ -4189,13 +4568,13 @@ def delete_receipt(rid):
 def upload_receipt():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-    f = request.files['file']
-    if not f.filename or not allowed_file(f.filename):
-        return jsonify({'error': 'Invalid file type'}), 400
-    raw = f.read()
-    filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1]
-    with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as out:
-        out.write(raw)
+    db = get_db()
+    filename, raw, upload_error = _store_receipt_upload(
+        db, request.files['file'], uploader_user_id=g.user['user_id']
+    )
+    if upload_error:
+        status = 429 if 'quota' in upload_error.lower() else 422
+        return jsonify({'error': upload_error}), status
     parsed, perr = _parse_receipt_image_ex(raw, filename)  # (None, reason) unless active
     return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed,
                     'parse_error': (perr if not parsed else None)}), 201
@@ -5413,14 +5792,17 @@ def _enroll_families_in_cycle(db, cycle_id, delivery_date_start):
             (fam['family_size'] or 1, fam['family_size'] or 1)
         ).fetchone()
         bsize = bundle['bundle_size'] if bundle else 'M'
-        token = str(uuid.uuid4())
+        token = secrets.token_urlsafe(32)
+        token_expires = _confirmation_expiry_iso(delivery_date_start)
         rid = str(uuid.uuid4())
         try:
             db.execute(
                 '''INSERT INTO food_requests
-                   (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmation_token)
-                   VALUES (?,?,?,?,?,?,?)''',
-                (rid, cycle_id, fam['id'], bsize, now(), 'pending_confirmation', token)
+                   (id, cycle_id, family_id, bundle_size, submitted_at, status,
+                    confirmation_token, confirmation_expires_at)
+                   VALUES (?,?,?,?,?,?,?,?)''',
+                (rid, cycle_id, fam['id'], bsize, now(), 'pending_confirmation',
+                 token, token_expires)
             )
             # Pre-populate all food items as selected
             for item in items:
@@ -6374,60 +6756,97 @@ def volunteer_signup_page():
 
 @app.route('/api/intake', methods=['POST'])
 def public_intake():
-    data = request.json or {}
-    if not data.get('name') or not data.get('phone'):
-        return jsonify({'error': 'Name and phone are required'}), 422
-    phone = _normalize_phone(data['phone'])
-    if not phone:
-        return jsonify({'error': 'A valid phone number is required'}), 422
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid request'}), 400
     db = get_db()
+    client_ip = _client_ip()
+    if not _consume_rate_limit(db, 'public_intake_ip', client_ip, 5, 3600):
+        return _rate_limit_response(3600)
+    # Honeypot: real users never see or fill this field. Return the same success
+    # shape so basic bots cannot tune around the trap.
+    if data.get('_website'):
+        return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
+
+    name = data.get('name') if isinstance(data.get('name'), str) else ''
+    name = name.strip()
+    raw_phone = data.get('phone') if isinstance(data.get('phone'), str) else ''
+    if not name or not raw_phone:
+        return jsonify({'error': 'Name and phone are required'}), 422
+    if len(name) > 120:
+        return jsonify({'error': 'Name is too long'}), 422
+    phone = _normalize_phone(raw_phone)
+    if not 7 <= len(phone) <= 15:
+        return jsonify({'error': 'A valid phone number is required'}), 422
+    if not _consume_rate_limit(db, 'public_intake_phone', phone, 2, 86400):
+        return _rate_limit_response(86400)
+    email = data.get('email') if isinstance(data.get('email'), str) else ''
+    email = email.strip().lower()
+    if len(email) > 254 or not _valid_public_email(email):
+        return jsonify({'error': 'A valid email address is required'}), 422
+    try:
+        family_size = int(data.get('family_size')) if data.get('family_size') not in (None, '') else None
+        children_count = int(data.get('children_count')) if data.get('children_count') not in (None, '') else None
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Household counts must be whole numbers'}), 422
+    if family_size is not None and not 1 <= family_size <= 30:
+        return jsonify({'error': 'Household size must be between 1 and 30'}), 422
+    if children_count is not None and not 0 <= children_count <= 30:
+        return jsonify({'error': 'Children count must be between 0 and 30'}), 422
+    if family_size is not None and children_count is not None and children_count > family_size:
+        return jsonify({'error': 'Children count cannot exceed household size'}), 422
+    bounded_fields = {
+        'address': 300, 'city': 100, 'dietary_notes': 1000,
+        'frequency': 80, 'income_range': 80,
+    }
+    clean = {}
+    for field, max_len in bounded_fields.items():
+        value = data.get(field)
+        if value is not None and not isinstance(value, str):
+            return jsonify({'error': f'{field} must be text'}), 422
+        clean[field] = (value or '').strip()
+        if len(clean[field]) > max_len:
+            return jsonify({'error': f'{field} is too long'}), 422
+
     # Duplicate guard — block a second record for the same phone number
     existing = db.execute(
         "SELECT id, status FROM families WHERE phone=?", (phone,)
     ).fetchone()
     if existing:
-        if existing['status'] == 'inactive':
-            return jsonify({
-                'error': 'duplicate',
-                'message': 'This phone number was previously registered but is no longer active. '
-                           'Please contact your coordinator to reactivate your account.'
-            }), 409
-        return jsonify({
-            'error': 'duplicate',
-            'message': 'This phone number is already registered. '
-                       'If you cannot log in, please contact a coordinator for help.'
-        }), 409
+        # Identical response for new and existing applicants prevents public
+        # membership/status enumeration.
+        return jsonify({'ok': True, 'message': 'Thank you. We will be in touch within 48 hours.'}), 201
     fid = str(uuid.uuid4())
-    family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
+    family_code = _make_family_code(phone, family_size, db_conn=db)
     db.execute(
         '''INSERT INTO families
            (id,name,phone,email,address,city,family_size,children_count,
             dietary_notes,frequency,income_range,status,source,family_code,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (fid, data['name'], phone, data.get('email'), data.get('address'), data.get('city'),
-         data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
-         data.get('frequency'), data.get('income_range'),
+        (fid, name, phone, email or None, clean['address'], clean['city'],
+         family_size, children_count, clean['dietary_notes'],
+         clean['frequency'], clean['income_range'],
          'pending', 'intake_form', family_code, now())
     )
     db.commit()
-    log.info(f'New intake: {data["name"]} ({phone})')
+    log.info(f'New intake: {name} ({phone})')
     try:
         _notify_coordinators(db,
             f"New family intake submitted:\n"
-            f"Name: {data['name']}\n"
+            f"Name: {name}\n"
             f"Phone: {phone}\n"
-            f"City: {data.get('city') or '—'}\n"
-            f"Family size: {data.get('family_size') or '—'}\n"
+            f"City: {clean['city'] or '—'}\n"
+            f"Family size: {family_size or '—'}\n"
             f"Please log in to review and approve."
         )
     except Exception as _e:
         log.warning(f'Intake notify failed: {_e}')
     # Send confirmation email to family if email provided — async so a slow
     # SendGrid response can't freeze this UNAUTHENTICATED public handler (audit P1.6).
-    fam_email = (data.get('email') or '').strip()
+    fam_email = email
     if fam_email:
         _email_notify_async([(fam_email, 'We received your Sihha application',
-            f"Assalamu Alaikum {data['name']},\n\n"
+            f"Assalamu Alaikum {name},\n\n"
             f"Thank you for applying to the Sihha Food Program.\n\n"
             f"We have received your application and will review it within 48 hours. "
             f"Once approved, you will receive a separate email with your login credentials.\n\n"
@@ -6438,41 +6857,62 @@ def public_intake():
 
 @app.route('/api/volunteer-signup', methods=['POST'])
 def public_volunteer_signup():
-    data = request.json or {}
-    if not data.get('name') or not data.get('phone'):
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid request'}), 400
+    db = get_db()
+    client_ip = _client_ip()
+    if not _consume_rate_limit(db, 'public_volunteer_ip', client_ip, 10, 3600):
+        return _rate_limit_response(3600)
+    if data.get('_website'):
+        return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
+
+    name = data.get('name') if isinstance(data.get('name'), str) else ''
+    name = name.strip()
+    raw_phone = data.get('phone') if isinstance(data.get('phone'), str) else ''
+    if not name or not raw_phone:
         return jsonify({'error': 'Name and phone are required'}), 422
-    if not data.get('role'):
+    if len(name) > 120:
+        return jsonify({'error': 'Name is too long'}), 422
+    if not isinstance(data.get('role'), str) or not data.get('role'):
         return jsonify({'error': 'Please select a role'}), 422
     volunteer_role = _normalize_volunteer_role(data.get('role'))
     if volunteer_role not in VALID_VOLUNTEER_ROLES:
         return jsonify({'error': 'Please select a valid role'}), 422
-    phone = _normalize_phone(data['phone'])
-    if not phone:
+    phone = _normalize_phone(raw_phone)
+    if not 7 <= len(phone) <= 15:
         return jsonify({'error': 'A valid phone number is required'}), 422
-    db = get_db()
+    if not _consume_rate_limit(db, 'public_volunteer_phone', phone, 2, 86400):
+        return _rate_limit_response(86400)
+    email = data.get('email') if isinstance(data.get('email'), str) else ''
+    email = email.strip().lower()
+    if len(email) > 254 or not _valid_public_email(email):
+        return jsonify({'error': 'A valid email address is required'}), 422
+    availability = data.get('availability') if isinstance(data.get('availability'), str) else ''
+    notes = data.get('notes') if isinstance(data.get('notes'), str) else ''
+    availability = availability.strip()
+    notes = notes.strip()
+    if len(availability) > 300 or len(notes) > 1000:
+        return jsonify({'error': 'Availability or notes are too long'}), 422
     existing = db.execute("SELECT id, status FROM volunteers WHERE phone=?", (phone,)).fetchone()
     if existing:
-        return jsonify({
-            'error': 'duplicate',
-            'message': 'This phone number is already registered as a volunteer. '
-                       'Visit /portal to log in, or contact a coordinator for help.'
-        }), 409
+        return jsonify({'ok': True, 'message': 'Thank you for signing up. We will be in touch soon.'}), 201
     vid = str(uuid.uuid4())
     db.execute(
         '''INSERT INTO volunteers
            (id,name,phone,email,role,availability,notes,status,source,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
-        (vid, data['name'], phone, data.get('email'),
-         volunteer_role, data.get('availability'),
-         data.get('notes'), 'pending', 'signup_form', now())
+        (vid, name, phone, email or None,
+         volunteer_role, availability or None,
+         notes or None, 'pending', 'signup_form', now())
     )
     db.commit()
-    log.info(f'New volunteer signup: {data["name"]} ({phone})')
+    log.info(f'New volunteer signup: {name} ({phone})')
     try:
         role_label = {'shopper':'Shopper','delivery':'Delivery','both':'Shopper + Delivery','general':'General'}.get(volunteer_role, volunteer_role)
         _notify_coordinators(db,
             f"New volunteer signed up:\n"
-            f"Name: {data['name']}\n"
+            f"Name: {name}\n"
             f"Phone: {phone}\n"
             f"Role: {role_label}\n"
             f"Please log in to review and activate."
@@ -6481,10 +6921,10 @@ def public_volunteer_signup():
         log.warning(f'Volunteer signup notify failed: {_e}')
     # Send confirmation email to volunteer if email provided — async so a slow
     # SendGrid response can't freeze this UNAUTHENTICATED public handler (audit P1.6).
-    vol_email = (data.get('email') or '').strip()
+    vol_email = email
     if vol_email:
         _email_notify_async([(vol_email, 'Thank you for signing up to volunteer with Sihha',
-            f"Assalamu Alaikum {data['name']},\n\n"
+            f"Assalamu Alaikum {name},\n\n"
             f"Thank you for signing up to volunteer with the Sihha Food Program!\n\n"
             f"We have received your application and will review it shortly. "
             f"Once approved, you will receive a separate email with your login credentials "
@@ -6541,22 +6981,62 @@ def order_page():
 def confirm_page(token):
     return send_from_directory('public', 'confirm.html')
 
+def _active_confirmation_request(db, token):
+    """Resolve a single-use, unexpired legacy confirmation capability."""
+    if not isinstance(token, str) or not 20 <= len(token) <= 200:
+        return None, ('Invalid or expired link', 404)
+    req = db.execute(
+        '''SELECT fr.*, f.name as family_name, f.family_size, f.dietary_notes,
+                  f.status as family_status, dc.title as cycle_title,
+                  dc.delivery_date_start, dc.delivery_date_end,
+                  dc.request_close_at, dc.status as cycle_status
+           FROM food_requests fr
+           JOIN families f ON fr.family_id=f.id
+           JOIN delivery_cycles dc ON fr.cycle_id=dc.id
+           WHERE fr.confirmation_token=?''',
+        (token,)
+    ).fetchone()
+    if not req:
+        return None, ('Invalid or expired link', 404)
+    if req['status'] != 'pending_confirmation' or req['family_status'] != 'active':
+        return None, ('This confirmation link has already been used or is no longer active.', 410)
+    try:
+        expires_at = datetime.fromisoformat(req['confirmation_expires_at'])
+    except (TypeError, ValueError):
+        return None, ('This confirmation link has expired.', 410)
+    if expires_at <= datetime.utcnow():
+        return None, ('This confirmation link has expired.', 410)
+    if req['cycle_status'] not in ('upcoming', 'open'):
+        return None, ('Confirmation is closed for this delivery.', 410)
+    try:
+        from datetime import date as _date
+        if (_date.fromisoformat(req['delivery_date_start']) - _today_central()).days < 1:
+            return None, ('Confirmation is closed for this delivery.', 410)
+    except (TypeError, ValueError):
+        log.error(f'Confirmation request {req["id"]} has an invalid delivery date')
+        return None, ('Confirmation is unavailable. Please contact a coordinator.', 410)
+    if req['request_close_at']:
+        try:
+            from zoneinfo import ZoneInfo
+            close_at = datetime.fromisoformat(str(req['request_close_at']).replace('Z', '+00:00'))
+            now_for_close = (datetime.now(close_at.tzinfo) if close_at.tzinfo
+                             else datetime.now(ZoneInfo('America/Chicago')).replace(tzinfo=None))
+            if now_for_close > close_at:
+                return None, ('Confirmation is closed for this delivery.', 410)
+        except (TypeError, ValueError):
+            log.error(f'Confirmation request {req["id"]} has an invalid request_close_at')
+            return None, ('Confirmation is unavailable. Please contact a coordinator.', 410)
+    return req, None
+
 @app.route('/api/family/confirm/<token>', methods=['GET'])
 def get_family_confirmation(token):
     """Public — family views their pre-populated bundle via confirmation token."""
     db = get_db()
-    req = db.execute(
-        '''SELECT fr.*, f.name as family_name, f.family_size, f.dietary_notes,
-                  dc.title as cycle_title, dc.delivery_date_start, dc.delivery_date_end
-           FROM food_requests fr
-           JOIN families f  ON fr.family_id  = f.id
-           JOIN delivery_cycles dc ON fr.cycle_id = dc.id
-           WHERE fr.confirmation_token = ?''',
-        (token,)
-    ).fetchone()
-    if not req:
-        return jsonify({'error': 'Invalid or expired link'}), 404
-    req = dict(req)
+    if not _consume_rate_limit(db, 'confirmation_ip', _client_ip(), 60, 3600):
+        return _rate_limit_response(3600)
+    req, confirmation_error = _active_confirmation_request(db, token)
+    if confirmation_error:
+        return jsonify({'error': confirmation_error[0]}), confirmation_error[1]
 
     # Get all active food items with bundle quantities and current selection
     items = db.execute(
@@ -6573,28 +7053,49 @@ def get_family_confirmation(token):
         (req['bundle_size'], req['id'])
     ).fetchall()
 
-    req['items'] = [dict(i) for i in items]
-    return jsonify(req)
+    return jsonify({
+        'family_name': req['family_name'],
+        'cycle_title': req['cycle_title'],
+        'delivery_date_start': req['delivery_date_start'],
+        'delivery_date_end': req['delivery_date_end'],
+        'bundle_size': req['bundle_size'],
+        'notes': req['notes'],
+        'dietary_notes': req['dietary_notes'],
+        'items': [dict(i) for i in items],
+    })
 
 @app.route('/api/family/confirm/<token>', methods=['POST'])
 def submit_family_confirmation(token):
     """Public — family confirms, modifies, or skips their bundle."""
     db  = get_db()
-    req = db.execute(
-        "SELECT * FROM food_requests WHERE confirmation_token=?", (token,)
-    ).fetchone()
-    if not req:
-        return jsonify({'error': 'Invalid or expired link'}), 404
-    if req['status'] in ('skipped',):
-        return jsonify({'error': 'This order has already been processed'}), 400
-
-    data   = request.json or {}
+    if not _consume_rate_limit(db, 'confirmation_ip', _client_ip(), 60, 3600):
+        return _rate_limit_response(3600)
+    data   = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid request'}), 400
     action = data.get('action', 'confirm')  # confirm | skip
+    if action not in ('confirm', 'skip'):
+        return jsonify({'error': 'action must be confirm or skip'}), 422
+    notes = data.get('notes')
+    if notes is not None and not isinstance(notes, str):
+        return jsonify({'error': 'notes must be text'}), 422
+    notes = (notes or '').strip()
+    if len(notes) > 1000:
+        return jsonify({'error': 'notes must be 1000 characters or fewer'}), 422
+
+    # Serialize token consumption across workers. The second concurrent submit
+    # waits, then observes the token cleared by the first transaction.
+    db.execute('BEGIN IMMEDIATE')
+    req, confirmation_error = _active_confirmation_request(db, token)
+    if confirmation_error:
+        db.rollback()
+        return jsonify({'error': confirmation_error[0]}), confirmation_error[1]
 
     if action == 'skip':
         db.execute(
-            "UPDATE food_requests SET status='skipped', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
-            (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
+            "UPDATE food_requests SET status='skipped', confirmed_at=?, notes=?, updated_at=?, "
+            "confirmation_token=NULL, confirmation_expires_at=NULL WHERE id=?",
+            (now(), notes, now(), req['id'])
         )
         _log_order_event(db, req['id'], 'auto_skipped', actor='family')
         db.commit()
@@ -6611,7 +7112,14 @@ def submit_family_confirmation(token):
             prev_items[_pi['name']] = _pi['selected']
 
     # Save item selections
-    selected_ids = set(data.get('selected_items', []))
+    selection, selection_error = _validate_order_selection(
+        db, data.get('selected_items'), {}, {}, req['bundle_size'],
+        enforce_budget=False
+    )
+    if selection_error:
+        db.rollback()
+        return jsonify({'error': selection_error}), 422
+    selected_ids = selection['selected_ids']
     all_items = db.execute("SELECT id, name FROM food_items WHERE is_active=1").fetchall()
     for item in all_items:
         is_selected = 1 if item['id'] in selected_ids else 0
@@ -6623,8 +7131,9 @@ def submit_family_confirmation(token):
         )
 
     db.execute(
-        "UPDATE food_requests SET status='confirmed', confirmed_at=?, notes=?, updated_at=? WHERE id=?",
-        (now(), data.get('notes', ''), now(), req['id'])  # type: ignore
+        "UPDATE food_requests SET status='confirmed', confirmed_at=?, notes=?, updated_at=?, "
+        "confirmation_token=NULL, confirmation_expires_at=NULL WHERE id=?",
+        (now(), notes, now(), req['id'])
     )
 
     # Log event — items_edited if re-confirming, confirmed if first time
@@ -6643,7 +7152,7 @@ def submit_family_confirmation(token):
     cycle_row  = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (req['cycle_id'],)).fetchone()
     family_row = db.execute("SELECT * FROM families WHERE id=?", (req['family_id'],)).fetchone()
     claimed_slots_conf = db.execute(
-        '''SELECT vs.id, vs.task_type, v.name as vol_name, v.phone as vol_phone,
+        '''SELECT vs.id, vs.task_type, vs.claimed_by, v.name as vol_name, v.phone as vol_phone,
                   f.address, f.city, f.name as family_name
            FROM volunteer_slots vs
            JOIN volunteers v ON vs.claimed_by = v.id
@@ -6764,6 +7273,118 @@ def handle_unhandled_exception(e):
         return e  # 404, 405, etc. keep their proper status codes
     log.exception(f'Unhandled exception: {e}')
     return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(413)
+def handle_request_too_large(_error):
+    return jsonify({
+        'error': f'Request is too large. Maximum size is '
+                 f'{app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)} MB.'
+    }), 413
+
+def _cycle_order_window_error(cycle):
+    """Return a user-facing error when a cycle cannot safely accept an order."""
+    if not cycle or cycle['status'] != 'open':
+        return 'This delivery is not currently accepting orders.'
+    try:
+        from datetime import date as _date
+        delivery_date = _date.fromisoformat(str(cycle['delivery_date_start']))
+    except (TypeError, ValueError):
+        log.error(f'Cycle {cycle["id"] if cycle else "?"} has an invalid delivery_date_start')
+        return 'This delivery is misconfigured. Please contact a coordinator.'
+    if (delivery_date - _today_central()).days < 1:
+        return 'Orders are closed for this delivery.'
+
+    # request_open/close are stored as Central-time wall-clock values. Empty
+    # legacy values are allowed, but malformed non-empty values fail closed.
+    try:
+        from zoneinfo import ZoneInfo
+        now_local = datetime.now(ZoneInfo('America/Chicago')).replace(tzinfo=None)
+    except Exception:
+        now_local = datetime.utcnow()
+    for field, is_open in (('request_open_at', True), ('request_close_at', False)):
+        value = cycle[field] if field in cycle.keys() else None
+        if not value:
+            continue
+        try:
+            boundary = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        except (TypeError, ValueError):
+            log.error(f'Cycle {cycle["id"]} has invalid {field}={value!r}')
+            return 'This delivery is misconfigured. Please contact a coordinator.'
+        compare_now = datetime.now(boundary.tzinfo) if boundary.tzinfo else now_local
+        if is_open and compare_now < boundary:
+            return 'Ordering has not opened for this delivery yet.'
+        if not is_open and compare_now > boundary:
+            return 'Orders are closed for this delivery.'
+    return None
+
+def _validate_order_selection(db, raw_selected, raw_quantities, raw_custom_values,
+                              bundle_size, enforce_budget=True):
+    """Validate and normalize family-controlled item, quantity and free-text data."""
+    if not isinstance(raw_selected, list) or len(raw_selected) > 100:
+        return None, 'selected_items must be a list of valid item IDs.'
+    if not all(isinstance(item_id, str) and 1 <= len(item_id) <= 100
+               for item_id in raw_selected):
+        return None, 'selected_items contains an invalid item ID.'
+    if raw_quantities is None:
+        raw_quantities = {}
+    if raw_custom_values is None:
+        raw_custom_values = {}
+    if not isinstance(raw_quantities, dict) or len(raw_quantities) > 100:
+        return None, 'item_quantities must be an object.'
+    if not isinstance(raw_custom_values, dict) or len(raw_custom_values) > 100:
+        return None, 'item_custom_values must be an object.'
+
+    selected_ids = set(raw_selected)
+    rows = db.execute(
+        "SELECT id, COALESCE(price,0) price, COALESCE(allow_qty,0) allow_qty, "
+        "COALESCE(is_free_text,0) is_free_text FROM food_items WHERE is_active=1"
+    ).fetchall()
+    active = {row['id']: row for row in rows}
+    unknown = selected_ids - set(active)
+    if unknown:
+        return None, 'One or more selected items are unavailable.'
+
+    quantities = {}
+    custom_values = {}
+    total_cost = 0.0
+    for item_id in selected_ids:
+        item = active[item_id]
+        raw_qty = raw_quantities.get(item_id, 1)
+        try:
+            if isinstance(raw_qty, bool):
+                raise ValueError
+            qty = int(raw_qty)
+        except (TypeError, ValueError):
+            return None, 'Item quantities must be whole numbers.'
+        if not item['allow_qty']:
+            qty = 1
+        if not 1 <= qty <= 20:
+            return None, 'Item quantities must be between 1 and 20.'
+        quantities[item_id] = qty
+        total_cost += float(item['price'] or 0) * qty
+
+        raw_custom = raw_custom_values.get(item_id, '')
+        if raw_custom is not None and not isinstance(raw_custom, str):
+            return None, 'Custom item values must be text.'
+        custom = (raw_custom or '').strip()
+        if len(custom) > 120:
+            return None, 'Custom item values must be 120 characters or fewer.'
+        if custom and not item['is_free_text']:
+            return None, 'A custom value was supplied for an item that does not accept one.'
+        custom_values[item_id] = custom or None
+
+    budget_row = db.execute(
+        "SELECT COALESCE(budget,0) budget FROM bundle_size_rules WHERE bundle_size=?",
+        (bundle_size,)
+    ).fetchone()
+    budget = float(budget_row['budget']) if budget_row else 0.0
+    if enforce_budget and budget > 0 and total_cost > budget:
+        return None, 'Your selection exceeds your bundle limit. Please remove some items.'
+    return {
+        'selected_ids': selected_ids,
+        'quantities': quantities,
+        'custom_values': custom_values,
+    }, None
 
 @app.route('/api/food-order/check', methods=['GET'])
 def check_food_order_eligibility():
@@ -7086,26 +7707,34 @@ def check_food_order_eligibility():
 @require_family_auth()
 def submit_food_order():
     """Place a food order for a family. Accepts optional notes field."""
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid request'}), 400
     # selected_items can be [] (family deselects all) — check key presence, not truthiness
     if not data.get('family_id') or not data.get('cycle_id') or 'selected_items' not in data:
         return jsonify({'error': 'family_id, cycle_id, and selected_items required'}), 422
+    if (not isinstance(data['family_id'], str) or len(data['family_id']) > 100
+            or not isinstance(data['cycle_id'], str) or len(data['cycle_id']) > 100):
+        return jsonify({'error': 'family_id and cycle_id must be valid IDs'}), 422
     if str(data['family_id']) != str(g.fam['family_id']):
         return jsonify({'error': 'Forbidden'}), 403
 
     db = get_db()
 
-    # Validate cycle is open
+    # Validate the cycle status, delivery date and configured order window.
     cycle = db.execute(
-        "SELECT * FROM delivery_cycles WHERE id=? AND status='open'", (data['cycle_id'],)
+        "SELECT * FROM delivery_cycles WHERE id=?", (data['cycle_id'],)
     ).fetchone()
-    if not cycle:
-        return jsonify({'error': 'This delivery is not currently accepting orders.'}), 409
+    cycle_error = _cycle_order_window_error(cycle)
+    if cycle_error:
+        return jsonify({'error': cycle_error}), 409
 
     # Validate family
     family = db.execute("SELECT * FROM families WHERE id=?", (data['family_id'],)).fetchone()
     if not family:
         return jsonify({'error': 'Family not found.'}), 404
+    if family['status'] != 'active':
+        return jsonify({'error': 'This family account is not active.'}), 403
 
     # Enforce one order per family per cycle
     if db.execute("SELECT id FROM food_requests WHERE cycle_id=? AND family_id=?",
@@ -7121,11 +7750,28 @@ def submit_food_order():
         ).fetchone()
         bundle_size = size['bundle_size'] if size else 'M'
 
+    notes_value = data.get('notes')
+    if notes_value is not None and not isinstance(notes_value, str):
+        return jsonify({'error': 'notes must be text'}), 422
+    family_notes = (notes_value or '').strip()
+    if len(family_notes) > 1000:
+        return jsonify({'error': 'notes must be 1000 characters or fewer'}), 422
+
+    selection, selection_error = _validate_order_selection(
+        db, data.get('selected_items'), data.get('item_quantities'),
+        data.get('item_custom_values'), bundle_size
+    )
+    if selection_error:
+        return jsonify({'error': selection_error}), 422
+    selected_ids = selection['selected_ids']
+    item_quantities = selection['quantities']
+    item_custom_vals = selection['custom_values']
+
     ts  = now()
     rid = str(uuid.uuid4())
-    family_notes = (data.get('notes') or '').strip()
 
-    # Insert food request — try with family_notes, fallback for older schema
+    # Insert food request. bootstrap_db guarantees family_notes exists; a UNIQUE
+    # race is translated into the same controlled duplicate response.
     try:
         db.execute(
             '''INSERT INTO food_requests
@@ -7133,56 +7779,20 @@ def submit_food_order():
                VALUES (?,?,?,?,?,?,?,?)''',
             (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts, family_notes or None)
         )
-    except Exception:
-        db.execute(
-            '''INSERT INTO food_requests
-               (id, cycle_id, family_id, bundle_size, submitted_at, status, confirmed_at)
-               VALUES (?,?,?,?,?,?,?)''',
-            (rid, data['cycle_id'], data['family_id'], bundle_size, ts, 'confirmed', ts)
-        )
-
-    # Budget validation (server-side safety net)
-    # item_quantities: {item_id: qty} — provided when families use qty steppers
-    item_quantities  = data.get('item_quantities', {})   # {item_id: int}
-    item_custom_vals = data.get('item_custom_values', {}) # {item_id: str} — free-text items
-    selected_ids = set(data.get('selected_items', []))
-    if selected_ids:
-        budget_row = db.execute(
-            "SELECT COALESCE(budget, 0) as budget FROM bundle_size_rules WHERE bundle_size=?",
-            (bundle_size,)
-        ).fetchone()
-        bundle_budget = float(budget_row['budget']) if budget_row else 0.0
-        if bundle_budget > 0:
-            price_rows = db.execute(
-                "SELECT id, COALESCE(price, 0) as price FROM food_items WHERE id IN ({})".format(
-                    ','.join('?' * len(selected_ids))
-                ), list(selected_ids)
-            ).fetchall()
-            total_cost = sum(
-                float(r['price']) * max(1, int(item_quantities.get(r['id'], 1) or 1))
-                for r in price_rows
-            )
-            if total_cost > bundle_budget:
-                return jsonify({'error': 'Your selection exceeds your bundle limit. Please remove some items.'}), 422
-
-        # No group constraint — families can select any items within their budget
+    except sqlite3.IntegrityError:
+        db.rollback()
+        return jsonify({'error': 'You have already placed an order for this delivery.'}), 409
 
     # Save item selections with quantities and custom values
     all_items = db.execute("SELECT id FROM food_items WHERE is_active=1").fetchall()
     for item in all_items:
         is_selected  = 1 if item['id'] in selected_ids else 0
-        qty          = max(1, int(item_quantities.get(item['id'], 1) or 1)) if is_selected else 1
-        custom_val   = (item_custom_vals.get(item['id']) or '').strip() if is_selected else None
-        try:
-            db.execute(
-                "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity, custom_value) VALUES (?,?,?,?,?,?)",
-                (str(uuid.uuid4()), rid, item['id'], is_selected, qty, custom_val or None)
-            )
-        except Exception:
-            db.execute(
-                "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity) VALUES (?,?,?,?,?)",
-                (str(uuid.uuid4()), rid, item['id'], is_selected, qty)
-            )
+        qty          = item_quantities.get(item['id'], 1) if is_selected else 1
+        custom_val   = item_custom_vals.get(item['id']) if is_selected else None
+        db.execute(
+            "INSERT INTO food_request_items (id, request_id, food_item_id, selected, quantity, custom_value) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), rid, item['id'], is_selected, qty, custom_val)
+        )
 
     # Ensure slots exist (safety net — should already be pre-created)
     slots_created = _ensure_volunteer_slots(db, data['cycle_id'], data['family_id'])
@@ -7280,12 +7890,18 @@ def submit_food_order():
 @require_family_auth()
 def cancel_food_order():
     """Family cancels their confirmed order — allowed up to 24 hours before delivery (Central time)."""
+    family_id = request_id = None
     try:
-        data      = request.json or {}
+        data      = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Invalid request'}), 400
         family_id = data.get('family_id')
         request_id = data.get('request_id')
         if not family_id or not request_id:
             return jsonify({'error': 'family_id and request_id required'}), 422
+        if (not isinstance(family_id, str) or len(family_id) > 100
+                or not isinstance(request_id, str) or len(request_id) > 100):
+            return jsonify({'error': 'family_id and request_id must be valid IDs'}), 422
         if str(family_id) != str(g.fam['family_id']):
             return jsonify({'error': 'Forbidden'}), 403
 
@@ -7309,8 +7925,11 @@ def cancel_food_order():
             from datetime import date as _date
             delivery_dt = _date.fromisoformat(req['delivery_date_start'])
             days_until  = (delivery_dt - _today_central()).days
-        except Exception:
-            days_until = 99  # unknown date — allow cancellation
+        except (TypeError, ValueError):
+            log.error(f'cancel_food_order: invalid delivery date on cycle {req["cycle_id"]}')
+            return jsonify({
+                'error': 'This delivery is misconfigured. Please contact a coordinator before cancelling.'
+            }), 409
         if days_until < 1:
             return jsonify({'error': 'Orders can only be cancelled at least 1 day before delivery'}), 409
 
@@ -7386,14 +8005,24 @@ def submit_family_change_request():
     One pending request per order at a time. Cycle must be open/upcoming, not shopping, within 30 days."""
     import json as _json
     try:
-        data       = request.json or {}
+        data       = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Invalid request'}), 400
         family_id  = data.get('family_id')
         request_id = data.get('request_id')
-        family_notes = (data.get('family_notes') or '').strip()
-        selected_item_ids = data.get('selected_item_ids') or []
+        raw_notes = data.get('family_notes')
+        if raw_notes is not None and not isinstance(raw_notes, str):
+            return jsonify({'error': 'family_notes must be text'}), 422
+        family_notes = (raw_notes or '').strip()
+        if len(family_notes) > 1000:
+            return jsonify({'error': 'family_notes must be 1000 characters or fewer'}), 422
+        selected_item_ids = data.get('selected_item_ids')
 
         if not family_id or not request_id:
             return jsonify({'error': 'family_id and request_id required'}), 422
+        if (not isinstance(family_id, str) or len(family_id) > 100
+                or not isinstance(request_id, str) or len(request_id) > 100):
+            return jsonify({'error': 'family_id and request_id must be valid IDs'}), 422
         if str(family_id) != str(g.fam['family_id']):
             return jsonify({'error': 'Forbidden'}), 403
 
@@ -7420,8 +8049,11 @@ def submit_family_change_request():
         try:
             from datetime import date as _d
             days_until = (_d.fromisoformat(req['delivery_date_start']) - _today_central()).days
-        except Exception:
-            days_until = 99
+        except (TypeError, ValueError):
+            log.error(f'submit_family_change_request: invalid delivery date on cycle {req["cycle_id"]}')
+            return jsonify({
+                'error': 'This delivery is misconfigured. Please contact a coordinator.'
+            }), 409
         if days_until > 30:
             return jsonify({'error': 'Change requests can only be submitted within 30 days of delivery'}), 409
         if days_until < 1:
@@ -7434,6 +8066,13 @@ def submit_family_change_request():
         ).fetchone()
         if existing:
             return jsonify({'error': 'You already have a pending change request for this order'}), 409
+
+        selection, selection_error = _validate_order_selection(
+            db, selected_item_ids, {}, {}, req['bundle_size']
+        )
+        if selection_error:
+            return jsonify({'error': selection_error}), 422
+        selected_item_ids = sorted(selection['selected_ids'])
 
         # Build payload — item selections
         payload = _json.dumps({'selected_item_ids': selected_item_ids})
@@ -7619,7 +8258,7 @@ def approve_change_request(cr_id):
         items_before = _item_names_for_request(cr['request_id']) if cr['request_id'] else []
 
         # Apply item changes to the order
-        if selected_ids and cr['request_id']:
+        if cr['request_id']:
             all_items = db.execute(
                 "SELECT food_item_id FROM food_request_items WHERE request_id=?",
                 (cr['request_id'],)
@@ -7857,12 +8496,16 @@ def edit_food_order_items():
     Cycle must still be open or upcoming (not shopping/delivered).
     Cancel is final — cancelled orders cannot be edited."""
     import json as _json
-    data       = request.json or {}
+    data       = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid request'}), 400
     request_id = data.get('request_id')
-    selected_ids = set(data.get('selected_item_ids') or [])
+    raw_selected = data.get('selected_item_ids')
 
     if not request_id:
         return jsonify({'error': 'request_id required'}), 422
+    if not isinstance(request_id, str) or len(request_id) > 100:
+        return jsonify({'error': 'request_id must be a valid ID'}), 422
 
     db = get_db()
     family_id = g.fam['family_id']
@@ -7889,27 +8532,48 @@ def edit_food_order_items():
         from datetime import date as _date
         delivery_dt = _date.fromisoformat(req['delivery_date_start'])
         days_until  = (delivery_dt - _today_central()).days
-    except Exception:
-        days_until = 99
+    except (TypeError, ValueError):
+        log.error(f'edit_food_order_items: invalid delivery date on cycle {req["cycle_id"]}')
+        return jsonify({
+            'error': 'This delivery is misconfigured. Please contact a coordinator.'
+        }), 409
     if days_until < 2:
         return jsonify({'error': 'Item editing closes 48 hours before delivery'}), 409
 
     # Capture previous selections for diff (item names, not IDs)
     prev_rows = db.execute(
-        "SELECT fi.id, fi.name, fri.selected FROM food_request_items fri JOIN food_items fi ON fri.food_item_id=fi.id WHERE fri.request_id=?",
+        "SELECT fi.id, fi.name, fri.selected, COALESCE(fri.quantity,1) quantity, "
+        "fri.custom_value FROM food_request_items fri JOIN food_items fi ON fri.food_item_id=fi.id "
+        "WHERE fri.request_id=?",
         (request_id,)
     ).fetchall()
     prev_by_id = {r['id']: (r['name'], r['selected']) for r in prev_rows}
+
+    selection, selection_error = _validate_order_selection(
+        db, raw_selected,
+        {r['id']: r['quantity'] for r in prev_rows},
+        {r['id']: r['custom_value'] for r in prev_rows},
+        req['bundle_size']
+    )
+    if selection_error:
+        return jsonify({'error': selection_error}), 422
+    selected_ids = selection['selected_ids']
 
     # Get all active items to upsert
     all_items = db.execute("SELECT id, name FROM food_items WHERE is_active=1").fetchall()
     for item in all_items:
         is_sel = 1 if item['id'] in selected_ids else 0
         db.execute(
-            '''INSERT INTO food_request_items (id, request_id, food_item_id, selected)
-               VALUES (?,?,?,?)
-               ON CONFLICT(request_id, food_item_id) DO UPDATE SET selected=?''',
-            (str(uuid.uuid4()), request_id, item['id'], is_sel, is_sel)
+            '''INSERT INTO food_request_items
+               (id, request_id, food_item_id, selected, quantity, custom_value)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(request_id, food_item_id) DO UPDATE SET
+                   selected=excluded.selected,
+                   quantity=excluded.quantity,
+                   custom_value=excluded.custom_value''',
+            (str(uuid.uuid4()), request_id, item['id'], is_sel,
+             selection['quantities'].get(item['id'], 1),
+             selection['custom_values'].get(item['id']))
         )
 
     try:
@@ -8203,13 +8867,13 @@ def portal_upload_receipt_file():
     pre-fill — the volunteer still confirms and a treasurer/admin still approves."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-    f = request.files['file']
-    if not f.filename or not allowed_file(f.filename):
-        return jsonify({'error': 'Invalid file type. Use JPG, PNG, PDF, or HEIC.'}), 400
-    raw = f.read()
-    filename = str(uuid.uuid4()) + '.' + secure_filename(f.filename).rsplit('.', 1)[-1].lower()
-    with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as out:
-        out.write(raw)
+    db = get_db()
+    filename, raw, upload_error = _store_receipt_upload(
+        db, request.files['file'], volunteer_id=g.pv['volunteer_id']
+    )
+    if upload_error:
+        status = 429 if 'quota' in upload_error.lower() else 422
+        return jsonify({'error': upload_error}), status
     parsed, perr = _parse_receipt_image_ex(raw, filename)  # (None, reason) unless active
     return jsonify({'file_url': f'/uploads/{filename}', 'parsed': parsed,
                     'parse_error': (perr if not parsed else None)}), 201
@@ -8244,6 +8908,8 @@ def portal_submit_receipt():
     furl   = _normalize_upload_url(data.get('file_url'))
     if data.get('file_url') and not furl:
         return jsonify({'error': 'Invalid receipt file URL'}), 422
+    if furl and not _claim_registered_upload(db, furl, volunteer_id=vol_id):
+        return jsonify({'error': 'Receipt file is already attached or does not belong to you'}), 422
     fid    = slot['family_id'] if slot_id and slot else None
 
     # Check for existing receipt for this slot — update instead of reject

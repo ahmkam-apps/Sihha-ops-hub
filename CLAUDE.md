@@ -11,6 +11,8 @@
 > **2026-07-10:** All three portals (family/volunteer/intake) are now complete installable **PWAs** — fixed `family.html` (added the missing `<link rel="manifest" href="/manifest-family.json">` + `serviceWorker.register('/sw.js')`) and corrected `manifest-family.json` `start_url` `/order`→`/family`; live on prod (commits `aee43fb`, `af29e1e`). New deploy helper **`deploy-sihha.command`** in the parent `RAILWAY_Sihha-Ops-Hub/` folder — double-click to commit + push (staging-first via `git push origin HEAD:staging`, or straight to prod). Still open: Wix-site buttons + donate-stats widget embed on Wix; Phase 4D bank/Stripe reconciliation.
 >
 > **2026-07-11 — full code audit + P0 remediation.** Report: `../AUDIT_2026-07-11.md` (P0 done; P1/P2 backlog remains). P0 fixes applied this session: (1) **NameError bug** in `edit_food_order_items` — `family['id']`→`family_id` (families got a 500 on every item edit; edit saved but shopper emails never sent); (2) **IDOR closed** — 18 staff read endpoints (families/<id>, histories, volunteers, orders, delivery-cycles, dashboard/stats, reports, volunteer-slots, food catalog GETs) upgraded from bare `@require_auth()` to `roles=['admin','finance','treasurer','viewer']`; `/api/auth/change-password` deliberately left role-open (family/volunteer need it); (3) **stored XSS fixed** in `public/confirm.html` — added inline `esc`/`escJs`, all server values escaped; (4) **dependency CVEs cleared** — flask 3.1.3, werkzeug 3.1.6, flask-cors 6.0.0, gunicorn 23.0.0 (pip-audit clean). Tests: **159 pass** (2 new regression tests: `test_edit_order_items`, `test_family_session_cannot_read_staff_endpoints`). Next up from the audit (P1): ProxyFix for the XFF login throttle, async request-path email, Wix sync early-exit + `donations.reference_id` index, `misfire_grace_time=3600`, partial-unique index on active volunteer_slots.
+>
+> **2026-08-06 — portal/security hardening.** Unified session/domain enforcement and upload ownership shipped in `94cbfbf`. The following batch adds DB-backed readiness and login/public-form throttles, transactional family deletion that preserves financial records, fail-closed family-order validation, expiring single-use legacy confirmation tokens, verified/quota-controlled uploads with orphan cleanup, and 11 focused regressions. Tests: **208 passed, 1 intentional live-smoke skip**. Paid/reimbursement state-machine changes remain explicitly deferred.
 
 ---
 
@@ -28,7 +30,7 @@
 
 ### Tech stack
 - **Backend:** Python 3, Flask 3.0.3, Flask-CORS 4.0.1
-- **Database:** SQLite with WAL mode, stored at `data/sihaa.db` (Railway Volume mounted at `/data`)
+- **Database:** SQLite with WAL mode; production uses `DB_PATH=/app/data/sihaa.db` on a Railway Volume
 - **Server:** gunicorn 22.0.0, 2 workers, port from `$PORT` env var
 - **Notifications:** SendGrid email — sole notification channel (`_email_send(to, subject, body)`); Twilio/WhatsApp fully removed
 - **Scheduler:** APScheduler 3.10.4 (background, runs inside each gunicorn worker)
@@ -54,6 +56,13 @@
 | `WIX_API_KEY` | Wix eCommerce API key for donation sync |
 | `WIX_SITE_ID` | Default: `038c9d97-1ce8-4495-982b-37591dce50ee` |
 | `APP_URL` | Base URL for confirmation links, default: `https://sihha-ops-hub-production.up.railway.app` |
+| `REQUIRE_EXISTING_DB` | Set to `1` on production only; startup fails instead of creating an empty DB when the volume is missing |
+| `MAX_UPLOAD_BYTES` | Per-file validated upload limit; default 12 MB |
+| `MAX_IMAGE_PIXELS` | Decoded image pixel ceiling; default 40 million |
+| `UPLOAD_FILES_PER_DAY` | Volunteer upload count quota per 24 hours; default 20 |
+| `UPLOAD_BYTES_PER_DAY` | Volunteer upload byte quota per 24 hours; default 64 MB |
+| `UPLOAD_TOTAL_BYTES` | Upload-storage safety ceiling; default 2 GB |
+| `CONFIRMATION_TOKEN_HOURS` | Maximum legacy confirmation-token lifetime; default 168 hours |
 
 ---
 
@@ -322,6 +331,7 @@ Seeded with S(1-2), M(3-5), L(6+) if table is empty.
 | `notes` | TEXT | CREATE TABLE (original) |
 | UNIQUE(cycle_id, family_id) | constraint | CREATE TABLE (original) |
 | `confirmation_token` | TEXT | **ALTER TABLE migration** (Phase 5) |
+| `confirmation_expires_at` | TEXT | **ALTER TABLE migration** (2026-08 hardening); pending legacy rows receive a one-time 24-hour grace period |
 | `confirmed_at` | TEXT | **ALTER TABLE migration** (Phase 5) |
 | `confirmation_sent_at` | TEXT | **ALTER TABLE migration** (Phase 5) |
 | `updated_at` | TEXT | **ALTER TABLE migration** (safety-net batch in `init_db()`, 2026-04-29) |
@@ -522,6 +532,14 @@ One active pending CR per order at a time (enforced server-side). Change request
 
 No migrations.
 
+### Table: `rate_limit_events` (2026-08 hardening)
+
+Persistent, cross-worker throttle events. `bucket_key` stores a SHA-256 digest rather than raw usernames, phone numbers, or IP addresses. Indexed by `(scope, bucket_key, created_at)` and purged after 48 hours.
+
+### Table: `uploaded_files` (2026-08 hardening)
+
+Registry of new receipt uploads: filename, uploader user/volunteer identity, size, creation time, and claim time. It enforces per-uploader quotas, one-receipt claims, and cleanup of registered files older than 24 hours that no receipt references.
+
 ---
 
 ## 3. Migration Inventory
@@ -542,12 +560,12 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | 10 | Phase 6: `pending_bundle_size` | ALTER TABLE | `families` | `pending_bundle_size TEXT` (duplicate of #4, harmless) |
 | 11 | Phase 6: phone normalisation | DATA migration | `families`, `volunteers` | Strips hyphens/spaces from all existing phone numbers |
 | 12 | Phase 5: family WA credentials | ALTER TABLE | `families` | `wa_phone TEXT`, `wa_apikey TEXT` (duplicate of #4, harmless) |
-| 13 | Phase 5: food_request confirmation fields | ALTER TABLE | `food_requests` | `confirmation_token TEXT`, `confirmed_at TEXT`, `confirmation_sent_at TEXT` |
+| 13 | Phase 5: food_request confirmation fields | ALTER TABLE | `food_requests` | `confirmation_token TEXT`, `confirmation_expires_at TEXT`, `confirmed_at TEXT`, `confirmation_sent_at TEXT` |
 | 14 | Phase 5: delivery_cycles `upcoming` | TABLE RECREATION | `delivery_cycles` | Expands status CHECK to include `upcoming`, sets DEFAULT `''` on request_open/close_at |
 | 15 | Phase 5: food_requests confirmation statuses | TABLE RECREATION | `food_requests` | Expands status CHECK to include `pending_confirmation`, `confirmed`, `skipped`, `auto_confirmed` |
 | 16 | Phase 3C CREATE (idempotent) | CREATE TABLE IF NOT EXISTS | `volunteer_slots`, `volunteer_task_types`, `portal_sessions`, `reminder_log` | New tables |
 | 17 | Phase 3C: remove UNIQUE+CHECK on slots | TABLE RECREATION | `volunteer_slots` | Removes UNIQUE(cycle_id,family_id,task_type) and CHECK(task_type IN...) |
-| 18 | 2026-04-29 safety-net batch | ALTER TABLE | `food_requests` | `confirmation_token TEXT`, `confirmed_at TEXT`, `confirmation_sent_at TEXT`, `updated_at TEXT` (idempotent, all in try/except) |
+| 18 | 2026-04-29 safety-net batch | ALTER TABLE | `food_requests` | `confirmation_token TEXT`, `confirmation_expires_at TEXT`, `confirmed_at TEXT`, `confirmation_sent_at TEXT`, `updated_at TEXT` (idempotent, all in try/except) |
 | 19 | 2026-04-29 order audit trail | CREATE TABLE IF NOT EXISTS + backfill | `food_request_events` | New table + one-time backfill of existing orders |
 | 20 | 2026-05 priced bundle selection | ALTER TABLE | `food_items` | `price REAL DEFAULT 0`, `allow_qty INTEGER DEFAULT 0` |
 | 21 | 2026-05 priced bundle selection | ALTER TABLE | `bundle_size_rules` | `budget REAL DEFAULT 0` |
@@ -556,6 +574,8 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | 24 | 2026-05 users role CHECK | TABLE RECREATION | `users` | Regex-patches CHECK to include all roles: admin, volunteer, finance, treasurer, viewer, family |
 | 25 | Sprint 2 (2026-05-15) paused status removal | TABLE RECREATION | `families` | Removes 'paused' from status CHECK — detected via sqlite_master inspection; existing paused rows migrated to 'inactive' |
 | 26 | 2026-06-09 cycle_id on receipts | ALTER TABLE | `receipts` | `cycle_id TEXT` — direct cycle association for admin-entered historical receipts (nullable) |
+| 27 | 2026-08 confirmation expiry | ALTER TABLE + data grace migration | `food_requests` | `confirmation_expires_at TEXT`; pending legacy tokens receive 24 hours, processed tokens remain invalid |
+| 28 | 2026-08 abuse/upload controls | CREATE TABLE IF NOT EXISTS | `rate_limit_events`, `uploaded_files` | Persistent rate limits and upload registry/quota/orphan tracking |
 
 **Columns used in route queries that had NO explicit migration (were in CREATE TABLE from the start):**
 - All original columns. These are safe.
@@ -580,7 +600,7 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 ### System
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/health` | None | Health check — returns `{status:ok, version:1.0.0}` |
+| GET | `/api/health` | None | Railway readiness: opens the existing DB read/write without creating it, verifies core schema, runs SQLite `quick_check`; returns 503 on failure |
 | GET | `/api/donate-stats` | None | Public aggregate donation stats for Wix embed |
 
 ### Users (Admin only)
@@ -598,7 +618,7 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | POST | `/api/families` | admin/finance/treasurer | Create family + auto-create linked user account; returns login_username, login_temp_password, email_sent | families, users |
 | GET | `/api/families/<fid>` | any auth | Get single family | families |
 | PUT | `/api/families/<fid>` | admin/finance/treasurer | Update family (all fields incl. bundle_size, wa creds) | families |
-| DELETE | `/api/families/<fid>` | admin | Cascade-delete family + all related rows (food_request_events, food_request_items, order_change_requests, food_requests, volunteer_slots, receipts, assignments, linked user account) | families + all related tables |
+| DELETE | `/api/families/<fid>` | admin | Transactionally deletes non-financial family data and linked sessions; returns 409 when receipts/financial history exist (deactivate instead) | families + related non-financial tables |
 | POST | `/api/families/<fid>/request-bundle-change` | None (public) | Family requests bundle size change | families, users (WA notify admin) |
 | POST | `/api/families/<fid>/approve-bundle-change` | admin | Approve or deny pending bundle change | families |
 | GET | `/api/families/<fid>/history` | any auth | Full order history with items and slots | families, food_requests, delivery_cycles, food_request_items, food_items, food_categories, volunteer_slots, volunteers |
@@ -626,7 +646,7 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | GET | `/api/receipts` | any auth | List receipts (with family/volunteer names, cycle_title via JOIN) | receipts, families, volunteers, volunteer_slots, delivery_cycles |
 | POST | `/api/receipts` | admin/volunteer | Create receipt (accepts cycle_id) + notify treasurers | receipts, volunteers, users |
 | PUT | `/api/receipts/<rid>` | admin/finance/treasurer | Update receipt status; auto-creates reimbursement on approval | receipts, reimbursements |
-| POST | `/api/receipts/upload` | admin/volunteer | Upload receipt file (multipart) → returns file_url | filesystem |
+| POST | `/api/receipts/upload` | admin/finance/treasurer | Signature/decode/dimension-verified, registered and quota-controlled receipt upload | filesystem, uploaded_files |
 | GET | `/api/finance/summary` | admin/finance/treasurer | Overall totals (donations/reimbursed/balance/pending/submitted) + per-cycle breakdown | delivery_cycles, receipts, reimbursements, donations |
 
 ### Reimbursements
@@ -705,14 +725,14 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 ### Public Family Portal (session-based auth)
 | Method | Path | Auth | Description | Tables |
 |---|---|---|---|---|
-| POST | `/api/intake` | None | Public family intake form submission | families |
+| POST | `/api/intake` | None | Rate-limited/honeypot-protected intake; duplicate and new submissions return the same public response | families, rate_limit_events |
 | GET | `/api/food-order/check` | Bearer (family session) | Returns family info + all cycles (12mo); legacy ?phone= param removed | families, delivery_cycles, food_requests, food_items, bundle_size_rules, food_categories |
-| POST | `/api/food-order` | None | Submit a food order for open cycle | food_requests, food_request_items, delivery_cycles, families, bundle_size_rules |
-| POST | `/api/food-order/cancel` | None (family_id + request_id) | Cancel confirmed order if ≥1 day before delivery (Central time); releases slots; notifies coordinators + claimed volunteers via email; logs `cancelled` event; hard-delete — family can re-order after cancel | food_requests, volunteer_slots, food_request_events, delivery_cycles, users, volunteers |
-| PUT | `/api/food-order/items` | None (phone-based) | Edit item selections if ≥2 days before delivery (Central time) AND cycle not shopping; logs `items_edited` event with diff; notifies coordinators + claimed shopping volunteers | food_requests, food_request_items, food_request_events, delivery_cycles, users, volunteers |
+| POST | `/api/food-order` | family Bearer session | Validates active family, open window, future delivery, active items, bounded quantities/custom text, budget, and duplicate race before atomic creation | food_requests, food_request_items, delivery_cycles, families, bundle_size_rules |
+| POST | `/api/food-order/cancel` | family Bearer session | Cancel confirmed order if ≥1 day before delivery (Central time); malformed dates fail closed; releases slots and notifies affected users | food_requests, volunteer_slots, food_request_events, delivery_cycles, users, volunteers |
+| PUT | `/api/food-order/items` | family Bearer session | Validates item/budget input and edit window; malformed dates fail closed; logs diff and notifies shopping volunteers | food_requests, food_request_items, food_request_events, delivery_cycles, users, volunteers |
 | PUT | `/api/food-requests/<rid>/items` | admin | Admin edits item selections for a family's order; logs `admin_override` event | food_requests, food_request_items, food_request_events |
-| GET | `/api/family/confirm/<token>` | None (token-based) | Get order details for confirmation page | food_requests, families, delivery_cycles, food_items, food_categories, bundle_quantities, food_request_items |
-| POST | `/api/family/confirm/<token>` | None (token-based) | Submit confirmation/skip for bundle | food_requests, food_request_items, food_items |
+| GET | `/api/family/confirm/<token>` | None (token capability) | Reads only active, unexpired pending confirmation links; rate-limited and privacy-minimized response | food_requests, families, delivery_cycles, food items, rate_limit_events |
+| POST | `/api/family/confirm/<token>` | None (token capability) | Atomically consumes a single-use token to confirm/skip; validates cycle deadline, active items and bounded notes | food_requests, food_request_items, food_items |
 | POST | `/api/families/<fid>/request-bundle-change` | None | Request bundle size change | families, users (WA) |
 | POST | `/api/families/<fid>/manual-confirm` | admin | Manually confirm a family for the active cycle; creates confirmed food_request + items + open volunteer slots | food_requests, food_request_items, families, delivery_cycles, volunteer_slots |
 
@@ -728,7 +748,7 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | GET | `/api/portal/families/<cycle_id>` | portal token | Families enrolled in cycle + volunteer signup status | food_requests, families, volunteer_slots, volunteer_task_types |
 | POST | `/api/portal/signup` | portal token | Claim an open slot for a family+task (UPDATE existing open row; 409 if already taken by another); emails confirmation to volunteer | volunteer_slots, families, delivery_cycles, volunteers |
 | DELETE | `/api/portal/cancel/<slot_id>` | portal token | Release own claimed slot back to open (UPDATE status→open, NULL claimed_by) | volunteer_slots |
-| POST | `/api/portal/receipts/upload` | portal token | Upload receipt file | filesystem |
+| POST | `/api/portal/receipts/upload` | portal token | Verified, per-volunteer quota-controlled upload registered for one-receipt claiming | filesystem, uploaded_files |
 | POST | `/api/portal/receipts` | portal token | Submit receipt + auto-create reimbursement + mark slot complete + notify treasurers | receipts, reimbursements, volunteer_slots, volunteers, users |
 | GET | `/api/portal/receipts` | portal token | List own receipts with reimbursement status | receipts, reimbursements |
 | GET | `/api/portal/history` | portal token | Own completed task history (privacy-safe: no names/addresses) | volunteer_slots, delivery_cycles, families |
