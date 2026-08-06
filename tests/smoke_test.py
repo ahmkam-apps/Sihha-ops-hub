@@ -7,7 +7,7 @@ Usage:
 """
 import sys, urllib.request, urllib.error, urllib.parse, json, ssl, os
 
-BASE_URL = 'https://sihha-ops-hub-production.up.railway.app'
+BASE_URL = os.environ.get('BASE_URL', 'https://ops.sihha.org').rstrip('/')
 
 # macOS Python doesn't use system certs by default — create unverified context
 _ctx = ssl.create_default_context()
@@ -59,7 +59,9 @@ def post(path, body, token=None):
 if __name__ != '__main__':
     # Prevent pytest from importing and running this module during collection.
     # Run directly: python3 tests/smoke_test.py
-    import sys as _sys; _sys.exit(0)
+    import pytest as _pytest
+    _pytest.skip('live smoke test; run directly with python3 tests/smoke_test.py',
+                 allow_module_level=True)
 
 print(f'\n  Sihha Ops Hub — Smoke Test')
 print(f'  Target: {BASE_URL}')
@@ -74,7 +76,7 @@ check('Status field is ok', d.get('status') == 'ok')
 # ── Public Pages ──────────────────────────────────────────────────────────────
 print('\n  [ Public Pages ]')
 for path, name in [('/', 'Admin SPA'), ('/intake', 'Intake form'),
-                   ('/volunteer', 'Volunteer signup'), ('/portal', 'Volunteer portal')]:
+                   ('/volunteer-signup', 'Volunteer signup'), ('/portal', 'Volunteer portal')]:
     req = urllib.request.Request(BASE_URL + path)
     try:
         with urllib.request.urlopen(req, timeout=10, context=_ctx) as r:
@@ -143,15 +145,15 @@ if token:
 # ── Public Food Order Check ────────────────────────────────────────────────────
 print('\n  [ Food Order — Public ]')
 s, d = get('/api/food-order/check?phone=0000000000')
-check('Unregistered phone returns registered=false', s == 200 and d.get('registered') is False, f'status={s}')
+check('Legacy phone lookup is rejected', s == 401, f'status={s}')
 
 # ── Portal Login ───────────────────────────────────────────────────────────────
 print('\n  [ Volunteer Portal ]')
 s, d = post('/api/portal/login', {'phone': '0000000000'})
-check('Invalid portal login returns 404', s == 404, f'status={s}')
+check('Legacy portal login is gone', s == 410, f'status={s}')
 
 s, d = post('/api/portal/login', {})
-check('Portal login with no phone returns 400', s == 400, f'status={s}')
+check('Legacy portal login stays gone without phone', s == 410, f'status={s}')
 
 s, d = get('/api/portal/cycles')
 check('Portal cycles requires auth', s == 401, f'status={s}')

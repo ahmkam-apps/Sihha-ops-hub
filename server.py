@@ -114,6 +114,13 @@ def _normalize_phone(phone):
     """Strip all non-digit characters. '555-123-4567' → '5551234567'."""
     return ''.join(c for c in (phone or '') if c.isdigit())
 
+VALID_VOLUNTEER_ROLES = {'shopper', 'delivery', 'both', 'general'}
+
+def _normalize_volunteer_role(role):
+    """Normalize the old public-form label while keeping DB values canonical."""
+    value = (role or '').strip().lower()
+    return 'delivery' if value == 'driver' else value
+
 def _make_family_code(phone, family_size, db_conn=None, exclude_id=None):
     """Generate unique human-readable family reference.
     Format: last 6 digits of phone + '-' + bundle size letter.
@@ -461,7 +468,7 @@ def bootstrap_db():
     ''')
 
     # ── Performance indexes ───────────────────────────────────────────────────
-    for _idx_sql in [
+    _performance_indexes = [
         # volunteer_slots: used in almost every delivery/portal operation
         "CREATE INDEX IF NOT EXISTS idx_vs_cycle_family   ON volunteer_slots(cycle_id, family_id)",
         "CREATE INDEX IF NOT EXISTS idx_vs_cycle_status   ON volunteer_slots(cycle_id, status)",
@@ -496,7 +503,8 @@ def bootstrap_db():
         "CREATE INDEX IF NOT EXISTS idx_donations_ref     ON donations(reference_id)",
         # reminder_log: idempotency guards query by (slot_id, sent_to)
         "CREATE INDEX IF NOT EXISTS idx_rl_slot_sent      ON reminder_log(slot_id, sent_to)",
-    ]:
+    ]
+    for _idx_sql in _performance_indexes:
         try:
             conn.execute(_idx_sql)
         except Exception as _e:
@@ -519,15 +527,19 @@ def bootstrap_db():
         (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
          'Administrator', 'admin', now())
     )
-    # If ADMIN_PASSWORD env var is explicitly set, always sync it to the DB.
-    # This means changing ADMIN_PASSWORD in Railway takes effect on the next deploy
-    # even if the admin user already existed with a different password.
+    # Sync a changed ADMIN_PASSWORD and revoke pre-change sessions. Avoid re-hashing
+    # the same password on every boot, which also avoids needless DB writes.
     if os.environ.get('ADMIN_PASSWORD'):
-        conn.execute(
-            "UPDATE users SET password_hash=? WHERE username='admin'",
-            (generate_password_hash(admin_pw),)
-        )
-        log.info('Admin password synced from ADMIN_PASSWORD env var.')
+        admin_row = conn.execute(
+            "SELECT id, password_hash FROM users WHERE username='admin'"
+        ).fetchone()
+        if admin_row and not check_password_hash(admin_row['password_hash'], admin_pw):
+            conn.execute(
+                "UPDATE users SET password_hash=?, password_changed_at=? WHERE id=?",
+                (generate_password_hash(admin_pw), now(), admin_row['id'])
+            )
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (admin_row['id'],))
+            log.info('Admin password changed from ADMIN_PASSWORD; existing sessions revoked.')
     else:
         log.warning('Admin password is default admin123 — set ADMIN_PASSWORD env var in Railway!')
 
@@ -1551,6 +1563,15 @@ def bootstrap_db():
                 (str(uuid.uuid4()), _cat, _mo + 1, now()))
             log.info(f'Seeded food category: {_cat}')
 
+    # Some indexed tables/columns are added by migrations below the first index
+    # pass. Retry after all migrations so a brand-new database gets the same
+    # indexes as an upgraded one.
+    for _idx_sql in _performance_indexes:
+        try:
+            conn.execute(_idx_sql)
+        except Exception as _e:
+            log.warning(f'Post-migration index creation skipped: {_e}')
+
     # ── audit P1.9: one ACTIVE volunteer slot per (cycle, family, task_type) ──
     # Placed at the END of bootstrap so it runs AFTER volunteer_slots is created and
     # rebuilt by the migrations above (the early index-loop runs before the table
@@ -1603,20 +1624,41 @@ def bootstrap_db():
 def get_session(token):
     return get_db().execute(
         '''SELECT s.token, s.expires_at, u.id as user_id, u.username,
-                  u.name, u.role, u.active, u.linked_id, u.linked_type
+                  u.name, u.role, u.active, u.linked_id, u.linked_type,
+                  u.must_change_password
            FROM sessions s JOIN users u ON s.user_id = u.id
            WHERE s.token=? AND s.expires_at > ?''',
         (token, now())
     ).fetchone()
+
+def _linked_account_is_active(db, session):
+    """Keep application access aligned with the linked family/volunteer record."""
+    if session['role'] == 'volunteer':
+        row = db.execute(
+            "SELECT status FROM volunteers WHERE id=?", (session['linked_id'],)
+        ).fetchone()
+        return bool(row and row['status'] == 'active')
+    if session['role'] == 'family':
+        row = db.execute(
+            "SELECT status FROM families WHERE id=?", (session['linked_id'],)
+        ).fetchone()
+        return bool(row and row['status'] == 'active')
+    return True
+
+def _revoke_user_sessions(db, user_id, except_token=None):
+    """Revoke a user's sessions after credential or account-state changes."""
+    if except_token:
+        db.execute(
+            "DELETE FROM sessions WHERE user_id=? AND token!=?", (user_id, except_token)
+        )
+    else:
+        db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
 
 def require_auth(roles=None):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
             auth = request.headers.get('Authorization', '')
-            # Also accept ?token= query param (used for direct PDF/file links)
-            if not auth.startswith('Bearer ') and request.args.get('token'):
-                auth = 'Bearer ' + request.args.get('token')
             if not auth.startswith('Bearer '):
                 return jsonify({'error': 'Unauthorized'}), 401
             token = auth[7:]
@@ -1628,6 +1670,8 @@ def require_auth(roles=None):
             if not session:
                 return jsonify({'error': 'Session expired or invalid'}), 401
             if not session['active']:
+                return jsonify({'error': 'Account inactive'}), 401
+            if not _linked_account_is_active(get_db(), session):
                 return jsonify({'error': 'Account inactive'}), 401
             if roles and session['role'] not in roles:
                 return jsonify({'error': 'Forbidden'}), 403
@@ -1651,6 +1695,18 @@ def require_auth(roles=None):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXT
 
+def _normalize_upload_url(value):
+    """Accept only app-owned upload paths, never arbitrary or cross-origin URLs."""
+    if value in (None, ''):
+        return None
+    if not isinstance(value, str) or not value.startswith('/uploads/'):
+        return None
+    filename = value[len('/uploads/'):]
+    if (not filename or '/' in filename or '\\' in filename
+            or secure_filename(filename) != filename or not allowed_file(filename)):
+        return None
+    return f'/uploads/{filename}'
+
 # ── Portal Auth (volunteer self-service, phone-based) ─────────────────────────
 
 def get_portal_session(token):
@@ -1661,7 +1717,8 @@ def get_portal_session(token):
            FROM sessions s
            JOIN users u ON s.user_id = u.id
            JOIN volunteers v ON u.linked_id = v.id
-           WHERE s.token=? AND s.expires_at > ? AND u.role='volunteer' AND u.active=1''',
+           WHERE s.token=? AND s.expires_at > ? AND u.role='volunteer' AND u.active=1
+             AND v.status='active' AND s.token NOT LIKE 'tmp_%' ''',
         (token, now())
     ).fetchone()
     if row:
@@ -1671,7 +1728,8 @@ def get_portal_session(token):
         '''SELECT ps.token, ps.volunteer_id, v.name, v.phone, v.role,
                   v.wa_phone, v.wa_apikey
            FROM portal_sessions ps JOIN volunteers v ON ps.volunteer_id = v.id
-           WHERE ps.token=? AND ps.expires_at > ?''',
+           WHERE ps.token=? AND ps.expires_at > ? AND v.status='active'
+             AND ps.token NOT LIKE 'tmp_%' ''',
         (token, now())
     ).fetchone()
 
@@ -1682,7 +1740,10 @@ def require_portal_auth():
             auth = request.headers.get('Authorization', '')
             if not auth.startswith('Bearer '):
                 return jsonify({'error': 'Unauthorized'}), 401
-            session = get_portal_session(auth[7:])
+            token = auth[7:]
+            if token.startswith('tmp_'):
+                return jsonify({'error': 'Password change required'}), 401
+            session = get_portal_session(token)
             if not session:
                 return jsonify({'error': 'Session expired — please log in again'}), 401
             g.pv = dict(session)  # portal volunteer
@@ -1697,7 +1758,8 @@ def get_family_session(token):
            FROM sessions s
            JOIN users u ON s.user_id = u.id
            JOIN families f ON u.linked_id = f.id
-           WHERE s.token=? AND s.expires_at > ? AND u.role='family' AND u.active=1''',
+           WHERE s.token=? AND s.expires_at > ? AND u.role='family' AND u.active=1
+             AND f.status='active' AND s.token NOT LIKE 'tmp_%' ''',
         (token, now())
     ).fetchone()
     return row
@@ -1710,7 +1772,10 @@ def require_family_auth():
             auth = request.headers.get('Authorization', '')
             if not auth.startswith('Bearer '):
                 return jsonify({'error': 'Unauthorized'}), 401
-            session = get_family_session(auth[7:])
+            token = auth[7:]
+            if token.startswith('tmp_'):
+                return jsonify({'error': 'Password change required'}), 401
+            session = get_family_session(token)
             if not session:
                 return jsonify({'error': 'Session expired — please log in again'}), 401
             g.fam = dict(session)
@@ -2000,6 +2065,8 @@ def login():
     if not user or not check_password_hash(user['password_hash'], password):
         _login_failed(throttle_key)
         return jsonify({'error': 'Invalid credentials'}), 401
+    if not _linked_account_is_active(db, user):
+        return jsonify({'error': 'Account inactive'}), 403
     _LOGIN_FAILS.pop(throttle_key, None)       # success — reset per-IP counter
     _LOGIN_FAILS_USER.pop(username.lower(), None)  # …and the per-username ceiling
 
@@ -2026,6 +2093,7 @@ def login():
         # valid for /api/auth/set-password (audit: temp token was a full session)
         temp_token = 'tmp_' + secrets.token_urlsafe(32)
         expires_at = (datetime.utcnow() + timedelta(minutes=30)).isoformat()
+        db.execute("UPDATE users SET must_change_password=1 WHERE id=?", (user['id'],))
         db.execute(
             "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)",
             (temp_token, user['id'], expires_at, now())
@@ -2079,8 +2147,11 @@ def me():
     auth = request.headers.get('Authorization', '')
     if not auth.startswith('Bearer '):
         return jsonify({'error': 'Unauthorized'}), 401
-    session = get_session(auth[7:])
-    if not session:
+    token = auth[7:]
+    if token.startswith('tmp_'):
+        return jsonify({'error': 'Password change required'}), 401
+    session = get_session(token)
+    if not session or not session['active'] or not _linked_account_is_active(get_db(), session):
         return jsonify({'error': 'Unauthorized'}), 401
     return jsonify({
         'id': session['user_id'], 'username': session['username'],
@@ -2096,6 +2167,8 @@ def set_password():
     new_password = data.get('password') or ''
     if not temp_token or not new_password:
         return jsonify({'error': 'temp_token and password required'}), 400
+    if not temp_token.startswith('tmp_'):
+        return jsonify({'error': 'A valid temporary password-change token is required'}), 401
 
     ok, err = _validate_password(new_password)
     if not ok:
@@ -2103,7 +2176,8 @@ def set_password():
 
     db = get_db()
     session = get_session(temp_token)
-    if not session:
+    if (not session or not session['active'] or not session['must_change_password']
+            or not _linked_account_is_active(db, session)):
         return jsonify({'error': 'Token expired or invalid — please log in again'}), 401
 
     db.execute(
@@ -2111,8 +2185,8 @@ def set_password():
            password_changed_at=? WHERE id=?''',
         (generate_password_hash(new_password), now(), session['user_id'])
     )
-    # Expire the temp token
-    db.execute("DELETE FROM sessions WHERE token=?", (temp_token,))
+    # A password reset is a security boundary: expire every pre-reset session.
+    _revoke_user_sessions(db, session['user_id'])
 
     # Issue a full session
     token = secrets.token_urlsafe(32)  # CSPRNG session token (was uuid4)
@@ -2161,6 +2235,8 @@ def change_password():
            password_changed_at=? WHERE id=?''',
         (generate_password_hash(new_password), now(), g.user['user_id'])
     )
+    current_token = request.headers.get('Authorization', '')[7:]
+    _revoke_user_sessions(db, g.user['user_id'], except_token=current_token)
     db.commit()
     return jsonify({'ok': True, 'message': 'Password updated successfully'})
 
@@ -2259,6 +2335,10 @@ def update_user(uid):
              new_hash, data.get('email', row['email']),
              linked_id, linked_type, must_change, uid)
         )
+        if any(k in data for k in (
+                'password', 'role', 'active', 'linked_id', 'linked_type',
+                'must_change_password')):
+            _revoke_user_sessions(db, uid)
         db.commit()
     except sqlite3.IntegrityError as e:
         return jsonify({'error': str(e)}), 400
@@ -2275,6 +2355,7 @@ def force_password_reset(uid):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     db.execute("UPDATE users SET must_change_password=1 WHERE id=?", (uid,))
+    _revoke_user_sessions(db, uid)
     db.commit()
     return jsonify({'ok': True})
 
@@ -2299,6 +2380,7 @@ def admin_reset_password(uid):
         "UPDATE users SET password_hash=?, must_change_password=?, password_changed_at=? WHERE id=?",
         (generate_password_hash(new_pw), must_change, now() if not must_change else None, uid)
     )
+    _revoke_user_sessions(db, uid)
     db.commit()
     # Email if family has email on file
     email_sent = False
@@ -2929,6 +3011,14 @@ def update_family(fid):
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          now(), fid)
     )
+    linked_user = db.execute(
+        "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
+    ).fetchone()
+    if linked_user:
+        is_active = 1 if new_status == 'active' else 0
+        db.execute("UPDATE users SET active=? WHERE id=?", (is_active, linked_user['id']))
+        if not is_active:
+            _revoke_user_sessions(db, linked_user['id'])
     db.commit()
     # When a family is activated for the first time (any status → active)
     if new_status == 'active' and prev_status != 'active':
@@ -3099,6 +3189,9 @@ def create_volunteer():
     data = request.json or {}
     if not data.get('name'):
         return jsonify({'error': 'Name is required'}), 422
+    volunteer_role = _normalize_volunteer_role(data.get('role', 'shopper'))
+    if volunteer_role not in VALID_VOLUNTEER_ROLES:
+        return jsonify({'error': 'Invalid volunteer role'}), 422
     vid = str(uuid.uuid4())
     get_db().execute(
         '''INSERT INTO volunteers
@@ -3106,7 +3199,7 @@ def create_volunteer():
             wa_phone,wa_apikey,status,notes,source,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (vid, data['name'], data.get('phone'), data.get('email'),
-         data.get('role', 'shopper'), data.get('availability'), data.get('service_area'),
+         volunteer_role, data.get('availability'), data.get('service_area'),
          data.get('wa_phone'), data.get('wa_apikey'),
          data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'), now())
     )
@@ -3129,15 +3222,26 @@ def update_volunteer(vid):
     d = request.json or {}
     prev_status = row['status']
     new_status  = d.get('status', row['status'])
+    volunteer_role = _normalize_volunteer_role(d.get('role', row['role']))
+    if volunteer_role not in VALID_VOLUNTEER_ROLES:
+        return jsonify({'error': 'Invalid volunteer role'}), 422
     db.execute(
         '''UPDATE volunteers SET name=?,phone=?,email=?,role=?,availability=?,
            service_area=?,wa_phone=?,wa_apikey=?,status=?,notes=?,updated_at=? WHERE id=?''',
         (d.get('name', row['name']), d.get('phone', row['phone']),
-         d.get('email', row['email']), d.get('role', row['role']),
+         d.get('email', row['email']), volunteer_role,
          d.get('availability', row['availability']), d.get('service_area', row['service_area']),
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          new_status, d.get('notes', row['notes']), now(), vid)
     )
+    linked_user = db.execute(
+        "SELECT id FROM users WHERE linked_id=? AND role='volunteer'", (vid,)
+    ).fetchone()
+    if linked_user:
+        is_active = 1 if new_status == 'active' else 0
+        db.execute("UPDATE users SET active=? WHERE id=?", (is_active, linked_user['id']))
+        if not is_active:
+            _revoke_user_sessions(db, linked_user['id'])
     db.commit()
 
     # When a volunteer is activated for the first time — create account + email credentials
@@ -3676,9 +3780,12 @@ def receipt_parse_diagnostics():
 
 
 @app.route('/api/receipts', methods=['POST'])
-@require_auth(roles=['admin', 'volunteer'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def create_receipt():
     data = request.json or {}
+    file_url = _normalize_upload_url(data.get('file_url'))
+    if data.get('file_url') and not file_url:
+        return jsonify({'error': 'Invalid receipt file URL'}), 422
     if data.get('amount') is not None:
         try:
             if float(data['amount']) < 0:
@@ -3701,7 +3808,7 @@ def create_receipt():
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (rid, data.get('assignment_id'), data.get('volunteer_id'), data.get('family_id'),
          data.get('store'), data.get('purchase_date'), data.get('amount'),
-         data.get('file_url'), data.get('slot_id'), cycle_id, 'pending', data.get('notes'), now())
+         file_url, data.get('slot_id'), cycle_id, 'pending', data.get('notes'), now())
     )
     if data.get('parsed'):
         try:
@@ -4078,7 +4185,7 @@ def delete_receipt(rid):
 
 
 @app.route('/api/receipts/upload', methods=['POST'])
-@require_auth(roles=['admin', 'volunteer'])
+@require_auth(roles=['admin', 'finance', 'treasurer'])
 def upload_receipt():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
@@ -6336,6 +6443,9 @@ def public_volunteer_signup():
         return jsonify({'error': 'Name and phone are required'}), 422
     if not data.get('role'):
         return jsonify({'error': 'Please select a role'}), 422
+    volunteer_role = _normalize_volunteer_role(data.get('role'))
+    if volunteer_role not in VALID_VOLUNTEER_ROLES:
+        return jsonify({'error': 'Please select a valid role'}), 422
     phone = _normalize_phone(data['phone'])
     if not phone:
         return jsonify({'error': 'A valid phone number is required'}), 422
@@ -6353,13 +6463,13 @@ def public_volunteer_signup():
            (id,name,phone,email,role,availability,notes,status,source,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
         (vid, data['name'], phone, data.get('email'),
-         data.get('role', 'shopper'), data.get('availability'),
+         volunteer_role, data.get('availability'),
          data.get('notes'), 'pending', 'signup_form', now())
     )
     db.commit()
     log.info(f'New volunteer signup: {data["name"]} ({phone})')
     try:
-        role_label = {'shopper':'Shopper','delivery':'Delivery','both':'Shopper + Delivery','general':'General'}.get(data.get('role',''), data.get('role',''))
+        role_label = {'shopper':'Shopper','delivery':'Delivery','both':'Shopper + Delivery','general':'General'}.get(volunteer_role, volunteer_role)
         _notify_coordinators(db,
             f"New volunteer signed up:\n"
             f"Name: {data['name']}\n"
@@ -7412,7 +7522,7 @@ def retract_family_change_request(cr_id):
 # ── Admin Change Request Routes ───────────────────────────────────────────────
 
 @app.route('/api/admin/change-requests')
-@require_auth(roles=['admin', 'volunteer', 'finance', 'treasurer'])
+@require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
 def list_change_requests():
     """Admin: list change requests. Default: pending only. ?status=all for all."""
     db = get_db()
@@ -7851,29 +7961,42 @@ def edit_food_order_items():
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
-    """Serve uploaded receipt photos. Requires any valid session (admin/staff, family,
-    or volunteer — all live in `sessions` now). The token comes as a Bearer header
-    (the SPA fetches the image with the header, then shows it from a blob)."""
+    """Serve receipt photos to finance staff or the volunteer who owns the receipt."""
+    if (secure_filename(filename) != filename or not allowed_file(filename)):
+        return jsonify({'error': 'Not found'}), 404
     auth = request.headers.get('Authorization', '')
     token = auth[7:] if auth.startswith('Bearer ') else None
-    if not token:
+    if not token or token.startswith('tmp_'):
         return jsonify({'error': 'Unauthorized'}), 401
     db = get_db()
-    # sessions PK is `token` (there is no `id` column) — select 1, not id.
-    session = db.execute(
-        "SELECT 1 FROM sessions WHERE token=? AND expires_at > ?", (token, now())
-    ).fetchone()
-    if not session:
-        # Legacy portal_sessions fallback (table may not exist on newer DBs)
-        try:
-            session = db.execute(
-                "SELECT 1 FROM portal_sessions WHERE token=? AND expires_at > ?", (token, now())
+    file_url = f'/uploads/{filename}'
+    session = get_session(token)
+    if session and session['active'] and _linked_account_is_active(db, session):
+        if session['role'] in ('admin', 'finance', 'treasurer'):
+            return send_from_directory(UPLOAD_FOLDER, filename)
+        if session['role'] == 'volunteer':
+            owned = db.execute(
+                "SELECT 1 FROM receipts WHERE file_url=? AND volunteer_id=? LIMIT 1",
+                (file_url, session['linked_id'])
             ).fetchone()
-        except Exception:
-            session = None
+            if owned:
+                return send_from_directory(UPLOAD_FOLDER, filename)
+            return jsonify({'error': 'Forbidden'}), 403
+        return jsonify({'error': 'Forbidden'}), 403
+
+    portal_session = get_portal_session(token)
+    if portal_session:
+        owned = db.execute(
+            "SELECT 1 FROM receipts WHERE file_url=? AND volunteer_id=? LIMIT 1",
+            (file_url, portal_session['volunteer_id'])
+        ).fetchone()
+        if owned:
+            return send_from_directory(UPLOAD_FOLDER, filename)
+        return jsonify({'error': 'Forbidden'}), 403
+
     if not session:
         return jsonify({'error': 'Unauthorized'}), 401
-    return send_from_directory(UPLOAD_FOLDER, filename)
+    return jsonify({'error': 'Unauthorized'}), 401
 
 # ── Public Volunteer Portal ───────────────────────────────────────────────────
 
@@ -7900,12 +8023,12 @@ def portal_login():
 @app.route('/api/portal/cycles')
 @require_portal_auth()
 def portal_list_cycles():
-    """Return all non-delivered cycles within the next 12 months — volunteers can sign up to any."""
+    """Return cycles that are currently eligible for volunteer sign-up."""
     cutoff = (datetime.utcnow() + timedelta(days=365)).strftime('%Y-%m-%d')
     today  = datetime.utcnow().strftime('%Y-%m-%d')
     rows = get_db().execute(
         """SELECT * FROM delivery_cycles
-           WHERE status NOT IN ('delivered')
+           WHERE status IN ('upcoming','open','shopping')
              AND delivery_date_start >= ?
              AND delivery_date_start <= ?
            ORDER BY delivery_date_start ASC""",
@@ -7937,7 +8060,16 @@ def portal_get_slots(cycle_id):
     for s in slots:
         row = dict(s)
         # Delivery volunteers see address only for their own claimed slots
-        if row['task_type'] == 'delivery' and row['claimed_by'] == vol_id:
+        confirmed_order = db.execute(
+            '''SELECT 1 FROM food_requests
+               WHERE cycle_id=? AND family_id=?
+                 AND status IN ('confirmed','auto_confirmed','submitted','delivered')
+               LIMIT 1''',
+            (cycle_id, s['family_id'])
+        ).fetchone()
+        if (row['task_type'] == 'delivery' and row['claimed_by'] == vol_id
+                and row['status'] in ('claimed', 'confirmed')
+                and confirmed_order):
             family = db.execute("SELECT address, city FROM families WHERE id=?", (s['family_id'],)).fetchone()
             row['family_address'] = f"{family['address']}, {family['city']}" if family else ''
         result.append(row)
@@ -7984,6 +8116,17 @@ def portal_my_tasks():
                 row['shopping_items'] = [{'name': it['name'], 'qty': it['qty']} for it in items]
             else:
                 row['shopping_items'] = None
+        elif row['task_type'] == 'delivery':
+            confirmed_order = db.execute(
+                '''SELECT 1 FROM food_requests
+                   WHERE cycle_id=? AND family_id=?
+                     AND status IN ('confirmed','auto_confirmed','submitted','delivered')
+                   LIMIT 1''',
+                (row['cycle_id'], row['family_id'])
+            ).fetchone()
+            if row['status'] not in ('claimed', 'confirmed') or not confirmed_order:
+                row['address'] = None
+                row['city'] = None
         result.append(row)
 
     # Recently released slots — where this volunteer was the last holder
@@ -8015,10 +8158,27 @@ def portal_complete_slot(slot_id):
     db = get_db()
     vol_id = g.pv['volunteer_id']
     slot = db.execute(
-        "SELECT * FROM volunteer_slots WHERE id=? AND claimed_by=?", (slot_id, vol_id)
+        '''SELECT vs.*, dc.status as cycle_status
+           FROM volunteer_slots vs
+           JOIN delivery_cycles dc ON dc.id=vs.cycle_id
+           WHERE vs.id=? AND vs.claimed_by=?''',
+        (slot_id, vol_id)
     ).fetchone()
     if not slot:
         return jsonify({'error': 'Slot not found or not yours'}), 404
+    if slot['status'] != 'confirmed':
+        return jsonify({'error': 'Only confirmed tasks can be completed'}), 409
+    if slot['cycle_status'] == 'delivered':
+        return jsonify({'error': 'This delivery cycle is already closed'}), 409
+    if slot['task_type'] == 'delivery':
+        order = db.execute(
+            '''SELECT id FROM food_requests
+               WHERE cycle_id=? AND family_id=?
+                 AND status IN ('confirmed','auto_confirmed','submitted')''',
+            (slot['cycle_id'], slot['family_id'])
+        ).fetchone()
+        if not order:
+            return jsonify({'error': 'The family order is not confirmed'}), 409
     ts = now()
     db.execute(
         "UPDATE volunteer_slots SET status='complete', completed_at=?, updated_at=? WHERE id=?",
@@ -8081,7 +8241,9 @@ def portal_submit_receipt():
         return jsonify({'error': 'Amount cannot be negative'}), 422
     store  = (data.get('store') or '').strip()
     pdate  = data.get('purchase_date') or now()[:10]
-    furl   = data.get('file_url')
+    furl   = _normalize_upload_url(data.get('file_url'))
+    if data.get('file_url') and not furl:
+        return jsonify({'error': 'Invalid receipt file URL'}), 422
     fid    = slot['family_id'] if slot_id and slot else None
 
     # Check for existing receipt for this slot — update instead of reject
@@ -8572,7 +8734,7 @@ def portal_get_families(cycle_id):
                   fr.status as order_status, fr.id as request_id
            FROM families f
            LEFT JOIN food_requests fr ON fr.family_id = f.id AND fr.cycle_id = ?
-                                     AND fr.status IN ('confirmed','submitted','delivered')
+                                     AND fr.status IN ('confirmed','auto_confirmed','submitted','delivered')
            WHERE f.status = 'active'
            ORDER BY f.name''',
         (cycle_id,)
@@ -8605,7 +8767,7 @@ def portal_get_families(cycle_id):
         for s in slots:
             tt = s['task_type']
             vol_counts[tt] = vol_counts.get(tt, 0) + 1
-            if s['claimed_by'] == vol_id:
+            if s['claimed_by'] == vol_id and s['status'] in ('claimed', 'confirmed'):
                 my_slots[tt]  = s['id']
                 my_status[tt] = s['status']
             elif s['claimed_by'] and s['status'] in ('claimed', 'confirmed'):
@@ -8616,7 +8778,7 @@ def portal_get_families(cycle_id):
         fam_dict['taken_by']         = taken_by
         fam_dict['volunteer_counts'] = vol_counts
         # Address only for volunteers signed up for delivery on a confirmed order
-        if 'delivery' not in my_slots:
+        if 'delivery' not in my_slots or not fam_dict.get('order_status'):
             fam_dict['address'] = None
             fam_dict['city']    = None
         result.append(fam_dict)
@@ -8640,12 +8802,41 @@ def portal_signup():
     task_types = d.get('task_types', [])
     if not cycle_id or not family_id or not task_types:
         return jsonify({'error': 'cycle_id, family_id, task_types required'}), 422
+    if (not isinstance(task_types, list) or len(task_types) > 10
+            or any(not isinstance(t, str) or not t.strip() for t in task_types)):
+        return jsonify({'error': 'task_types must be a list of valid task names'}), 422
+    task_types = list(dict.fromkeys(t.strip() for t in task_types))
     vol_id = g.pv['volunteer_id']
     db = get_db()
     cycle  = db.execute("SELECT * FROM delivery_cycles WHERE id=?", (cycle_id,)).fetchone()
     family = db.execute("SELECT * FROM families WHERE id=?", (family_id,)).fetchone()
     if not cycle:
         return jsonify({'error': 'Cycle not found'}), 404
+    if cycle['status'] not in ('upcoming', 'open', 'shopping') or cycle['delivery_date_start'] < datetime.utcnow().strftime('%Y-%m-%d'):
+        return jsonify({'error': 'This delivery cycle is not open for volunteer sign-up'}), 409
+    if not family or family['status'] != 'active':
+        return jsonify({'error': 'Family not found or inactive'}), 404
+
+    placeholders = ','.join('?' for _ in task_types)
+    valid_tasks = {
+        r['slug'] for r in db.execute(
+            f'''SELECT slug FROM volunteer_task_types
+                WHERE is_active=1 AND is_family_slot=1 AND slug IN ({placeholders})''',
+            task_types
+        ).fetchall()
+    }
+    invalid_tasks = [t for t in task_types if t not in valid_tasks]
+    if invalid_tasks:
+        return jsonify({'error': f'Invalid family task type: {invalid_tasks[0]}'}), 422
+
+    order_confirmed = bool(db.execute(
+        '''SELECT 1 FROM food_requests
+           WHERE cycle_id=? AND family_id=?
+             AND status IN ('confirmed','auto_confirmed','submitted','delivered')
+           LIMIT 1''',
+        (cycle_id, family_id)
+    ).fetchone())
+    claim_status = 'confirmed' if order_confirmed else 'claimed'
 
     claimed = []
     ts = now()
@@ -8668,7 +8859,6 @@ def portal_signup():
         if taken:
             return jsonify({'error': f'{task_type.capitalize()} is already assigned to {taken["name"]}'}), 409
 
-        # Claim and immediately confirm the slot — no coordinator approval step needed
         open_slot = db.execute(
             "SELECT id FROM volunteer_slots WHERE cycle_id=? AND family_id=? AND task_type=? AND status='open'",
             (cycle_id, family_id, task_type)
@@ -8679,8 +8869,8 @@ def portal_signup():
             # where two volunteers pass the "taken?" check simultaneously — without
             # this, both got 201 + confirmation emails and the last write silently won.
             cur = db.execute(
-                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status='confirmed', updated_at=? WHERE id=? AND status='open'",
-                (vol_id, ts, ts, open_slot['id'])
+                "UPDATE volunteer_slots SET claimed_by=?, claimed_at=?, status=?, updated_at=? WHERE id=? AND status='open'",
+                (vol_id, ts, claim_status, ts, open_slot['id'])
             )
             if cur.rowcount == 0:
                 # Returning without commit rolls back any earlier task_type claims
@@ -8692,11 +8882,22 @@ def portal_signup():
                 who = holder['name'] if holder else 'another volunteer'
                 return jsonify({'error': f'{task_type.capitalize()} was just claimed by {who}'}), 409
         else:
-            # Safety fallback: no pre-created slot (old cycle or edge case) — insert one
-            db.execute(
-                "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (str(uuid.uuid4()), cycle_id, family_id, task_type, cycle['delivery_date_start'], vol_id, ts, 'confirmed', ts)
-            )
+            active_slot = db.execute(
+                '''SELECT status FROM volunteer_slots
+                   WHERE cycle_id=? AND family_id=? AND task_type=? AND status!='cancelled' ''',
+                (cycle_id, family_id, task_type)
+            ).fetchone()
+            if active_slot:
+                return jsonify({'error': f'{task_type.capitalize()} is not available'}), 409
+            try:
+                db.execute(
+                    "INSERT INTO volunteer_slots (id,cycle_id,family_id,task_type,task_date,claimed_by,claimed_at,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), cycle_id, family_id, task_type,
+                     cycle['delivery_date_start'] if task_type == 'delivery' else None,
+                     vol_id, ts, claim_status, ts)
+                )
+            except sqlite3.IntegrityError:
+                return jsonify({'error': f'{task_type.capitalize()} was just claimed by another volunteer'}), 409
         claimed.append(task_type)
 
     db.commit()
@@ -8710,14 +8911,15 @@ def portal_signup():
         if vol_email:
             fcode      = fam.get('family_code', '')
             task_label = ', '.join(t.capitalize() for t in claimed)
+            assignment_word = 'confirmed' if order_confirmed else 'reserved'
             body = (f"Assalamu Alaikum {vol.get('name', '')},\n\n"
-                    f"You have been confirmed for: {task_label}\n"
+                    f"Your volunteer slot has been {assignment_word} for: {task_label}\n"
                     f"Family: {fcode} - Size: {fam.get('family_size', '?')}\n"
                     f"Delivery: {cycle['delivery_date_start']}\n"
                     f"JazakAllah Khair!\n\n— Sihha Food Program")
-            if 'delivery' in claimed and fam.get('address'):
+            if order_confirmed and 'delivery' in claimed and fam.get('address'):
                 body += f"\nAddress: {fam['address']}, {fam.get('city', '')}"
-            subject = f"Sihha Confirmed: {task_label}"
+            subject = f"Sihha {assignment_word.capitalize()}: {task_label}"
             _email_send(vol_email, subject, body)
 
     return jsonify({'ok': True, 'claimed': claimed}), 201
@@ -8733,6 +8935,8 @@ def portal_cancel_slot(slot_id):
     ).fetchone()
     if not slot:
         return jsonify({'error': 'Not found or not yours'}), 404
+    if slot['status'] not in ('claimed', 'confirmed'):
+        return jsonify({'error': 'Only active assignments can be cancelled'}), 409
     # Release back to open — preserve prev_claimed_by for portal history
     db.execute(
         "UPDATE volunteer_slots SET prev_claimed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, status='open', updated_at=? WHERE id=?",
@@ -8757,7 +8961,7 @@ def _send_reminders_job():
                FROM volunteer_slots vs
                JOIN volunteers v ON vs.claimed_by = v.id
                JOIN families f ON vs.family_id = f.id
-               WHERE vs.status IN ('claimed','confirmed') AND vs.task_date=?
+               WHERE vs.status='confirmed' AND vs.task_date=?
                AND v.email IS NOT NULL AND TRIM(v.email) != '' ''',
             (target_date,)
         ).fetchall()
@@ -8791,8 +8995,21 @@ def _send_reminders_job():
                         f"Send receipt to treasurer after shopping.\n\n"
                         f"JazakAllah Khair!\n\n— Sihha Food Program")
                 subject = f"Sihha Reminder: Shopping on {target_date}"
-            if _email_send(vol_email, subject, body):
+            try:
+                delivered = _email_send(vol_email, subject, body)
+            except Exception as exc:
+                log.warning(f'Email reminder failed for slot {s["id"]}: {exc}')
+                delivered = False
+            if delivered:
                 sent += 1
+            else:
+                # The unique row is a successful-send guard, not an attempt log.
+                # Remove it after failure so the next scheduler run can retry.
+                conn.execute(
+                    "DELETE FROM reminder_log WHERE slot_id=? AND sent_to=?",
+                    (s['id'], vol_email)
+                )
+                conn.commit()
         log.info(f'Email Reminders: {sent} sent for target date {target_date}')
         return sent, target_date
     finally:
@@ -9229,7 +9446,7 @@ def _release_unconfirmed_slots_job():
                JOIN delivery_cycles dc ON vs.cycle_id = dc.id
                JOIN families f ON vs.family_id = f.id
                JOIN volunteers v ON vs.claimed_by = v.id
-               WHERE vs.status = 'claimed'
+               WHERE vs.status IN ('claimed','confirmed')
                  AND dc.delivery_date_start >= ?
                  AND dc.delivery_date_start <= ?
                  AND NOT EXISTS (

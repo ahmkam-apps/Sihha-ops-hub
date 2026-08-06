@@ -784,9 +784,8 @@ class TestVolunteerPortal:
                               'task_types': ['shopping']})
 
         tasks = client.get('/api/portal/my-tasks', headers=headers).get_json()
-        claimed = [t for t in tasks if t['status'] == 'claimed']
-        if not claimed:
-            pytest.skip('No claimed tasks to mark complete')
+        claimed = [t for t in tasks if t['status'] == 'confirmed']
+        assert claimed, 'Expected a confirmed shopping task'
 
         slot_id = claimed[0]['id']
         res = client.post(f'/api/portal/complete/{slot_id}', headers=headers)
@@ -806,12 +805,13 @@ class TestVolunteerPortal:
         open_shopping = [s for s in slots_res.get_json()['slots']
                          if s['task_type'] == 'shopping' and s['status'] == 'open']
         if open_shopping:
-            client.post('/api/portal/claim', headers=h_shopper,
-                        json={'slot_id': open_shopping[0]['id']})
+            client.post('/api/portal/signup', headers=h_shopper,
+                        json={'cycle_id': self.cycle_id,
+                              'family_id': open_shopping[0]['family_id'],
+                              'task_types': ['shopping']})
 
         shopper_tasks = client.get('/api/portal/my-tasks', headers=h_shopper).get_json()
-        if not shopper_tasks:
-            pytest.skip('No shopper tasks to test with')
+        assert shopper_tasks, 'Expected a shopper task'
 
         slot_id = shopper_tasks[0]['id']
         res = client.post(f'/api/portal/complete/{slot_id}', headers=h_delivery)
@@ -1308,8 +1308,14 @@ class TestSetPassword:
     def setup(self, client, auth):
         self.client = client
         uname = f'newu_{uuid.uuid4().hex[:6]}'
+        vol = client.post('/api/volunteers', headers=auth, json={
+            'name': f'Password Flow {uname}',
+            'phone': f'5851{uuid.uuid4().int % 1000000:06d}',
+            'role': 'general', 'status': 'active',
+        }).get_json()
         create = client.post('/api/users', headers=auth,
-                             json={'username': uname, 'role': 'volunteer'})
+                             json={'username': uname, 'role': 'volunteer',
+                                   'linked_id': vol['id'], 'linked_type': 'volunteer'})
         data = create.get_json()
         self.uid       = data['id']
         self.username  = uname
@@ -2388,15 +2394,16 @@ class TestReceiptParsing:
             'volunteer_id': vid, 'family_id': fam['id'], 'store': 'RptStore',
             'amount': 60, 'purchase_date': '2026-07-05'}).get_json()['id']
         client.put(f'/api/receipts/{rid}', headers=auth, json={'status': 'approved'})
-        # needs a token — reports accept ?token=
+        # Reports require a Bearer header; session tokens must never appear in URLs.
         tok = auth['Authorization'].split()[1]
-        r = client.get('/api/reports/reimbursements?status=all&token=' + tok)
+        r = client.get('/api/reports/reimbursements?status=all', headers=auth)
         assert r.status_code == 200
         h = r.get_data(as_text=True)
         assert 'Report Vol' in h and 'RptStore' in h and '$60.00' in h
         assert fam['family_code'] in h            # family ID appears
         assert 'Approved — owed' in h
-        assert client.get('/api/reports/reimbursements').status_code == 401   # token required
+        assert client.get('/api/reports/reimbursements').status_code == 401
+        assert client.get('/api/reports/reimbursements?token=' + tok).status_code == 401
 
     def test_by_volunteer_groups_and_subtotals(self, client, auth):
         vid = client.post('/api/volunteers', headers=auth, json={
@@ -2625,3 +2632,327 @@ class TestReceiptParsing:
         assert det['volunteer_id'] == vid
         assert det['amount'] == 34.0
         assert det['amount_mismatch'] == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECURITY + WORKFLOW REGRESSIONS (audit 2026-08-06)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAuditRegressions:
+    def _active_family(self, client, auth, **overrides):
+        payload = {
+            'name': f'Audit Family {uuid.uuid4().hex[:6]}',
+            'phone': f'5858{uuid.uuid4().int % 1000000:06d}',
+            'address': '77 Private Lane', 'city': 'Rochester',
+            'family_size': 4, 'status': 'active',
+        }
+        payload.update(overrides)
+        return client.post('/api/families', headers=auth, json=payload).get_json()
+
+    def _active_volunteer(self, client, auth, role='delivery', email=None):
+        tag = uuid.uuid4().hex[:7]
+        vol = client.post('/api/volunteers', headers=auth, json={
+            'name': f'Audit Volunteer {tag}',
+            'phone': f'5859{uuid.uuid4().int % 1000000:06d}',
+            'email': email, 'role': role, 'status': 'active',
+        }).get_json()
+        token = _get_volunteer_token(client, vol['id'], auth)
+        assert token
+        return vol, {'Authorization': f'Bearer {token}'}
+
+    def test_fresh_database_has_all_performance_indexes(self):
+        expected = {
+            'idx_vs_cycle_family', 'idx_vs_cycle_status', 'idx_vs_claimed_by',
+            'idx_fri_request_id', 'idx_fr_family_id', 'idx_fr_cycle_id',
+            'idx_fre_request_id', 'idx_donations_date', 'idx_sessions_user_id',
+            'idx_families_phone', 'idx_vs_family_id', 'idx_receipts_slot',
+            'idx_receipts_vol', 'idx_receipts_cycle', 'idx_sessions_expires',
+            'idx_donations_cycle', 'idx_donations_ref', 'idx_rl_slot_sent',
+        }
+        db = _server.make_conn()
+        try:
+            actual = {
+                r['name'] for r in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+        finally:
+            db.close()
+        assert expected <= actual, f'Missing indexes: {sorted(expected - actual)}'
+
+    def test_password_change_tokens_are_strictly_scoped(self, client, auth):
+        full_token = auth['Authorization'].split()[1]
+        res = client.post('/api/auth/set-password', json={
+            'temp_token': full_token, 'password': 'AttackerPass1!'
+        })
+        assert res.status_code == 401
+
+        vol = client.post('/api/volunteers', headers=auth, json={
+            'name': 'Temp Boundary Vol',
+            'phone': f'5859{uuid.uuid4().int % 1000000:06d}',
+            'role': 'delivery', 'status': 'active',
+        }).get_json()
+        username = f'tmp_{uuid.uuid4().hex[:8]}'
+        created = client.post('/api/users', headers=auth, json={
+            'username': username, 'password': 'TempPass1!',
+            'role': 'volunteer', 'linked_id': vol['id'],
+            'linked_type': 'volunteer', 'must_change_password': 1,
+        })
+        assert created.status_code == 201
+        login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'TempPass1!'
+        }).get_json()
+        temp_headers = {'Authorization': f'Bearer {login["temp_token"]}'}
+        assert client.get('/api/auth/me', headers=temp_headers).status_code == 401
+        assert client.get('/api/portal/cycles', headers=temp_headers).status_code == 401
+
+        fam = self._active_family(client, auth)
+        fam_login = client.post('/api/auth/login', json={
+            'username': fam['login_username'],
+            'password': fam['login_temp_password'],
+        }).get_json()
+        fam_temp = {'Authorization': f'Bearer {fam_login["temp_token"]}'}
+        assert client.post(
+            f'/api/families/{fam["id"]}/request-bundle-change',
+            headers=fam_temp, json={'bundle_size': 'L'}
+        ).status_code == 401
+
+    def test_deactivation_revokes_linked_accounts_and_sessions(self, client, auth):
+        vol, vol_headers = self._active_volunteer(client, auth)
+        assert client.get('/api/portal/cycles', headers=vol_headers).status_code == 200
+        assert client.put(
+            f'/api/volunteers/{vol["id"]}', headers=auth, json={'status': 'inactive'}
+        ).status_code == 200
+        assert client.get('/api/portal/cycles', headers=vol_headers).status_code == 401
+
+        fam = self._active_family(client, auth)
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam)}'}
+        assert client.put(
+            f'/api/families/{fam["id"]}', headers=auth, json={'status': 'inactive'}
+        ).status_code == 200
+        assert client.post(
+            f'/api/families/{fam["id"]}/request-bundle-change',
+            headers=fam_headers, json={'bundle_size': 'L'}
+        ).status_code == 401
+
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT active FROM users WHERE linked_id=? AND role='volunteer'", (vol['id'],)
+            ).fetchone()['active'] == 0
+            assert db.execute(
+                "SELECT active FROM users WHERE linked_id=? AND role='family'", (fam['id'],)
+            ).fetchone()['active'] == 0
+        finally:
+            db.close()
+
+    def test_forced_reset_revokes_existing_sessions(self, client, auth):
+        username = f'viewer_{uuid.uuid4().hex[:8]}'
+        created = client.post('/api/users', headers=auth, json={
+            'username': username, 'password': 'ViewerPass1!',
+            'role': 'viewer', 'must_change_password': 0,
+        }).get_json()
+        login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'ViewerPass1!'
+        }).get_json()
+        headers = {'Authorization': f'Bearer {login["token"]}'}
+        assert client.get('/api/families', headers=headers).status_code == 200
+        assert client.post(
+            f'/api/users/{created["id"]}/force-reset', headers=auth
+        ).status_code == 200
+        assert client.get('/api/families', headers=headers).status_code == 401
+
+    def test_receipt_urls_and_upload_ownership_are_constrained(
+            self, client, auth, tmp_path, monkeypatch):
+        assert client.post('/api/receipts', headers=auth, json={
+            'amount': 10, 'file_url': 'https://evil.example/receipt.jpg'
+        }).status_code == 422
+
+        vol1, h1 = self._active_volunteer(client, auth, role='shopper')
+        _vol2, h2 = self._active_volunteer(client, auth, role='shopper')
+        assert client.post('/api/portal/receipts', headers=h1, json={
+            'amount': 10, 'file_url': 'https://evil.example/receipt.jpg'
+        }).status_code == 422
+
+        monkeypatch.setattr(_server, 'UPLOAD_FOLDER', str(tmp_path))
+        filename = f'{uuid.uuid4()}.jpg'
+        (tmp_path / filename).write_bytes(b'test image bytes')
+        created = client.post('/api/receipts', headers=auth, json={
+            'amount': 10, 'volunteer_id': vol1['id'],
+            'file_url': f'/uploads/{filename}',
+        })
+        assert created.status_code == 201
+        assert client.get(f'/uploads/{filename}', headers=auth).status_code == 200
+        assert client.get(f'/uploads/{filename}', headers=h1).status_code == 200
+        assert client.get(f'/uploads/{filename}', headers=h2).status_code == 403
+
+    def test_signup_validates_cycle_family_and_task_type(self, client, auth):
+        fam = self._active_family(client, auth)
+        _vol, headers = self._active_volunteer(client, auth)
+        delivered = client.post('/api/delivery-cycles', headers=auth, json={
+            **_cycle_payload(), 'status': 'delivered'
+        }).get_json()
+        assert client.post('/api/portal/signup', headers=headers, json={
+            'cycle_id': delivered['id'], 'family_id': fam['id'],
+            'task_types': ['delivery'],
+        }).status_code == 409
+
+        open_cycle = client.post('/api/delivery-cycles', headers=auth, json={
+            **_cycle_payload(), 'status': 'open'
+        }).get_json()
+        assert client.post('/api/portal/signup', headers=headers, json={
+            'cycle_id': open_cycle['id'], 'family_id': fam['id'],
+            'task_types': ['arbitrary_task'],
+        }).status_code == 422
+
+        client.put(f'/api/families/{fam["id"]}', headers=auth, json={'status': 'inactive'})
+        assert client.post('/api/portal/signup', headers=headers, json={
+            'cycle_id': open_cycle['id'], 'family_id': fam['id'],
+            'task_types': ['delivery'],
+        }).status_code == 404
+
+    def test_preorder_claim_hides_address_then_auto_releases(self, client, auth, wa_mock):
+        fam = self._active_family(client, auth)
+        start = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
+        end = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')
+        cycle = client.post('/api/delivery-cycles', headers=auth, json={
+            **_cycle_payload(), 'delivery_date_start': start,
+            'delivery_date_end': end, 'status': 'open',
+        }).get_json()
+        _vol, headers = self._active_volunteer(
+            client, auth, email=f'audit_{uuid.uuid4().hex[:8]}@test.sihha.org')
+        signup = client.post('/api/portal/signup', headers=headers, json={
+            'cycle_id': cycle['id'], 'family_id': fam['id'],
+            'task_types': ['delivery'],
+        })
+        assert signup.status_code == 201
+        assert '77 Private Lane' not in wa_mock.call_args[0][2]
+
+        tasks = client.get('/api/portal/my-tasks', headers=headers).get_json()
+        slot = next(t for t in tasks if t['cycle_id'] == cycle['id']
+                    and t['family_id'] == fam['id'] and t['task_type'] == 'delivery')
+        assert slot['status'] == 'claimed'
+        assert slot['address'] is None and slot['city'] is None
+        assert client.post(
+            f'/api/portal/complete/{slot["id"]}', headers=headers
+        ).status_code == 409
+
+        families = client.get(
+            f'/api/portal/families/{cycle["id"]}', headers=headers
+        ).get_json()['families']
+        target = next(f for f in families if f['id'] == fam['id'])
+        assert target['address'] is None and target['city'] is None
+        slots = client.get(
+            f'/api/portal/slots/{cycle["id"]}', headers=headers
+        ).get_json()['slots']
+        target_slot = next(s for s in slots if s['id'] == slot['id'])
+        assert not target_slot.get('family_address')
+
+        assert _server._release_unconfirmed_slots_job() >= 1
+        db = _server.make_conn()
+        try:
+            released = db.execute(
+                "SELECT status, claimed_by FROM volunteer_slots WHERE id=?", (slot['id'],)
+            ).fetchone()
+            assert released['status'] == 'open' and released['claimed_by'] is None
+        finally:
+            db.close()
+
+    def test_completed_slot_cannot_be_cancelled_or_completed_again(self, client, auth):
+        fam = self._active_family(client, auth)
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam)}'}
+        cycle = client.post('/api/delivery-cycles', headers=auth, json={
+            **_cycle_payload(), 'status': 'open'
+        }).get_json()
+        assert client.post('/api/food-order', headers=fam_headers, json={
+            'family_id': fam['id'], 'cycle_id': cycle['id'], 'selected_items': []
+        }).status_code == 201
+        _vol, headers = self._active_volunteer(client, auth, role='shopper')
+        assert client.post('/api/portal/signup', headers=headers, json={
+            'cycle_id': cycle['id'], 'family_id': fam['id'],
+            'task_types': ['shopping'],
+        }).status_code == 201
+        slot = next(t for t in client.get(
+            '/api/portal/my-tasks', headers=headers
+        ).get_json() if t['cycle_id'] == cycle['id'] and t['family_id'] == fam['id'])
+        assert slot['status'] == 'confirmed'
+        assert client.post(f'/api/portal/complete/{slot["id"]}', headers=headers).status_code == 200
+        assert client.delete(f'/api/portal/cancel/{slot["id"]}', headers=headers).status_code == 409
+        assert client.post(f'/api/portal/complete/{slot["id"]}', headers=headers).status_code == 409
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT status FROM volunteer_slots WHERE id=?", (slot['id'],)
+            ).fetchone()['status'] == 'complete'
+        finally:
+            db.close()
+
+    def test_failed_reminder_is_retried(self, client, auth, monkeypatch):
+        fam = self._active_family(client, auth)
+        fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam)}'}
+        start = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
+        end = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')
+        cycle = client.post('/api/delivery-cycles', headers=auth, json={
+            **_cycle_payload(), 'delivery_date_start': start,
+            'delivery_date_end': end, 'status': 'open',
+        }).get_json()
+        client.post('/api/food-order', headers=fam_headers, json={
+            'family_id': fam['id'], 'cycle_id': cycle['id'], 'selected_items': []
+        })
+        email = f'retry_{uuid.uuid4().hex[:8]}@test.sihha.org'
+        _vol, headers = self._active_volunteer(client, auth, email=email)
+        client.post('/api/portal/signup', headers=headers, json={
+            'cycle_id': cycle['id'], 'family_id': fam['id'],
+            'task_types': ['delivery'],
+        })
+        slot = next(t for t in client.get(
+            '/api/portal/my-tasks', headers=headers
+        ).get_json() if t['cycle_id'] == cycle['id'] and t['family_id'] == fam['id'])
+
+        monkeypatch.setattr(_server, '_email_send', lambda *_args, **_kwargs: False)
+        first_sent, _ = _server._send_reminders_job()
+        assert first_sent == 0
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT 1 FROM reminder_log WHERE slot_id=? AND sent_to=?",
+                (slot['id'], email)
+            ).fetchone() is None
+        finally:
+            db.close()
+
+        monkeypatch.setattr(_server, '_email_send', lambda *_args, **_kwargs: True)
+        second_sent, _ = _server._send_reminders_job()
+        assert second_sent >= 1
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT 1 FROM reminder_log WHERE slot_id=? AND sent_to=?",
+                (slot['id'], email)
+            ).fetchone() is not None
+        finally:
+            db.close()
+
+    def test_public_driver_alias_and_change_request_roles(self, client, auth):
+        phone = f'5857{uuid.uuid4().int % 1000000:06d}'
+        signup = client.post('/api/volunteer-signup', json={
+            'name': 'Driver Alias', 'phone': phone, 'role': 'driver'
+        })
+        assert signup.status_code == 201
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                "SELECT role FROM volunteers WHERE phone=?", (phone,)
+            ).fetchone()['role'] == 'delivery'
+        finally:
+            db.close()
+        assert client.post('/api/volunteer-signup', json={
+            'name': 'Bad Role',
+            'phone': f'5857{uuid.uuid4().int % 1000000:06d}',
+            'role': 'superuser',
+        }).status_code == 422
+
+        viewer = _make_role_headers(client, auth, 'viewer')
+        _vol, volunteer = self._active_volunteer(client, auth)
+        assert client.get('/api/admin/change-requests', headers=viewer).status_code == 200
+        assert client.get('/api/admin/change-requests', headers=volunteer).status_code == 403

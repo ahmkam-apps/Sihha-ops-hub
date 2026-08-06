@@ -836,15 +836,24 @@ function fmtMoney(n) {
     ? '$' + num.toLocaleString('en-US')
     : '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-function downloadPDF(path) {
-  // Open PDF in a new tab — browser will show it inline or prompt download
+async function downloadPDF(path) {
+  // Fetch with the Bearer header so session tokens never appear in URLs/history.
   const url = '/api' + path;
-  const a = document.createElement('a');
-  a.href = url;
-  a.target = '_blank';
-  // Add auth token as query param since we can't set headers on a direct link
-  a.href = url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(STATE.token);
-  a.click();
+  const popup = window.open('', '_blank');
+  try {
+    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + STATE.token } });
+    if (!res.ok) throw new Error('Could not generate report (' + res.status + ')');
+    const objUrl = URL.createObjectURL(await res.blob());
+    if (popup) popup.location = objUrl;
+    else {
+      const a = document.createElement('a');
+      a.href = objUrl; a.target = '_blank'; a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+  } catch (e) {
+    if (popup) popup.close();
+    alert(e.message);
+  }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -3066,7 +3075,7 @@ async function renderReceipts(filter) {
                     : ''}</td>
                 <td style="text-align:center;color:var(--gray-4)">${r.item_count || 0}</td>
                 <td>${r.file_url
-                  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();viewReceiptPhoto('${r.file_url}')" style="color:var(--green);font-size:13px"><i class="ti ti-photo" aria-hidden="true"></i> View</a>`
+                  ? `<a href="javascript:void(0)" onclick="event.stopPropagation();viewReceiptPhoto('${escJs(r.file_url)}')" style="color:var(--green);font-size:13px"><i class="ti ti-photo" aria-hidden="true"></i> View</a>`
                   : '<span style="color:var(--gray-3);font-size:12px">No photo</span>'}</td>
                 <td>${badge(r.status)}</td>
                 <td style="white-space:nowrap">
@@ -3194,7 +3203,11 @@ async function quickUploadReceipts(files) {
 // gets 401. Fetch the file WITH the token, then show it in a modal from a blob URL.
 async function viewReceiptPhoto(url) {
   try {
-    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + STATE.token } });
+    const parsedUrl = new URL(url, window.location.origin);
+    if (parsedUrl.origin !== window.location.origin || !parsedUrl.pathname.startsWith('/uploads/')) {
+      throw new Error('Invalid receipt photo URL');
+    }
+    const res = await fetch(parsedUrl.pathname, { headers: { 'Authorization': 'Bearer ' + STATE.token } });
     if (!res.ok) throw new Error('Could not load photo (' + res.status + ')');
     const blob = await res.blob();
     const objUrl = URL.createObjectURL(blob);
@@ -3297,7 +3310,7 @@ async function openReceiptDetail(rid, onDone) {
       ${mismatchNote}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div>${badge(rec.status)}</div>
-        ${rec.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rec.file_url}')" style="color:var(--green);font-size:13px"><i class="ti ti-photo" aria-hidden="true"></i> View photo</a>` : ''}
+        ${rec.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${escJs(rec.file_url)}')" style="color:var(--green);font-size:13px"><i class="ti ti-photo" aria-hidden="true"></i> View photo</a>` : ''}
       </div>
       <div class="form-group"><label>Volunteer</label>
         <select id="rd-volunteer" class="form-control">${volOpts}</select></div>
@@ -3904,7 +3917,7 @@ async function renderPayments(filter) {
               : `<span class="badge badge-pending">Owed</span>`}</td>
         <td style="text-align:right;white-space:nowrap">
           <a href="javascript:void(0)" onclick="editReceiptFromVR('${rc.receipt_id}')" style="color:var(--text-3);font-size:13px;margin-right:10px" title="Edit fields (date, family, store, amount)"><i class="ti ti-pencil" aria-hidden="true"></i></a>
-          ${rc.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${rc.file_url}')" style="color:var(--accent);font-size:13px;margin-right:10px" title="View receipt"><i class="ti ti-photo" aria-hidden="true"></i></a>` : ''}
+          ${rc.file_url ? `<a href="javascript:void(0)" onclick="viewReceiptPhoto('${escJs(rc.file_url)}')" style="color:var(--accent);font-size:13px;margin-right:10px" title="View receipt"><i class="ti ti-photo" aria-hidden="true"></i></a>` : ''}
           ${rc.status === 'pending'
             ? `<button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:3px 10px;font-size:11px" onclick="payOne('${rc.reimb_id}','this receipt')">Pay</button>`
             : `<button class="btn btn-sm btn-outline" style="padding:3px 10px;font-size:11px" onclick="undoPayment('${rc.reimb_id}')" title="Marked paid by mistake? Undo it">Undo</button>`}
