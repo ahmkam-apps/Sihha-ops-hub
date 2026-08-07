@@ -528,6 +528,79 @@ class TestFoodOrders:
         assert res2.status_code == 201, \
             f'Re-order after family cancel failed with {res2.status_code}: {res2.get_json()}'
 
+    def test_bundle_quantities_match_family_volunteer_and_admin_views(self, client):
+        """Fixed bundle quantities and adjustable choices must agree everywhere."""
+        state = client.get('/api/food-order/check', headers=self.family_headers).get_json()
+        cycle = next(c for c in state['cycles'] if c['id'] == self.cycle_id)
+        catalog = [item for cat in cycle['items_for_selection'] for item in cat['items']]
+        fixed = next(item for item in catalog
+                     if item['is_default'] and not item['allow_qty']
+                     and int(item['default_qty'] or 0) > 1)
+        adjustable = next(item for item in catalog
+                          if item['is_default'] and item['allow_qty'])
+        adjusted_qty = int(adjustable['default_qty'] or 1) + 1
+
+        placed = client.post('/api/food-order', headers=self.family_headers, json={
+            'family_id': self.family_id,
+            'cycle_id': self.cycle_id,
+            'selected_items': [fixed['id'], adjustable['id']],
+            'item_quantities': {adjustable['id']: adjusted_qty},
+        })
+        assert placed.status_code == 201
+
+        family_state = client.get(
+            '/api/food-order/check', headers=self.family_headers
+        ).get_json()
+        order = next(c for c in family_state['cycles'] if c['id'] == self.cycle_id)['order']
+        family_qty = {
+            item['name']: item['quantity']
+            for cat in order['selected_categories'] for item in cat['items']
+        }
+        assert family_qty[fixed['name']] == int(fixed['default_qty'])
+        assert family_qty[adjustable['name']] == adjusted_qty
+
+        vol = client.post('/api/volunteers', headers=self.auth, json={
+            'name': 'Quantity Shopper',
+            'phone': f'5856{uuid.uuid4().int % 1000000:06d}',
+            'role': 'shopper',
+            'status': 'active',
+        }).get_json()
+        portal_headers = {
+            'Authorization': f'Bearer {_get_volunteer_token(client, vol["id"], self.auth)}'
+        }
+        assert client.post('/api/portal/signup', headers=portal_headers, json={
+            'cycle_id': self.cycle_id,
+            'family_id': self.family_id,
+            'task_types': ['shopping'],
+        }).status_code == 201
+        task = next(t for t in client.get(
+            '/api/portal/my-tasks', headers=portal_headers
+        ).get_json() if t['cycle_id'] == self.cycle_id and t['task_type'] == 'shopping')
+        shopper_qty = {item['name']: item['qty'] for item in task['shopping_items']}
+        assert shopper_qty[fixed['name']] == int(fixed['default_qty'])
+        assert shopper_qty[adjustable['name']] == adjusted_qty
+
+        shopping = client.get(
+            f'/api/delivery-cycles/{self.cycle_id}/shopping-list', headers=self.auth
+        ).get_json()['shopping_list']
+        aggregate_qty = {item['item_name']: item['total_qty'] for item in shopping}
+        assert aggregate_qty[fixed['name']] == int(fixed['default_qty'])
+        assert aggregate_qty[adjustable['name']] == adjusted_qty
+
+        admin_order = client.get(
+            f'/api/delivery-cycles/{self.cycle_id}/orders', headers=self.auth
+        ).get_json()[0]
+        admin_qty = {item['name']: item['quantity'] for item in admin_order['selected_items']}
+        assert admin_qty[fixed['name']] == int(fixed['default_qty'])
+        assert admin_qty[adjustable['name']] == adjusted_qty
+
+        printable = client.get(
+            f'/api/reports/shopping-list/{self.cycle_id}', headers=self.auth
+        )
+        assert printable.status_code == 200
+        assert fixed['name'] in printable.get_data(as_text=True)
+        assert adjustable['name'] in printable.get_data(as_text=True)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 7 — VOLUNTEER PORTAL + PRIVACY RULES
@@ -921,8 +994,7 @@ class TestReminders:
     def test_reminder_targets_correct_date(self, client, auth, wa_mock):
         """Target date must be today + 2 days."""
         res = client.post('/api/reminders/trigger', headers=auth).get_json()
-        from datetime import datetime, timedelta
-        expected = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
+        expected = (_server._today_central() + timedelta(days=2)).isoformat()
         assert res['target_date'] == expected
 
     def test_reminders_idempotent(self, client, auth, wa_mock):

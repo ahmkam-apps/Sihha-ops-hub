@@ -6072,10 +6072,15 @@ def get_cycle_orders(cid):
     for order in orders:
         o = dict(order)
         items = db.execute(
-            '''SELECT fri.*, fi.name, fi.unit, fc.name as category
+            f'''SELECT fri.id, fri.request_id, fri.food_item_id, fri.selected,
+                      {_EFFECTIVE_ORDER_QTY_SQL} as quantity,
+                      fri.custom_value, fi.name, fi.unit, fc.name as category
                FROM food_request_items fri
+               JOIN food_requests fr ON fr.id=fri.request_id
                JOIN food_items fi ON fri.food_item_id = fi.id
                JOIN food_categories fc ON fi.category_id = fc.id
+               LEFT JOIN bundle_quantities bq
+                 ON bq.food_item_id=fi.id AND bq.bundle_size=fr.bundle_size
                WHERE fri.request_id=? AND fri.selected=1
                ORDER BY fc.display_order, fi.display_order''',
             (o['id'],)
@@ -6276,14 +6281,16 @@ def get_cycle_shopping_list(cid):
     db = get_db()
     # Get all selected items across all orders for this cycle, with bundle quantities
     rows = db.execute(
-        '''SELECT fi.id as item_id, fi.name as item_name, fi.unit,
+        f'''SELECT fi.id as item_id, fi.name as item_name, fi.unit,
                   fc.name as category, fc.display_order as cat_order, fi.display_order as item_order,
-                  SUM(COALESCE(fri.quantity, 1)) as total_qty,
+                  SUM({_EFFECTIVE_ORDER_QTY_SQL}) as total_qty,
                   COUNT(DISTINCT fr.id) as order_count
            FROM food_requests fr
            JOIN food_request_items fri ON fri.request_id = fr.id AND fri.selected = 1
            JOIN food_items fi ON fri.food_item_id = fi.id
            JOIN food_categories fc ON fi.category_id = fc.id
+           LEFT JOIN bundle_quantities bq
+             ON bq.food_item_id=fi.id AND bq.bundle_size=fr.bundle_size
            WHERE fr.cycle_id=? AND fr.status = 'confirmed'
            GROUP BY fi.id
            ORDER BY fc.display_order, fi.display_order''',
@@ -6436,9 +6443,13 @@ def report_shopping_list(cid):
     total_orders = sum(bundle_counts.values())
 
     rows = db.execute(
-        '''SELECT fi.name as item_name, fi.unit,
+        f'''SELECT fi.name as item_name, fi.unit,
                   fc.name as category, fc.display_order as cat_order, fi.display_order as item_order,
-                  fr.bundle_size, bq.quantity, COUNT(DISTINCT fr.id) as order_count
+                  fr.bundle_size,
+                  MIN({_EFFECTIVE_ORDER_QTY_SQL}) as min_qty,
+                  MAX({_EFFECTIVE_ORDER_QTY_SQL}) as max_qty,
+                  SUM({_EFFECTIVE_ORDER_QTY_SQL}) as total_qty,
+                  COUNT(DISTINCT fr.id) as order_count
            FROM food_requests fr
            JOIN food_request_items fri ON fri.request_id = fr.id AND fri.selected = 1
            JOIN food_items fi ON fri.food_item_id = fi.id
@@ -6455,8 +6466,12 @@ def report_shopping_list(cid):
         k = r['item_name']
         items[k].update({'category': r['category'], 'unit': r['unit'],
                          'cat_order': r['cat_order'], 'item_order': r['item_order']})
-        qty, count = r['quantity'] or 0, r['order_count'] or 0
-        items[k]['sizes'][r['bundle_size']] = {'qty': qty, 'count': count, 'total': qty * count}
+        count = r['order_count'] or 0
+        qty = (str(r['min_qty']) if r['min_qty'] == r['max_qty']
+               else f"{r['min_qty']}–{r['max_qty']}")
+        items[k]['sizes'][r['bundle_size']] = {
+            'qty': qty, 'count': count, 'total': r['total_qty'] or 0
+        }
 
     by_cat = defaultdict(list)
     for name, info in sorted(items.items(), key=lambda x: (x[1]['cat_order'], x[1]['item_order'])):
@@ -7164,14 +7179,17 @@ def submit_family_confirmation(token):
     item_lines_conf = []
     if claimed_slots_conf:
         item_rows_conf = db.execute(
-            '''SELECT fi.name, fi.unit, bq.quantity, fc.name as category
+            f'''SELECT fi.name, fi.unit, {_EFFECTIVE_ORDER_QTY_SQL} as quantity,
+                       fc.name as category
                FROM food_request_items fri
+               JOIN food_requests fr ON fr.id=fri.request_id
                JOIN food_items fi ON fri.food_item_id = fi.id
                JOIN food_categories fc ON fi.category_id = fc.id
-               LEFT JOIN bundle_quantities bq ON bq.food_item_id = fi.id AND bq.bundle_size = ?
+               LEFT JOIN bundle_quantities bq
+                 ON bq.food_item_id = fi.id AND bq.bundle_size = fr.bundle_size
                WHERE fri.request_id = ? AND fri.selected = 1
                ORDER BY fc.display_order, fi.name''',
-            (bundle_sz, req['id'])
+            (req['id'],)
         ).fetchall()
         for ir in item_rows_conf:
             qty_str = f"{ir['quantity']} {ir['unit']}" if ir['quantity'] else ir['unit'] or ''
@@ -7317,6 +7335,14 @@ def _cycle_order_window_error(cycle):
             return 'Orders are closed for this delivery.'
     return None
 
+_EFFECTIVE_ORDER_QTY_SQL = '''
+    CAST(CASE
+      WHEN COALESCE(fi.allow_qty, 0) = 1
+        THEN COALESCE(NULLIF(fri.quantity, 0), 1)
+      ELSE COALESCE(NULLIF(bq.quantity, 0), NULLIF(fri.quantity, 0), 1)
+    END AS INTEGER)
+'''
+
 def _validate_order_selection(db, raw_selected, raw_quantities, raw_custom_values,
                               bundle_size, enforce_budget=True):
     """Validate and normalize family-controlled item, quantity and free-text data."""
@@ -7336,8 +7362,15 @@ def _validate_order_selection(db, raw_selected, raw_quantities, raw_custom_value
 
     selected_ids = set(raw_selected)
     rows = db.execute(
-        "SELECT id, COALESCE(price,0) price, COALESCE(allow_qty,0) allow_qty, "
-        "COALESCE(is_free_text,0) is_free_text FROM food_items WHERE is_active=1"
+        '''SELECT fi.id, COALESCE(fi.price,0) price,
+                  COALESCE(fi.allow_qty,0) allow_qty,
+                  COALESCE(fi.is_free_text,0) is_free_text,
+                  COALESCE(NULLIF(CAST(bq.quantity AS INTEGER),0),0) bundle_qty
+           FROM food_items fi
+           LEFT JOIN bundle_quantities bq
+             ON bq.food_item_id=fi.id AND bq.bundle_size=?
+           WHERE fi.is_active=1''',
+        (bundle_size,)
     ).fetchall()
     active = {row['id']: row for row in rows}
     unknown = selected_ids - set(active)
@@ -7356,12 +7389,16 @@ def _validate_order_selection(db, raw_selected, raw_quantities, raw_custom_value
             qty = int(raw_qty)
         except (TypeError, ValueError):
             return None, 'Item quantities must be whole numbers.'
+        # Fixed bundle lines cannot be manipulated by the browser. Persist the
+        # configured bundle quantity so every downstream shopping view sees the
+        # same amount; adjustable lines keep the family's bounded selection.
         if not item['allow_qty']:
-            qty = 1
+            qty = int(item['bundle_qty'] or 0) or 1
         if not 1 <= qty <= 20:
             return None, 'Item quantities must be between 1 and 20.'
         quantities[item_id] = qty
-        total_cost += float(item['price'] or 0) * qty
+        cost_qty = qty if item['allow_qty'] else 1
+        total_cost += float(item['price'] or 0) * cost_qty
 
         raw_custom = raw_custom_values.get(item_id, '')
         if raw_custom is not None and not isinstance(raw_custom, str):
@@ -7529,8 +7566,8 @@ def check_food_order_eligibility():
 
         # Selected items grouped by category
         sel_rows = db.execute(
-            '''SELECT fi.name, fi.unit, fc.name as category,
-                      COALESCE(bq.quantity,'') as quantity
+            f'''SELECT fi.name, fi.unit, fc.name as category,
+                      {_EFFECTIVE_ORDER_QTY_SQL} as quantity
                FROM food_request_items fri
                JOIN food_items fi ON fri.food_item_id=fi.id
                JOIN food_categories fc ON fi.category_id=fc.id
@@ -7812,10 +7849,14 @@ def submit_food_order():
     item_lines = []
     if claimed_slots:
         item_rows = db.execute(
-            '''SELECT fi.name, fi.unit, COALESCE(fri.quantity, 1) as ord_qty, fc.name as category
+            f'''SELECT fi.name, fi.unit, {_EFFECTIVE_ORDER_QTY_SQL} as ord_qty,
+                       fc.name as category
                FROM food_request_items fri
+               JOIN food_requests fr ON fr.id=fri.request_id
                JOIN food_items fi ON fri.food_item_id = fi.id
                JOIN food_categories fc ON fi.category_id = fc.id
+               LEFT JOIN bundle_quantities bq
+                 ON bq.food_item_id=fi.id AND bq.bundle_size=fr.bundle_size
                WHERE fri.request_id = ? AND fri.selected = 1
                ORDER BY fc.display_order, fi.name''',
             (rid,)
@@ -8769,10 +8810,12 @@ def portal_my_tasks():
             # For confirmed shopping slots, include item list so shopper knows what to buy
             if row['status'] == 'confirmed':
                 items = db.execute(
-                    '''SELECT fi.name, COALESCE(fri.quantity, 1) as qty
+                    f'''SELECT fi.name, {_EFFECTIVE_ORDER_QTY_SQL} as qty
                        FROM food_requests fr
                        JOIN food_request_items fri ON fri.request_id = fr.id
                        JOIN food_items fi ON fi.id = fri.food_item_id
+                       LEFT JOIN bundle_quantities bq
+                         ON bq.food_item_id=fi.id AND bq.bundle_size=fr.bundle_size
                        WHERE fr.cycle_id=? AND fr.family_id=? AND fri.selected=1
                        ORDER BY fi.name''',
                     (row['cycle_id'], row['family_id'])
@@ -9620,7 +9663,9 @@ def _send_reminders_job():
     even when both gunicorn workers run the job simultaneously."""
     conn = make_conn()  # FK enforcement + busy_timeout (audit 2.5)
     try:
-        target_date = (datetime.utcnow() + timedelta(days=2)).strftime('%Y-%m-%d')
+        # Delivery dates are Central-time calendar dates. UTC can already be on
+        # the next day during the Chicago evening and would skip the real target.
+        target_date = (_today_central() + timedelta(days=2)).isoformat()
         slots = conn.execute(
             '''SELECT vs.*, v.name as vol_name, v.email as vol_email,
                       f.name as family_name, f.family_code, f.address, f.city
