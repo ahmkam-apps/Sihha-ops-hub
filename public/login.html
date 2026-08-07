@@ -6,164 +6,273 @@
 <title>Sihha — Sign In</title>
 <link rel="stylesheet" href="/css/base.css">
 <style>
+  html { background: var(--sihha-white); }
   body {
-    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
-    background: #ffffff;
-    color: #111111;
     min-height: 100vh;
+    min-height: 100svh;
+    background: var(--sihha-white);
+    color: var(--sihha-ink);
+    font-family: var(--sihha-font-body);
+  }
+
+  .auth-shell {
+    display: grid;
+    grid-template-columns: minmax(420px, 0.92fr) minmax(500px, 1.08fr);
+    min-height: 100vh;
+    min-height: 100svh;
+  }
+
+  .brand-panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 100%;
+    padding: clamp(36px, 5vw, 76px);
+    background: var(--sihha-black);
+    color: var(--sihha-white);
+  }
+
+  .brand-wordmark {
+    display: inline-block;
+    color: inherit;
+    font-size: clamp(46px, 4.2vw, 68px);
+    line-height: 1;
+    text-decoration: none;
+  }
+
+  .brand-message { margin: clamp(64px, 13vh, 150px) 0; }
+  .brand-kicker {
+    margin-bottom: 18px;
+    color: #bdbdbd;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .brand-title {
+    max-width: 690px;
+    font-family: var(--sihha-font-display);
+    font-size: clamp(46px, 5.25vw, 80px);
+    font-weight: 300;
+    letter-spacing: -0.045em;
+    line-height: 0.98;
+  }
+  .brand-copy {
+    max-width: 510px;
+    margin-top: 28px;
+    color: #d0d0d0;
+    font-size: 17px;
+    line-height: 1.55;
+  }
+  .brand-values {
+    border-top: 1px solid #353535;
+    padding-top: 18px;
+    color: #bdbdbd;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .auth-panel {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding: clamp(48px, 7vw, 112px);
+    background: var(--sihha-white);
   }
-  .card {
-    background: #ffffff;
-    border: 1px solid #e8e8e8;
-    width: 100%;
-    max-width: 400px;
-    padding: 40px 36px 36px;
-  }
-  .logo {
-    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
-    font-size: 24px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    margin-bottom: 4px;
-    color: #111111;
-  }
-  .tagline {
+  .auth-frame { width: 100%; max-width: 470px; }
+  .auth-back {
+    display: inline-block;
+    margin-bottom: clamp(56px, 10vh, 104px);
+    border-bottom: 1px solid transparent;
+    color: var(--sihha-gray);
     font-size: 13px;
-    color: #888888;
-    margin-bottom: 36px;
+    letter-spacing: 0.06em;
+    text-decoration: none;
+  }
+  .auth-back:hover { border-color: currentColor; color: var(--sihha-black); }
+  .auth-eyebrow {
+    margin-bottom: 14px;
+    color: var(--sihha-gray);
+    font-size: 12px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+  }
+  .auth-title {
+    font-family: var(--sihha-font-emphasis);
+    font-size: clamp(38px, 4vw, 56px);
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1;
+  }
+  .auth-intro {
+    max-width: 420px;
+    margin: 18px 0 42px;
+    color: var(--sihha-charcoal);
+    font-size: 16px;
+    line-height: 1.55;
   }
   .screen { display: none; }
   .screen.active { display: block; }
 
-  label {
+  .field-group { margin-bottom: 22px; }
+  .field-group label {
     display: block;
-    font-size: 11px;
-    font-weight: 600;
-    color: #888888;
+    margin-bottom: 8px;
+    color: var(--sihha-charcoal);
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
-    margin-bottom: 6px;
   }
   input[type=text], input[type=password] {
-    width: 100%;
-    background: #ffffff;
-    border: 1px solid #cccccc;
-    color: #111111;
-    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
-    font-size: 15px;
-    padding: 11px 14px;
-    outline: none;
-    margin-bottom: 18px;
-    -webkit-appearance: none;
-    border-radius: 0;
+    min-height: 56px;
   }
-  input:focus { border-color: #111111; }
-  input::placeholder { color: #cccccc; }
   button[type=submit], .btn-primary {
     width: 100%;
-    background: #111111;
-    color: #ffffff;
-    border: none;
-    font-family: 'AreaNormal', Helvetica, Arial, sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    padding: 14px;
-    cursor: pointer;
-    letter-spacing: 0.5px;
+    min-height: 56px;
+    margin-top: 8px;
     text-transform: uppercase;
-    margin-top: 4px;
-    border-radius: 0;
   }
-  button[type=submit]:hover { background: #333333; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
   .error-msg {
-    background: #fff5f5;
-    border: 1px solid #ffcccc;
-    color: #cc0000;
-    font-size: 13px;
-    padding: 10px 14px;
-    margin-bottom: 18px;
     display: none;
+    margin-bottom: 24px;
+    border-left: 3px solid var(--sihha-danger);
+    padding: 12px 14px;
+    background: #fff4f4;
+    color: var(--sihha-danger);
+    font-size: 14px;
+    line-height: 1.45;
   }
   .error-msg.visible { display: block; }
-  .success-msg {
-    background: #f5fff5;
-    border: 1px solid #ccffcc;
-    color: #006600;
-    font-size: 13px;
-    padding: 10px 14px;
-    margin-bottom: 18px;
-    display: none;
-  }
-  .success-msg.visible { display: block; }
   .password-hint {
-    font-size: 12px;
-    color: #888888;
-    margin-top: -12px;
-    margin-bottom: 18px;
-    line-height: 1.5;
-  }
-  .rule { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
-  .rule .dot { width: 6px; height: 6px; border-radius: 50%; background: #cccccc; flex-shrink: 0; }
-  .rule.ok .dot { background: #1a7a3c; }
-  .rule.ok span { color: #888888; }
-  .screen-title {
-    font-family: 'AreaExtrabold', Helvetica, Arial, sans-serif;
-    font-size: 18px;
-    font-weight: 800;
-    margin-bottom: 6px;
-  }
-  .screen-sub {
+    margin: -8px 0 22px;
+    color: var(--sihha-gray);
     font-size: 13px;
-    color: #888888;
-    margin-bottom: 28px;
-    line-height: 1.5;
+    line-height: 1.55;
+  }
+  .rule { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+  .rule .dot { width: 7px; height: 7px; background: var(--sihha-line); flex-shrink: 0; }
+  .rule.ok .dot { background: var(--sihha-success); }
+  .rule.ok span { color: var(--sihha-charcoal); }
+  .screen-title {
+    font-family: var(--sihha-font-emphasis);
+    font-size: clamp(34px, 3.5vw, 48px);
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1.05;
+  }
+  .screen-title:focus { outline: none; }
+  .screen-sub {
+    margin: 16px 0 36px;
+    color: var(--sihha-charcoal);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .auth-support {
+    margin-top: 28px;
+    border-top: 1px solid var(--sihha-line);
+    padding-top: 20px;
+    color: var(--sihha-gray);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .auth-support a {
+    color: var(--sihha-black);
+    text-underline-offset: 3px;
+  }
+
+  @media (max-width: 900px) {
+    .auth-shell { grid-template-columns: 1fr; }
+    .brand-panel { min-height: 310px; padding: 30px clamp(24px, 7vw, 56px); }
+    .brand-message { margin: 50px 0 32px; }
+    .brand-title { max-width: 680px; font-size: clamp(40px, 8vw, 62px); }
+    .brand-copy { margin-top: 18px; font-size: 15px; }
+    .brand-values { display: none; }
+    .auth-panel { padding: 64px 24px 80px; }
+    .auth-back { margin-bottom: 54px; }
+  }
+
+  @media (max-width: 520px) {
+    .brand-panel { min-height: 248px; padding: 26px 22px; }
+    .brand-wordmark { font-size: 44px; }
+    .brand-message { margin: 38px 0 8px; }
+    .brand-kicker { margin-bottom: 12px; font-size: 10px; }
+    .brand-title { font-size: 38px; line-height: 1; }
+    .brand-copy { display: none; }
+    .auth-panel { align-items: flex-start; padding: 42px 22px 64px; }
+    .auth-back { margin-bottom: 46px; }
+    .auth-title { font-size: 38px; }
+    .auth-intro { margin: 15px 0 34px; font-size: 15px; }
+  }
+
+  @media (forced-colors: active) {
+    .brand-panel, .sihha-button { border: 1px solid ButtonText; }
   }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="logo">Sihha</div>
-  <div class="tagline">Ops Hub — Sign In</div>
+<main class="auth-shell">
+  <section class="brand-panel" aria-labelledby="brand-title">
+    <a class="brand-wordmark sihha-wordmark sihha-focus" href="https://www.sihha.org" aria-label="Sihha home">sihha</a>
+    <div class="brand-message">
+      <p class="brand-kicker">Community food support</p>
+      <h1 class="brand-title" id="brand-title">Care, delivered with dignity.</h1>
+      <p class="brand-copy">A private, secure place for families, volunteers, and staff to coordinate food assistance in our community.</p>
+    </div>
+    <p class="brand-values">Dignity&nbsp;&nbsp;·&nbsp;&nbsp;Privacy&nbsp;&nbsp;·&nbsp;&nbsp;Community</p>
+  </section>
 
-  <!-- Screen 1: Login -->
-  <div id="screen-login" class="screen active">
-    <div id="login-error" class="error-msg"></div>
-    <form id="login-form" autocomplete="on">
-      <label>Username</label>
-      <input type="text" id="username" name="username" placeholder="your.username" autocomplete="username" required>
-      <label>Password</label>
-      <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password" required>
-      <button type="submit" id="login-btn">Sign In</button>
-    </form>
-  </div>
+  <section class="auth-panel" aria-label="Account access">
+    <div class="auth-frame">
+      <a class="auth-back sihha-focus" href="https://www.sihha.org">← Back to sihha.org</a>
 
-  <!-- Screen 2: Set Password (first login or forced reset) -->
-  <div id="screen-set-password" class="screen">
-    <div class="screen-title">Set Your Password</div>
-    <div class="screen-sub" id="set-pw-reason">Choose a secure password for your account.</div>
-    <div id="set-pw-error" class="error-msg"></div>
-    <form id="set-password-form" autocomplete="off">
-      <label>New Password</label>
-      <input type="password" id="new-password" placeholder="Min 8 chars" autocomplete="new-password" required oninput="checkRules()">
-      <div class="password-hint">
-        <div class="rule" id="rule-len"><div class="dot"></div><span>At least 8 characters</span></div>
-        <div class="rule" id="rule-upper"><div class="dot"></div><span>One uppercase letter</span></div>
-        <div class="rule" id="rule-digit"><div class="dot"></div><span>One number</span></div>
-        <div class="rule" id="rule-special"><div class="dot"></div><span>One special character (!@#$%^&amp;*)</span></div>
+      <!-- Screen 1: Login -->
+      <div id="screen-login" class="screen active" aria-hidden="false">
+        <p class="auth-eyebrow">Secure account access</p>
+        <h2 class="auth-title">Welcome back</h2>
+        <p class="auth-intro">Families, volunteers, and staff use the same secure sign-in.</p>
+        <div id="login-error" class="error-msg" role="alert" aria-live="polite"></div>
+        <form id="login-form" autocomplete="on">
+          <div class="field-group">
+            <label for="username">Username</label>
+            <input class="sihha-field" type="text" id="username" name="username" placeholder="Enter your username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+          </div>
+          <div class="field-group">
+            <label for="password">Password</label>
+            <input class="sihha-field" type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
+          </div>
+          <button class="sihha-button" type="submit" id="login-btn">Sign In</button>
+        </form>
+        <p class="auth-support">Need help accessing your account? Contact your Sihha coordinator or email <a class="sihha-focus" href="mailto:info@sihha.org">info@sihha.org</a>.</p>
       </div>
-      <label>Confirm Password</label>
-      <input type="password" id="confirm-password" placeholder="Repeat password" autocomplete="new-password" required>
-      <button type="submit" id="set-pw-btn" disabled>Set Password</button>
-    </form>
-  </div>
-</div>
+
+      <!-- Screen 2: Set Password (first login or forced reset) -->
+      <div id="screen-set-password" class="screen" aria-hidden="true">
+        <p class="auth-eyebrow">Secure account access</p>
+        <h2 class="screen-title" tabindex="-1">Set your password</h2>
+        <p class="screen-sub" id="set-pw-reason">Choose a secure password for your account.</p>
+        <div id="set-pw-error" class="error-msg" role="alert" aria-live="polite"></div>
+        <form id="set-password-form" autocomplete="off">
+          <div class="field-group">
+            <label for="new-password">New password</label>
+            <input class="sihha-field" type="password" id="new-password" placeholder="Enter a secure password" autocomplete="new-password" required oninput="checkRules()" aria-describedby="password-requirements">
+          </div>
+          <div class="password-hint" id="password-requirements" aria-live="polite">
+            <div class="rule" id="rule-len"><div class="dot" aria-hidden="true"></div><span>At least 8 characters</span></div>
+            <div class="rule" id="rule-upper"><div class="dot" aria-hidden="true"></div><span>One uppercase letter</span></div>
+            <div class="rule" id="rule-digit"><div class="dot" aria-hidden="true"></div><span>One number</span></div>
+            <div class="rule" id="rule-special"><div class="dot" aria-hidden="true"></div><span>One special character (!@#$%^&amp;*)</span></div>
+          </div>
+          <div class="field-group">
+            <label for="confirm-password">Confirm password</label>
+            <input class="sihha-field" type="password" id="confirm-password" placeholder="Repeat your password" autocomplete="new-password" required>
+          </div>
+          <button class="sihha-button" type="submit" id="set-pw-btn" disabled>Set Password</button>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
 
 <script>
   const API = '';
@@ -198,7 +307,6 @@
       if (data.must_change_password) {
         // Transition to set-password screen
         tempToken = data.temp_token;
-        const isExpired = !data.user; // no user means token-expired edge case
         document.getElementById('set-pw-reason').textContent =
           'Your password has expired or this is your first login. Please set a new password.';
         showScreen('screen-set-password');
@@ -268,7 +376,9 @@
     };
     let allOk = true;
     for (const [id, ok] of Object.entries(rules)) {
-      document.getElementById(id).classList.toggle('ok', ok);
+      const rule = document.getElementById(id);
+      rule.classList.toggle('ok', ok);
+      rule.setAttribute('aria-label', `${ok ? 'Requirement met' : 'Requirement not met'}: ${rule.querySelector('span').textContent}`);
       if (!ok) allOk = false;
     }
     document.getElementById('set-pw-btn').disabled = !allOk;
@@ -276,8 +386,15 @@
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   function showScreen(id) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('.screen').forEach(s => {
+      const active = s.id === id;
+      s.classList.toggle('active', active);
+      s.setAttribute('aria-hidden', String(!active));
+    });
+    if (id === 'screen-set-password') {
+      document.querySelector('.auth-panel').scrollIntoView({block: 'start'});
+      document.querySelector('#screen-set-password .screen-title').focus();
+    }
   }
 
   function showError(id, msg) {

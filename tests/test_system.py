@@ -1039,6 +1039,12 @@ class TestPages:
     def test_login_page_loads(self, client):
         res = client.get('/login')
         assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert 'Care, delivered with dignity.' in page
+        assert 'for="username"' in page
+        assert 'for="password"' in page
+        assert 'role="alert"' in page
+        assert 'aria-live="polite"' in page
 
     def test_family_page_loads(self, client):
         res = client.get('/family')

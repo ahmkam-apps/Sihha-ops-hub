@@ -1,14 +1,103 @@
-/* Sihha Ops Hub — shared base styles (fonts + reset). Page-specific theme vars stay inline per page. */
+/* Sihha Ops Hub — shared Sihha design foundation.
+   Page-specific layouts stay inline per page; brand tokens and reusable primitives live here. */
+
+@font-face {
+  font-family: 'SihhaWordmark';
+  src: url('https://static.wixstatic.com/ufonts/2e5170_96a1e4d68ba54da5a7c2e80ef439b967/woff2/file.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'AreaThin';
+  src: url('https://static.wixstatic.com/ufonts/2e5170_47431c8f09314586baa81d1ff3b46361/woff2/file.woff2') format('woff2');
+  font-weight: 300; font-style: normal; font-display: swap;
+}
 
 @font-face {
   font-family: 'AreaExtrabold';
   src: url('https://static.wixstatic.com/ufonts/2e5170_b7dd1a41ae7e481ca8d80cdf3858d08b/woff2/file.woff2') format('woff2');
-  font-weight: 800; font-style: normal;
+  font-weight: 800; font-style: normal; font-display: swap;
 }
 @font-face {
   font-family: 'AreaNormal';
   src: url('https://static.wixstatic.com/ufonts/2e5170_6263df7a2b874b8c9a621cc0eefc5ab8/woff2/file.woff2') format('woff2');
-  font-weight: 400; font-style: normal;
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+
+:root {
+  --sihha-black: #000000;
+  --sihha-ink: #111111;
+  --sihha-charcoal: #404040;
+  --sihha-gray: #7a7a7a;
+  --sihha-line: #d8d8d8;
+  --sihha-mist: #f1f1f1;
+  --sihha-white: #ffffff;
+  --sihha-success: #176a39;
+  --sihha-warning: #8a5700;
+  --sihha-danger: #a51d1d;
+  --sihha-font-wordmark: 'SihhaWordmark', 'AreaNormal', Helvetica, Arial, sans-serif;
+  --sihha-font-display: 'AreaThin', 'AreaNormal', Helvetica, Arial, sans-serif;
+  --sihha-font-body: 'AreaNormal', Helvetica, Arial, sans-serif;
+  --sihha-font-emphasis: 'AreaExtrabold', 'AreaNormal', Helvetica, Arial, sans-serif;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+button, input, select, textarea { font: inherit; }
+
+.sihha-wordmark {
+  font-family: var(--sihha-font-wordmark);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.sihha-focus:focus-visible,
+.sihha-button:focus-visible,
+.sihha-field:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 3px;
+}
+
+.sihha-button {
+  min-height: 52px;
+  border: 1px solid var(--sihha-black);
+  border-radius: 0;
+  padding: 14px 20px;
+  background: var(--sihha-black);
+  color: var(--sihha-white);
+  cursor: pointer;
+  font-family: var(--sihha-font-body);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+.sihha-button:hover { background: var(--sihha-charcoal); }
+.sihha-button:disabled { cursor: not-allowed; opacity: 0.45; }
+.sihha-button-outline { background: transparent; color: var(--sihha-black); }
+.sihha-button-outline:hover { background: var(--sihha-mist); }
+
+.sihha-field {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid var(--sihha-gray);
+  border-radius: 0;
+  padding: 13px 15px;
+  background: var(--sihha-white);
+  color: var(--sihha-ink);
+  font-family: var(--sihha-font-body);
+  font-size: 16px;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.sihha-field:focus { border-color: var(--sihha-black); }
+.sihha-field::placeholder { color: #a3a3a3; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
