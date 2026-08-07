@@ -1049,6 +1049,12 @@ class TestPages:
     def test_family_page_loads(self, client):
         res = client.get('/family')
         assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert '/css/family.css' in page
+        assert 'class="logo sihha-wordmark"' in page
+        assert 'role="tablist"' in page
+        assert 'aria-controls="tab-deliveries"' in page
+        assert 'Your information is private' in page
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1109,6 +1115,7 @@ class TestOrderPage:
         # Find open cycle
         open_cycle = next((c for c in data['cycles'] if c.get('can_place_order')), None)
         assert open_cycle is not None, 'Expected at least one open cycle'
+        assert open_cycle['request_close_at'] == '2099-12-31T23:59:00'
         # Items grouped by category inside the open cycle
         assert len(open_cycle['items_for_selection']) >= 3  # Grains, Protein, Produce
         item = open_cycle['items_for_selection'][0]['items'][0]

@@ -7705,6 +7705,7 @@ def check_food_order_eligibility():
             'status':               cycle['status'],
             'delivery_date_start':  cycle['delivery_date_start'],
             'delivery_date_end':    cycle['delivery_date_end'],
+            'request_close_at':     cycle['request_close_at'],
             'order':                None,
             'can_place_order':      False,
             'items_for_selection':  [],

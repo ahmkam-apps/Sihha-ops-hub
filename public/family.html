@@ -494,42 +494,84 @@
   .pill-cancelled  { background: #fdecea; color: var(--red); }
   .no-history { font-size: 14px; color: var(--gray-4); text-align: center; padding: 32px 0; }
 </style>
+<link rel="stylesheet" href="/css/family.css">
 </head>
 <body>
 
-<header>
-  <a class="logo" href="https://www.sihha.org">sihha</a>
-  <button class="lang-toggle" onclick="toggleLang()" id="lang-btn">عربي</button>
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand-lockup">
+      <a class="logo sihha-wordmark" href="https://www.sihha.org" aria-label="Sihha home">sihha</a>
+      <span class="portal-label" data-en="Family portal" data-ar="بوابة العائلة">Family portal</span>
+    </div>
+    <div class="header-actions">
+      <button class="lang-toggle" type="button" onclick="toggleLang()" id="lang-btn"
+        aria-label="عرض البوابة باللغة العربية">عربي</button>
+      <button class="btn-logout" type="button" onclick="doLogout()" id="header-logout" hidden
+        data-en="Sign out" data-ar="تسجيل الخروج">Sign out</button>
+    </div>
+  </div>
 </header>
 
 <!-- ── Login redirect (no UI — handled by /login) ── -->
 <div id="login-screen" style="display:none"></div>
 
+<!-- ── Pending account state ── -->
+<main class="pending-screen" id="pending-screen" hidden>
+  <section class="pending-card" aria-labelledby="pending-title">
+    <div class="pending-eyebrow" data-en="Family support" data-ar="دعم العائلات">Family support</div>
+    <h1 id="pending-title" data-en="Application pending." data-ar="طلبك قيد المراجعة.">Application pending.</h1>
+    <p id="pending-message"
+      data-en="Your account is awaiting approval. Please contact Sihha if you need help."
+      data-ar="حسابك بانتظار الموافقة. يرجى التواصل مع صحة إذا كنت بحاجة إلى مساعدة.">
+      Your account is awaiting approval. Please contact Sihha if you need help.
+    </p>
+    <a href="/login" data-en="Back to sign in" data-ar="العودة إلى تسجيل الدخول">Back to sign in</a>
+  </section>
+</main>
+
 <!-- ── Dashboard ── -->
 <div id="dashboard">
-  <div class="container">
+  <main class="container">
+    <section class="portal-intro" aria-labelledby="portal-title">
+      <div>
+        <div class="portal-eyebrow" data-en="My Sihha" data-ar="صحتي">My Sihha</div>
+        <h1 class="portal-title" id="portal-title">
+          <span data-en="Welcome," data-ar="مرحباً،">Welcome,</span><br>
+          <span class="portal-title-name" id="family-name-display"></span>
+        </h1>
+      </div>
+      <div>
+        <p class="intro-copy"
+          data-en="See your next grocery delivery, choose what your household needs, and follow each request in one place."
+          data-ar="اطّلع على موعد توصيل البقالة القادم، واختر احتياجات أسرتك، وتابع كل طلب في مكان واحد.">
+          See your next grocery delivery, choose what your household needs, and follow each request in one place.
+        </p>
+        <p class="privacy-note"
+          data-en="Your information is private and visible only to the Sihha team and volunteers assigned to your delivery."
+          data-ar="معلوماتك خاصة ولا يراها إلا فريق صحة والمتطوعون المكلّفون بتوصيل طلبك.">
+          Your information is private and visible only to the Sihha team and volunteers assigned to your delivery.
+        </p>
+      </div>
+    </section>
 
-    <div class="greeting">
-      <span><span data-en="Welcome," data-ar="مرحباً،">Welcome,</span> <strong id="family-name-display"></strong></span>
-      <button class="btn-logout" onclick="doLogout()" data-en="Sign out" data-ar="تسجيل الخروج">Sign out</button>
-    </div>
-
-    <div class="tab-bar">
+    <nav class="tab-bar" role="tablist" aria-label="Family portal sections" onkeydown="handleTabKeys(event)">
       <button class="tab-btn active" id="tab-btn-deliveries" onclick="switchTab('deliveries')"
-        data-en="MY DELIVERIES" data-ar="طلباتي">MY DELIVERIES</button>
+        type="button" role="tab" aria-selected="true" aria-controls="tab-deliveries"
+        data-en="My deliveries" data-ar="طلباتي">My deliveries</button>
       <button class="tab-btn" id="tab-btn-history" onclick="switchTab('history')"
-        data-en="HISTORY" data-ar="السجل">HISTORY</button>
-    </div>
+        type="button" role="tab" aria-selected="false" aria-controls="tab-history" tabindex="-1"
+        data-en="History" data-ar="السجل">History</button>
+    </nav>
 
-    <div id="tab-deliveries">
+    <section id="tab-deliveries" role="tabpanel" aria-labelledby="tab-btn-deliveries">
       <div id="cycles-list"></div>
-    </div>
+    </section>
 
-    <div id="tab-history" style="display:none">
+    <section id="tab-history" role="tabpanel" aria-labelledby="tab-btn-history" hidden>
       <div id="history-list"></div>
-    </div>
-
-  </div>
+    </section>
+  </main>
 </div>
 
 <script>
@@ -543,13 +585,15 @@ function applyLang() {
   const root = document.getElementById('html-root');
   root.lang = currentLang;
   root.dir  = currentLang === 'ar' ? 'rtl' : 'ltr';
-  document.getElementById('lang-btn').textContent = currentLang === 'en' ? 'عربي' : 'EN';
+  const langBtn = document.getElementById('lang-btn');
+  langBtn.textContent = currentLang === 'en' ? 'عربي' : 'EN';
+  langBtn.setAttribute('aria-label', currentLang === 'en'
+    ? 'عرض البوابة باللغة العربية'
+    : 'View the portal in English');
+  document.title = currentLang === 'ar' ? 'طلباتي — صحة' : 'My Deliveries — Sihha';
   document.querySelectorAll('[data-en]').forEach(el => {
     el.textContent = el.getAttribute('data-' + currentLang) || el.getAttribute('data-en');
   });
-  const phoneInput = document.getElementById('phone-input');
-  if (phoneInput) phoneInput.placeholder =
-    currentLang === 'ar' ? 'مثال: 5551234567' : 'e.g. 5551234567';
   if (STATE.familyId) renderAll();
 }
 
@@ -562,11 +606,6 @@ const STATE = {
   cycles:   [],
   history:  [],
   activeTab: 'deliveries',
-};
-
-const BUNDLE_LABELS = {
-  en: { S: 'Small bundle', M: 'Medium bundle', L: 'Large bundle' },
-  ar: { S: 'طرد صغير',     M: 'طرد متوسط',    L: 'طرد كبير' }
 };
 
 // Tracks which items were pre-selected when each order form first opened.
@@ -643,18 +682,15 @@ async function _loadAndShow() {
       return;
     }
     if (res.status === 403 && data.error === 'account_pending') {
-      // Family account exists but not yet approved by admin — show message, don't loop
-      document.getElementById('app').style.display = 'none';
-      document.getElementById('login-screen') && (document.getElementById('login-screen').style.display = 'none');
-      document.body.innerHTML = `
-        <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;background:#f8f8f8">
-          <div style="max-width:360px;text-align:center;padding:40px 24px">
-            <div style="font-size:40px;margin-bottom:16px">⏳</div>
-            <h2 style="margin:0 0 12px;font-size:20px">Application Pending</h2>
-            <p style="color:#666;line-height:1.6;margin:0 0 24px">${data.message || 'Your account is pending approval. Please contact SIHAA.'}</p>
-            <a href="/login" style="color:#000;font-size:14px;text-decoration:underline">← Back to Login</a>
-          </div>
-        </div>`;
+      // Family account exists but is not yet approved. Keep the portal shell so
+      // the state remains branded, bilingual, and accessible.
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('login-screen').style.display = 'none';
+      const pendingMessage = document.getElementById('pending-message');
+      pendingMessage.setAttribute('data-en', data.message || 'Your account is awaiting approval. Please contact Sihha if you need help.');
+      document.getElementById('pending-screen').hidden = false;
+      document.getElementById('header-logout').hidden = false;
+      applyLang();
       return;
     }
     if (!data.registered) {
@@ -669,6 +705,8 @@ async function _loadAndShow() {
     STATE.history    = data.history || [];
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('dashboard').style.display    = 'block';
+    document.getElementById('pending-screen').hidden      = true;
+    document.getElementById('header-logout').hidden       = false;
     renderAll();
   } catch(e) {
     window.location.href = '/login';
@@ -711,10 +749,40 @@ function closeFamilyPreview() {
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   STATE.activeTab = tab;
-  document.getElementById('tab-deliveries').style.display = tab === 'deliveries' ? 'block' : 'none';
-  document.getElementById('tab-history').style.display    = tab === 'history'    ? 'block' : 'none';
-  document.getElementById('tab-btn-deliveries').classList.toggle('active', tab === 'deliveries');
-  document.getElementById('tab-btn-history').classList.toggle('active', tab === 'history');
+  const deliveriesActive = tab === 'deliveries';
+  const deliveriesPanel = document.getElementById('tab-deliveries');
+  const historyPanel = document.getElementById('tab-history');
+  const deliveriesBtn = document.getElementById('tab-btn-deliveries');
+  const historyBtn = document.getElementById('tab-btn-history');
+  deliveriesPanel.hidden = !deliveriesActive;
+  historyPanel.hidden = deliveriesActive;
+  deliveriesBtn.classList.toggle('active', deliveriesActive);
+  historyBtn.classList.toggle('active', !deliveriesActive);
+  deliveriesBtn.setAttribute('aria-selected', String(deliveriesActive));
+  historyBtn.setAttribute('aria-selected', String(!deliveriesActive));
+  deliveriesBtn.tabIndex = deliveriesActive ? 0 : -1;
+  historyBtn.tabIndex = deliveriesActive ? -1 : 0;
+}
+
+function handleTabKeys(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const tabs = [
+    document.getElementById('tab-btn-deliveries'),
+    document.getElementById('tab-btn-history')
+  ];
+  const current = tabs.indexOf(document.activeElement);
+  if (current < 0) return;
+  event.preventDefault();
+  let next = current;
+  if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = tabs.length - 1;
+  else {
+    const visualStep = event.key === 'ArrowRight' ? 1 : -1;
+    const directionStep = currentLang === 'ar' ? -visualStep : visualStep;
+    next = (current + directionStep + tabs.length) % tabs.length;
+  }
+  tabs[next].focus();
+  tabs[next].click();
 }
 
 // ── Render all ─────────────────────────────────────────────────────────────────
@@ -728,10 +796,10 @@ function renderAll() {
     if (!banner) {
       banner = document.createElement('div');
       banner.id = 'admin-preview-banner';
-      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f0a500;color:#000;text-align:center;padding:6px 12px;font-size:13px;font-weight:700;';
+      banner.className = 'admin-preview-banner';
       banner.innerHTML = '🔑 Admin Preview Mode — viewing as family. <a href="javascript:void(0)" onclick="closeFamilyPreview()" style="color:#000;text-decoration:underline;margin-left:12px">Close Preview</a>';
       document.body.prepend(banner);
-      document.body.style.paddingTop = '34px';
+      document.body.classList.add('has-admin-preview');
     }
   }
   document.querySelectorAll('[data-en]').forEach(el => {
@@ -748,9 +816,8 @@ function renderDeliveries() {
   if (!STATE.cycles.length) {
     container.innerHTML = `
       <div class="no-cycles">
-        <div style="font-size:22px;margin-bottom:8px;">📦</div>
-        <div>${L === 'ar' ? 'لا توجد تسليمات قادمة.' : 'No upcoming deliveries.'}</div>
-        <div style="font-size:13px;margin-top:6px;color:var(--gray-4)">${L === 'ar' ? 'تحقق مجدداً قريباً.' : 'Check back soon.'}</div>
+        <div class="empty-title">${L === 'ar' ? 'لا توجد تسليمات قادمة.' : 'No upcoming deliveries.'}</div>
+        <div>${L === 'ar' ? 'تحقق مجدداً قريباً.' : 'Check back soon.'}</div>
       </div>`;
     return;
   }
@@ -762,8 +829,7 @@ function renderDeliveries() {
   // Everything without an order
   const noOrder    = STATE.cycles.filter(c => !c.order);
 
-  const sectionLabel = (text) =>
-    `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--gray-4);margin:18px 0 8px;">${text}</div>`;
+  const sectionLabel = (text) => `<div class="cycle-section-label">${text}</div>`;
 
   let html = '';
 
@@ -796,6 +862,15 @@ function fmtDate(s) {
     : `${months[mi]} ${parseInt(d)}, ${y}`;
 }
 
+function fmtDeadline(s) {
+  if (!s) return '';
+  const dt = new Date(s);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toLocaleString(currentLang === 'ar' ? 'ar-SA' : 'en-US', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+  });
+}
+
 function renderCycleCard(cycle) {
   const L   = currentLang;
   const ord = cycle.order;
@@ -805,7 +880,7 @@ function renderCycleCard(cycle) {
   if (ord) {
     const s = ord.status;
     if (['confirmed','auto_confirmed','submitted','pending_confirmation'].includes(s)) {
-      badgeClass = 'badge-confirmed'; badgeText = L === 'ar' ? '✓ مؤكد' : '✓ Confirmed';
+      badgeClass = 'badge-confirmed'; badgeText = L === 'ar' ? 'مؤكد' : 'Confirmed';
     } else if (s === 'cancelled') {
       badgeClass = 'badge-cancelled'; badgeText = L === 'ar' ? 'ملغي' : 'Cancelled';
     } else if (s === 'skipped') {
@@ -822,6 +897,12 @@ function renderCycleCard(cycle) {
   }
 
   const dateStr = `${fmtDate(cycle.delivery_date_start)} – ${fmtDate(cycle.delivery_date_end)}`;
+  const deadline = cycle.status === 'open' && cycle.request_close_at
+    ? fmtDeadline(cycle.request_close_at)
+    : '';
+  const deadlineHtml = deadline
+    ? `<div class="cycle-deadline">${L === 'ar' ? 'آخر موعد للطلب' : 'Order by'} ${escHtml(deadline)}</div>`
+    : '';
 
   let bodyHtml = '';
 
@@ -839,11 +920,14 @@ function renderCycleCard(cycle) {
     <div class="cycle-card" id="card-${escHtml(cycle.id)}">
       <div class="cycle-card-header">
         <div class="cycle-card-meta">
-          <div class="cycle-card-label">${L === 'ar' ? 'تسليم' : 'Delivery'}</div>
+          <div class="cycle-card-label">${L === 'ar' ? 'موعد التسليم' : 'Delivery window'}</div>
           <div class="cycle-card-title">${escHtml(cycle.title)}</div>
           <div class="cycle-card-dates">${escHtml(dateStr)}</div>
         </div>
-        <span class="status-badge ${badgeClass}">${escHtml(badgeText)}</span>
+        <div class="cycle-status-stack">
+          <span class="status-badge ${badgeClass}">${escHtml(badgeText)}</span>
+          ${deadlineHtml}
+        </div>
       </div>
       <div class="cycle-card-body">${bodyHtml}</div>
     </div>`;
@@ -853,7 +937,6 @@ function renderCycleCard(cycle) {
 function renderPlaceOrderBody(cycle) {
   const L      = currentLang;
   const cid    = cycle.id;
-  const bLbl   = BUNDLE_LABELS[L][STATE.bundleSize] || STATE.bundleSize || 'M';
   const budget = cycle.bundle_budget || 0;
 
   const itemsHtml = cycle.items_for_selection.map(cat => `
@@ -871,13 +954,21 @@ function renderPlaceOrderBody(cycle) {
           <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
                data-price="${item.price || 0}" data-allow-qty="1"
                data-group="${escHtml(groupId)}" data-group-max="${groupMax}"
+               role="group" aria-label="${escHtml(item.name)}"
                onclick="toggleItem(this,'${escHtml(cid)}')">
-            <div class="item-check"></div>
+            <button class="item-check" type="button"
+              aria-label="${L === 'ar' ? 'اختيار ' : 'Select '}${escHtml(item.name)}"
+              aria-pressed="${isDefault ? 'true' : 'false'}"></button>
             <div class="item-name">${escHtml(item.name)}</div>
             <div class="item-qty-ctrl" onclick="event.stopPropagation()">
-              <button class="qty-btn" onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',-1)">−</button>
-              <span class="qty-val" id="qty-${escHtml(cid)}-${escHtml(item.id)}">${item.default_qty || (isDefault ? 1 : 0)}</span>
-              <button class="qty-btn" onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',1)">+</button>
+              <button class="qty-btn" type="button"
+                aria-label="${L === 'ar' ? 'تقليل كمية ' : 'Decrease quantity for '}${escHtml(item.name)}"
+                onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',-1)">−</button>
+              <span class="qty-val" id="qty-${escHtml(cid)}-${escHtml(item.id)}"
+                aria-live="polite">${item.default_qty || (isDefault ? 1 : 0)}</span>
+              <button class="qty-btn" type="button"
+                aria-label="${L === 'ar' ? 'زيادة كمية ' : 'Increase quantity for '}${escHtml(item.name)}"
+                onclick="changeQty('${escHtml(cid)}','${escHtml(item.id)}',1)">+</button>
               <span class="qty-unit">${escHtml(item.unit || '')}</span>
             </div>
           </div>`;
@@ -887,12 +978,16 @@ function renderPlaceOrderBody(cycle) {
           <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
                data-price="${item.price || 0}" data-allow-qty="0"
                data-group="${escHtml(groupId)}" data-group-max="${groupMax}"
-               data-is-free-text="1" onclick="toggleItem(this,'${escHtml(cid)}')">
-            <div class="item-check"></div>
+               data-is-free-text="1" role="checkbox" tabindex="0"
+               aria-checked="${isDefault ? 'true' : 'false'}"
+               onclick="toggleItem(this,'${escHtml(cid)}')"
+               onkeydown="handleItemKey(event,this,'${escHtml(cid)}')">
+            <div class="item-check" aria-hidden="true"></div>
             <div class="item-name">${escHtml(item.name)}</div>
           </div>
           <div class="free-text-wrap" id="ft-wrap-${escHtml(cid)}-${escHtml(item.id)}" style="display:${isDefault ? 'block' : 'none'};padding:4px 0 8px 32px;">
             <input type="text" class="free-text-input" id="ft-${escHtml(cid)}-${escHtml(item.id)}"
+              aria-label="${escHtml(item.name)}"
               placeholder="${L === 'ar' ? 'اكتب نوع الفاكهة هنا…' : 'Type the fruit you want…'}"
               style="width:100%;border:1px solid var(--gray-2);padding:8px 10px;font-size:14px;font-family:var(--font-body);"
               onclick="event.stopPropagation()">
@@ -903,8 +998,10 @@ function renderPlaceOrderBody(cycle) {
           <div class="item-row ${selClass}" data-cid="${escHtml(cid)}" data-id="${escHtml(item.id)}"
                data-price="${item.price || 0}" data-allow-qty="0"
                data-group="${escHtml(groupId)}" data-group-max="${groupMax}"
-               onclick="toggleItem(this,'${escHtml(cid)}')">
-            <div class="item-check"></div>
+               role="checkbox" tabindex="0" aria-checked="${isDefault ? 'true' : 'false'}"
+               onclick="toggleItem(this,'${escHtml(cid)}')"
+               onkeydown="handleItemKey(event,this,'${escHtml(cid)}')">
+            <div class="item-check" aria-hidden="true"></div>
             <div class="item-name">${escHtml(item.name)}</div>
             <div class="item-qty">${escHtml(item.unit || '')}</div>
           </div>`;
@@ -916,7 +1013,7 @@ function renderPlaceOrderBody(cycle) {
   const bundleBarHtml = budget > 0 ? `
     <div class="bundle-bar-wrap" id="bundle-bar-wrap-${escHtml(cid)}">
       <div class="bundle-bar-label">
-        <span>${L === 'ar' ? 'طردك' : 'Your bundle'}</span>
+        <span>${L === 'ar' ? 'مساحة الاختيار' : 'Selection allowance'}</span>
         <span class="bundle-bar-limit-msg" id="bundle-limit-msg-${escHtml(cid)}" style="display:none;color:#b00">
           ${L === 'ar' ? 'وصلت إلى حد طردك' : 'You\'ve reached your bundle limit'}
         </span>
@@ -929,27 +1026,30 @@ function renderPlaceOrderBody(cycle) {
     </div>` : '';
 
   return `
-    <div style="font-size:13px;color:var(--gray-4);margin-bottom:12px;">
-      ${L === 'ar' ? `حجم طردك: <strong>${escHtml(bLbl)}</strong>` : `Bundle: <strong>${escHtml(bLbl)}</strong>`}
-    </div>
-    <button class="place-order-btn" onclick="toggleOrderForm('${escHtml(cid)}')">
-      ${L === 'ar' ? '+ الطلب لهذا التسليم' : '+ Order for this delivery'}
+    <p class="selection-intro">
+      ${L === 'ar' ? 'اختر احتياجات أسرتك لهذا التسليم. سنبذل قصارى جهدنا لتوفير اختياراتك.' : 'Choose what your household needs for this delivery. We will do our best to provide your selections.'}
+    </p>
+    <button class="place-order-btn" type="button" id="order-toggle-${escHtml(cid)}"
+      aria-expanded="false" aria-controls="form-${escHtml(cid)}"
+      onclick="toggleOrderForm('${escHtml(cid)}')">
+      ${L === 'ar' ? 'اختر البقالة' : 'Choose groceries'}
     </button>
-    <div class="order-form-panel" id="form-${escHtml(cid)}">
-      <div class="form-section-title">${L === 'ar' ? 'اختر ما تحتاجه' : 'Select what you need'}</div>
+    <div class="order-form-panel" id="form-${escHtml(cid)}" role="region"
+      aria-labelledby="form-title-${escHtml(cid)}" aria-hidden="true">
+      <div class="form-section-title" id="form-title-${escHtml(cid)}" tabindex="-1">${L === 'ar' ? 'اختر ما تحتاجه' : 'Select what you need'}</div>
       ${bundleBarHtml}
       <div id="items-${escHtml(cid)}">${itemsHtml}</div>
       <label class="notes-label" for="notes-${escHtml(cid)}">${L === 'ar' ? 'طلبات خاصة أو ملاحظات (اختياري)' : 'Special requests or notes (optional)'}</label>
       <textarea class="order-notes" id="notes-${escHtml(cid)}" rows="3"
         placeholder="${L === 'ar' ? 'مثال: لا نحتاج أرزاً هذه الدورة، نحتاج حفاضات مقاس 3، حساسية من البيض...' : 'e.g. Please no rice this time, need baby formula, allergic to eggs, prefer whole wheat bread — we\'ll do our best!'}"></textarea>
       <div class="form-actions">
-        <button class="btn-confirm-order" onclick="placeOrder('${escHtml(cid)}')" id="place-btn-${escHtml(cid)}">
+        <button class="btn-confirm-order" type="button" onclick="placeOrder('${escHtml(cid)}')" id="place-btn-${escHtml(cid)}">
           ${L === 'ar' ? 'تأكيد الطلب' : 'Confirm Order'}
         </button>
-        <button class="btn-cancel-form" onclick="toggleOrderForm('${escHtml(cid)}')">
+        <button class="btn-cancel-form" type="button" onclick="toggleOrderForm('${escHtml(cid)}')">
           ${L === 'ar' ? 'إلغاء' : 'Cancel'}
         </button>
-        <span class="form-msg" id="place-msg-${escHtml(cid)}"></span>
+        <span class="form-msg" id="place-msg-${escHtml(cid)}" role="status" aria-live="polite"></span>
       </div>
     </div>`;
 }
@@ -958,7 +1058,11 @@ function toggleOrderForm(cid) {
   const panel = document.getElementById(`form-${cid}`);
   if (panel) {
     panel.classList.toggle('open');
-    if (panel.classList.contains('open')) {
+    const isOpen = panel.classList.contains('open');
+    panel.setAttribute('aria-hidden', String(!isOpen));
+    const toggle = document.getElementById(`order-toggle-${cid}`);
+    if (toggle) toggle.setAttribute('aria-expanded', String(isOpen));
+    if (isOpen) {
       _updateBundleBar(cid);
       // Capture which items were pre-selected on first open (used by toggleItem
       // to allow re-selecting a deselected default without a false budget error).
@@ -967,8 +1071,27 @@ function toggleOrderForm(cid) {
         document.querySelectorAll(`#items-${cid} .item-row.selected`).forEach(r => sel.add(r.dataset.id));
         _initialSelections[cid] = sel;
       }
+      document.getElementById(`form-title-${cid}`)?.focus();
+    } else if (toggle) {
+      toggle.focus();
     }
   }
+}
+
+function handleItemKey(event, row, cid) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    toggleItem(row, cid);
+  }
+}
+
+function updateItemSelectionState(row) {
+  const selected = row.classList.contains('selected');
+  if (row.getAttribute('role') === 'checkbox') {
+    row.setAttribute('aria-checked', String(selected));
+  }
+  const toggle = row.querySelector('.item-check[aria-pressed]');
+  if (toggle) toggle.setAttribute('aria-pressed', String(selected));
 }
 
 function _getBudget(cid) {
@@ -1040,6 +1163,7 @@ function toggleItem(row, cid) {
   }
 
   row.classList.toggle('selected');
+  updateItemSelectionState(row);
 
   // Show/hide free-text input for this item
   if (row.dataset.isFreeText === '1') {
@@ -1079,10 +1203,16 @@ function changeQty(cid, itemId, delta) {
   if (newQty === 0) {
     // Deselect the row when qty hits 0
     el.textContent = 0;
-    if (row) row.classList.remove('selected');
+    if (row) {
+      row.classList.remove('selected');
+      updateItemSelectionState(row);
+    }
   } else {
     el.textContent = newQty;
-    if (row) row.classList.add('selected');
+    if (row) {
+      row.classList.add('selected');
+      updateItemSelectionState(row);
+    }
   }
   _updateBundleBar(cid);
 }
@@ -1117,16 +1247,16 @@ function renderOrderBody(cid, ord) {
         msg = L === 'ar'
           ? 'تم إلغاء هذا الطلب من قِبل الفريق. يمكنك تقديم طلب جديد لهذه الدورة.'
           : 'This order was cancelled by our team. You\'re welcome to place a new order for this delivery.';
-        msgStyle = 'color:var(--amber-border);background:var(--amber-bg);padding:12px 14px;border-radius:8px;border-left:3px solid var(--amber-border);font-size:13px;';
+        msgStyle = ' notice-warning';
       } else {
         msg = L === 'ar' ? 'لقد ألغيت هذا الطلب.' : 'You cancelled this order.';
-        msgStyle = 'color:var(--gray-4)';
+        msgStyle = '';
       }
     } else {
       msg = L === 'ar' ? 'تم تخطي هذه الدورة.' : 'You skipped this cycle.';
-      msgStyle = 'color:var(--gray-4)';
+      msgStyle = '';
     }
-    itemsHtml = `<div class="locked-note" style="${msgStyle}">${msg}</div>`;
+    itemsHtml = `<div class="locked-note${msgStyle}">${msg}</div>`;
   }
 
   // ── Change review result banner ──
@@ -1194,23 +1324,21 @@ function renderOrderBody(cid, ord) {
     const vols = ord.volunteers;
     const slots = [];
     if (vols.shopping) {
-      const icon = vols.shopping.confirmed ? '✓' : '⏳';
       const label = L === 'ar' ? 'المتسوق' : 'Shopper';
       const statusNote = vols.shopping.confirmed
         ? (L === 'ar' ? 'مؤكد' : 'confirmed')
         : (L === 'ar' ? 'في الانتظار' : 'pending your order');
-      slots.push(`<span style="font-size:12px;color:var(--gray-5)">${icon} <strong>${label}:</strong> ${escHtml(vols.shopping.name)} <span style="color:var(--gray-4)">(${statusNote})</span></span>`);
+      slots.push(`<span class="volunteer-assignment"><strong>${label}:</strong> ${escHtml(vols.shopping.name)} <span>(${statusNote})</span></span>`);
     }
     if (vols.delivery) {
-      const icon = vols.delivery.confirmed ? '✓' : '⏳';
       const label = L === 'ar' ? 'المندوب' : 'Delivery';
       const statusNote = vols.delivery.confirmed
         ? (L === 'ar' ? 'مؤكد' : 'confirmed')
         : (L === 'ar' ? 'في الانتظار' : 'pending your order');
-      slots.push(`<span style="font-size:12px;color:var(--gray-5)">${icon} <strong>${label}:</strong> ${escHtml(vols.delivery.name)} <span style="color:var(--gray-4)">(${statusNote})</span></span>`);
+      slots.push(`<span class="volunteer-assignment"><strong>${label}:</strong> ${escHtml(vols.delivery.name)} <span>(${statusNote})</span></span>`);
     }
     if (slots.length) {
-      volHtml = `<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;padding:10px 14px;background:#f7f7f7;border-radius:6px;border-left:3px solid var(--gray-2)">${slots.join('')}</div>`;
+      volHtml = `<div class="volunteer-strip">${slots.join('')}</div>`;
     }
   }
 
@@ -1219,10 +1347,10 @@ function renderOrderBody(cid, ord) {
   if (!isTerminal) {
     let changeBtn = '', cancelBtn = '';
     if (ord.can_request_change && !ord.pending_change_request) {
-      changeBtn = `<button class="btn-request-change" onclick="showCRForm('${escHtml(cid)}')">${L === 'ar' ? 'طلب تعديل' : 'Request Change'}</button>`;
+      changeBtn = `<button class="btn-request-change" type="button" onclick="showCRForm('${escHtml(cid)}')">${L === 'ar' ? 'طلب تعديل' : 'Request Change'}</button>`;
     }
     if (ord.can_cancel) {
-      cancelBtn = `<button class="btn-cancel-order" onclick="cancelOrder('${escHtml(cid)}','${escHtml(ord.id)}')">${L === 'ar' ? 'إلغاء الطلب' : 'Cancel this order'}</button>`;
+      cancelBtn = `<button class="btn-cancel-order" type="button" onclick="cancelOrder('${escHtml(cid)}','${escHtml(ord.id)}')">${L === 'ar' ? 'إلغاء الطلب' : 'Cancel this order'}</button>`;
     }
     if (changeBtn || cancelBtn) {
       actionsHtml = `<div class="order-actions">${changeBtn}${cancelBtn}</div>`;
@@ -1237,9 +1365,9 @@ function renderOrderBody(cid, ord) {
       : (L === 'ar' ? 'لا توجد ملاحظات' : 'No notes added');
     pendingCRHtml = `
       <div class="pending-cr-banner" id="cr-banner-${escHtml(cid)}">
-        <div class="pending-cr-title">${L === 'ar' ? '⏳ طلب تعديل قيد المراجعة' : '⏳ Change Request Pending'}</div>
+        <div class="pending-cr-title">${L === 'ar' ? 'طلب تعديل قيد المراجعة' : 'Change request pending'}</div>
         <div class="pending-cr-notes">${notes}</div>
-        <button class="btn-retract" onclick="retractRequest('${escHtml(cid)}','${escHtml(ord.pending_change_request.id)}','${escHtml(ord.id)}')">${L === 'ar' ? 'سحب الطلب' : 'Retract request'}</button>
+        <button class="btn-retract" type="button" onclick="retractRequest('${escHtml(cid)}','${escHtml(ord.pending_change_request.id)}','${escHtml(ord.id)}')">${L === 'ar' ? 'سحب الطلب' : 'Retract request'}</button>
       </div>`;
   }
 
@@ -1256,11 +1384,11 @@ function renderOrderBody(cid, ord) {
   let notesHtml = '';
   if (ord.family_notes && !isTerminal) {
     notesHtml = `
-      <div style="margin-bottom:12px;padding:10px 14px;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:6px;font-size:13px;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--amber-text);font-weight:700;margin-bottom:4px;">
+      <div class="family-notes">
+        <div class="family-notes-label">
           ${L === 'ar' ? 'ملاحظاتك' : 'Your notes'}
         </div>
-        <div style="color:var(--amber-text);">${escHtml(ord.family_notes)}</div>
+        <div>${escHtml(ord.family_notes)}</div>
       </div>`;
   }
 
@@ -1281,37 +1409,40 @@ function renderCRForm(cid, ord) {
     <div class="item-category">${escHtml(cat.category)}</div>
     ${cat.items.map(item => {
       const checked = defaultAll || selectedNames.has(item.name);
-      return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-bottom:1px solid #f5f5f5;">
+      return `<label class="item-row">
         <input type="checkbox" data-item-id="${escHtml(item.id)}" ${checked ? 'checked' : ''}
-          style="width:16px;height:16px;cursor:pointer;accent-color:#111;">
-        <span style="flex:1;font-size:14px;">${escHtml(item.name)}</span>
-        <span style="font-size:12px;color:#888;">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
+          style="width:18px;height:18px;cursor:pointer;accent-color:#111;">
+        <span class="item-name">${escHtml(item.name)}</span>
+        <span class="item-qty">${escHtml(item.quantity||'')} ${escHtml(item.unit||'')}</span>
       </label>`;
     }).join('')}
   `).join('');
 
   return `
     <div class="cr-form-panel" id="cr-form-${escHtml(cid)}">
-      <div class="form-section-title">${L === 'ar' ? 'طلب تعديل — اختر ما تحتاجه' : 'Request Change — select what you need'}</div>
+      <div class="form-section-title" tabindex="-1">${L === 'ar' ? 'طلب تعديل — اختر ما تحتاجه' : 'Request Change — select what you need'}</div>
       <div id="cr-items-${escHtml(cid)}">${itemsHtml}</div>
       <label class="notes-label" for="cr-notes-${escHtml(cid)}">${L === 'ar' ? 'ملاحظات (اختياري)' : 'Notes (optional)'}</label>
       <textarea class="order-notes" id="cr-notes-${escHtml(cid)}" rows="2"
         placeholder="${L === 'ar' ? 'مثال: لا نحتاج بيض هذه الدورة' : 'e.g. We don\'t need eggs this cycle'}"></textarea>
       <div class="form-actions">
-        <button class="btn-confirm-order" onclick="submitCR('${escHtml(cid)}','${escHtml(ord.id)}')" id="cr-btn-${escHtml(cid)}">
+        <button class="btn-confirm-order" type="button" onclick="submitCR('${escHtml(cid)}','${escHtml(ord.id)}')" id="cr-btn-${escHtml(cid)}">
           ${L === 'ar' ? 'إرسال الطلب' : 'Submit Request'}
         </button>
-        <button class="btn-cancel-form" onclick="hideCRForm('${escHtml(cid)}')">
+        <button class="btn-cancel-form" type="button" onclick="hideCRForm('${escHtml(cid)}')">
           ${L === 'ar' ? 'إلغاء' : 'Cancel'}
         </button>
-        <span class="form-msg" id="cr-msg-${escHtml(cid)}"></span>
+        <span class="form-msg" id="cr-msg-${escHtml(cid)}" role="status" aria-live="polite"></span>
       </div>
     </div>`;
 }
 
 function showCRForm(cid) {
   const panel = document.getElementById(`cr-form-${cid}`);
-  if (panel) panel.classList.add('open');
+  if (panel) {
+    panel.classList.add('open');
+    panel.querySelector('.form-section-title')?.focus();
+  }
 }
 function hideCRForm(cid) {
   const panel = document.getElementById(`cr-form-${cid}`);
@@ -1361,8 +1492,8 @@ function renderEventsSection(cid, events, autoExpand) {
       ? `<div class="event-detail" style="margin-top:2px;">${detailLines.join(' · ')}</div>`
       : '';
 
-    return `<div class="event-row" style="align-items:flex-start;flex-direction:column;gap:1px;padding:6px 0;">
-      <div style="display:flex;justify-content:space-between;width:100%;align-items:baseline;">
+    return `<div class="event-row">
+      <div class="event-summary">
         <span class="event-label">${escHtml(label)}</span>
         <span class="event-time">${escHtml(ts)}</span>
       </div>
@@ -1374,8 +1505,9 @@ function renderEventsSection(cid, events, autoExpand) {
   const toggleLabel = L === 'ar' ? 'سجل الطلب' : 'Order activity';
 
   return `
-    <div style="margin-top:10px;border-top:1px solid var(--gray-2);padding-top:10px;">
-      <button class="events-toggle" onclick="toggleEvents('${escHtml(cid)}')">
+    <div class="events-section">
+      <button class="events-toggle" type="button" onclick="toggleEvents('${escHtml(cid)}')"
+        aria-expanded="${autoExpand ? 'true' : 'false'}" aria-controls="events-${escHtml(cid)}">
         ${escHtml(toggleLabel)} (${filtered.length})
       </button>
       <div class="events-list${expandClass}" id="events-${escHtml(cid)}">${rowsHtml}</div>
@@ -1384,7 +1516,11 @@ function renderEventsSection(cid, events, autoExpand) {
 
 function toggleEvents(cid) {
   const el = document.getElementById(`events-${cid}`);
-  if (el) el.classList.toggle('open');
+  if (el) {
+    el.classList.toggle('open');
+    const btn = document.querySelector(`[aria-controls="events-${cid}"]`);
+    if (btn) btn.setAttribute('aria-expanded', String(el.classList.contains('open')));
+  }
 }
 
 // ── History tab ────────────────────────────────────────────────────────────────
