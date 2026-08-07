@@ -249,80 +249,106 @@
     border: 1px solid var(--gray-2); padding: 32px;
   }
 </style>
+<link rel="stylesheet" href="/css/volunteer.css">
 </head>
 <body>
 
-<div class="header">
-  <div class="header-logo">Sihha · Volunteer</div>
-  <div class="header-right">
-    <span id="vol-name-display"></span>
-    <button class="btn-logout" id="logout-btn" style="display:none" onclick="logout()">Log out</button>
+<header class="site-header">
+ <div class="header-inner">
+  <div class="brand-lockup">
+    <a class="header-logo sihha-wordmark" href="https://www.sihha.org" aria-label="Sihha home">sihha</a>
+    <span class="portal-label">Volunteer portal</span>
   </div>
-</div>
+  <div class="header-right">
+    <span class="volunteer-identity">Signed in as <span id="vol-name-display"></span></span>
+    <button class="btn-logout" id="logout-btn" type="button" hidden onclick="logout()">Sign out</button>
+  </div>
+ </div>
+</header>
 
 <!-- LOGIN SCREEN (redirect only) -->
 <div id="login-screen" style="display:none"></div>
 
 <!-- MAIN APP -->
-<div id="app-screen" style="display:none">
+<div id="app-screen">
+ <main class="volunteer-shell">
+  <section class="portal-intro" aria-labelledby="portal-title">
+    <div>
+      <div class="portal-eyebrow">My Sihha</div>
+      <h1 class="portal-title" id="portal-title">Welcome, <span class="portal-title-name" id="vol-welcome-name"></span></h1>
+    </div>
+    <div>
+      <p class="intro-copy">See your assignments, choose a place to help, and keep track of the families you have served.</p>
+      <p class="privacy-note">Family information appears only when it is needed for your confirmed assignment.</p>
+    </div>
+  </section>
 
-  <!-- 3-TAB BAR -->
-  <div class="tab-bar">
-    <div class="tab active" id="tab-work"    onclick="switchTab('work')">My Work</div>
-    <div class="tab"        id="tab-signup"  onclick="switchTab('signup')">Sign Up</div>
-    <div class="tab"        id="tab-history" onclick="switchTab('history')">History</div>
-  </div>
+  <nav class="tab-bar" role="tablist" aria-label="Volunteer portal sections" onkeydown="handleTabKeys(event)">
+    <button class="tab active" id="tab-work" type="button" role="tab" aria-selected="true" aria-controls="pane-work" tabindex="0" onclick="switchTab('work')">My Work</button>
+    <button class="tab" id="tab-signup" type="button" role="tab" aria-selected="false" aria-controls="pane-signup" tabindex="-1" onclick="switchTab('signup')">Sign Up</button>
+    <button class="tab" id="tab-history" type="button" role="tab" aria-selected="false" aria-controls="pane-history" tabindex="-1" onclick="switchTab('history')">History</button>
+  </nav>
 
-  <!-- MY WORK PANE -->
-  <div id="pane-work" class="container">
+  <section id="pane-work" class="portal-pane container" role="tabpanel" aria-labelledby="tab-work">
+    <div class="pane-heading">
+      <div><div class="section-kicker">Current work</div><h2 class="pane-title">Your assignments</h2></div>
+      <p class="pane-copy">Everything you need for the work you have committed to, in one place.</p>
+    </div>
     <div id="my-work-content"><div class="spinner">Loading…</div></div>
-  </div>
+  </section>
 
-  <!-- SIGN UP PANE -->
-  <div id="pane-signup" class="container" style="display:none">
+  <section id="pane-signup" class="portal-pane container" role="tabpanel" aria-labelledby="tab-signup" hidden>
+    <div class="pane-heading">
+      <div><div class="section-kicker">Open opportunities</div><h2 class="pane-title">Choose where to help</h2></div>
+      <p class="pane-copy">Select shopping or delivery for a family. You can cancel before the task is completed.</p>
+    </div>
     <div class="section-divider"><span id="active-section-label">Active</span></div>
     <div id="slots-content"><div class="spinner">Loading…</div></div>
-    <div class="section-gap" id="upcoming-section-header" style="display:none">
+    <div class="section-gap" id="upcoming-section-header" hidden>
       <div class="section-divider"><span>Upcoming</span></div>
     </div>
     <div id="upcoming-content"></div>
-  </div>
+  </section>
 
-  <!-- HISTORY PANE -->
-  <div id="pane-history" class="container" style="display:none">
+  <section id="pane-history" class="portal-pane container" role="tabpanel" aria-labelledby="tab-history" hidden>
+    <div class="pane-heading">
+      <div><div class="section-kicker">Your impact</div><h2 class="pane-title">Your service</h2></div>
+      <p class="pane-copy">A private record of completed assignments and the care you have contributed.</p>
+    </div>
     <div id="history-content"><div class="spinner">Loading…</div></div>
-  </div>
-
+  </section>
+ </main>
 </div>
 
 <!-- RECEIPT MODAL -->
-<div class="modal-overlay" id="receipt-modal">
-  <div class="modal-sheet">
-    <div class="modal-title">Submit Receipt</div>
+<div class="modal-overlay" id="receipt-modal" role="dialog" aria-modal="true" aria-labelledby="receipt-title" onclick="if (event.target === this) closeReceiptModal()">
+  <div class="modal-sheet" tabindex="-1">
+    <div class="modal-kicker">Shopping record</div>
+    <h2 class="modal-title" id="receipt-title">Submit receipt</h2>
     <div class="field-group">
-      <label>Store Name</label>
+      <label for="r-store">Store name</label>
       <input type="text" id="r-store" placeholder="e.g. Sam's Club, Wegmans">
     </div>
     <div class="field-group">
-      <label>Purchase Date</label>
+      <label for="r-date">Purchase date</label>
       <input type="date" id="r-date">
     </div>
     <div class="field-group">
-      <label>Total Amount ($)</label>
+      <label for="r-amount">Total amount ($)</label>
       <input type="number" id="r-amount" step="0.01" min="0" placeholder="0.00">
     </div>
     <div class="field-group">
-      <label>Receipt Photo</label>
-      <div class="file-upload-area" onclick="document.getElementById('r-file').click()">
-        <div id="r-upload-label">📷 Tap to upload photo (JPG, PNG, PDF)</div>
-        <img id="r-file-preview" class="file-preview" style="display:none">
-      </div>
-      <input type="file" id="r-file" accept="image/*,.pdf,.heic" style="display:none" onchange="handleFileSelect(this)">
+      <label for="r-file">Receipt photo</label>
+      <label class="file-upload-area" for="r-file" tabindex="0" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); document.getElementById('r-file').click(); }">
+        <span id="r-upload-label">Choose a JPG, PNG, PDF, or HEIC file</span>
+        <img id="r-file-preview" class="file-preview" alt="Receipt preview" hidden>
+      </label>
+      <input class="file-input-visually-hidden" type="file" id="r-file" accept="image/*,.pdf,.heic" onchange="handleFileSelect(this)">
     </div>
-    <div id="r-error" style="color:var(--red);font-size:13px;display:none;margin-top:8px"></div>
+    <div class="modal-error" id="r-error" role="alert" aria-live="polite" hidden></div>
     <div class="btn-row">
-      <button class="btn-cancel" onclick="closeReceiptModal()">Cancel</button>
-      <button class="btn btn-green" id="r-submit-btn" onclick="submitReceipt()">Submit</button>
+      <button class="btn-cancel" type="button" onclick="closeReceiptModal()">Cancel</button>
+      <button class="btn btn-green" type="button" id="r-submit-btn" onclick="submitReceipt()">Submit</button>
     </div>
   </div>
 </div>
@@ -362,22 +388,53 @@ function logout() {
 }
 
 async function showApp() {
-  document.getElementById('login-screen').style.display  = 'none';
-  document.getElementById('app-screen').style.display    = 'block';
-  document.getElementById('vol-name-display').textContent = VOL.name;
-  document.getElementById('logout-btn').style.display    = 'inline-block';
+  let volunteerName = VOL.name;
+  if (!volunteerName) {
+    try {
+      const currentUser = await GET('/auth/me');
+      volunteerName = currentUser.name;
+    } catch (_) {
+      volunteerName = 'Volunteer';
+    }
+  }
+  document.getElementById('login-screen').hidden = true;
+  document.getElementById('app-screen').style.display = 'block';
+  document.getElementById('vol-name-display').textContent = volunteerName;
+  document.getElementById('vol-welcome-name').textContent = volunteerName;
+  document.getElementById('logout-btn').hidden = false;
   switchTab('work');
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   ['work','signup','history'].forEach(t => {
-    document.getElementById('tab-' + t).classList.toggle('active', t === tab);
-    document.getElementById('pane-' + t).style.display = t === tab ? '' : 'none';
+    const isActive = t === tab;
+    const tabEl = document.getElementById('tab-' + t);
+    tabEl.classList.toggle('active', isActive);
+    tabEl.setAttribute('aria-selected', String(isActive));
+    tabEl.tabIndex = isActive ? 0 : -1;
+    document.getElementById('pane-' + t).hidden = !isActive;
   });
   if (tab === 'work')    { refreshWork(); startPolling(); }
   if (tab === 'signup')  { stopPolling(); refreshSignup(); }
   if (tab === 'history') { stopPolling(); loadHistory(); }
+}
+
+function handleTabKeys(event) {
+  const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')];
+  const index = tabs.indexOf(document.activeElement);
+  if (index < 0) return;
+
+  let nextIndex = index;
+  if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+  else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+  else if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = tabs.length - 1;
+  else return;
+
+  event.preventDefault();
+  tabs[nextIndex].focus();
+  tabs[nextIndex].click();
 }
 
 // ── Polling ───────────────────────────────────────────────────────────────────
@@ -432,8 +489,9 @@ function renderMyWork(tasks, receipts) {
   if (!active.length) {
     document.getElementById('my-work-content').innerHTML = `
       <div class="empty">
-        No assignments yet.<br>
-        <span class="empty-cta" onclick="switchTab('signup')">Browse open slots →</span>
+        <div class="empty-title">No assignments yet.</div>
+        Your confirmed shopping and delivery work will appear here.
+        <br><button class="empty-cta" type="button" onclick="switchTab('signup')">Browse open opportunities</button>
       </div>`;
     return;
   }
@@ -452,54 +510,55 @@ function renderMyWork(tasks, receipts) {
     const receipt     = receipts.find(r => r.slot_id === t.id);
 
     const statusChip = isDone
-      ? `<span class="work-card-status status-done">✓ Done</span>`
-      : `<span class="work-card-status status-confirmed">✓ Confirmed</span>`;
+      ? `<span class="work-card-status status-done">Done</span>`
+      : `<span class="work-card-status status-confirmed">Confirmed</span>`;
 
     // Address block — delivery only
     const addressBlock = isDelivery && t.address
       ? `<div class="work-card-address">
-           <div class="work-card-address-label">📍 Delivery Address</div>
+           <div class="work-card-address-label">Delivery address</div>
            ${esc(t.address)}, ${esc(t.city || '')}
+           <div class="privacy-context">Visible only because this is your confirmed delivery assignment.</div>
          </div>` : '';
 
     // Shopping list — shopping only
     const itemsBlock = isShopping && t.shopping_items && t.shopping_items.length
       ? `<div class="work-card-items">
-           <div class="work-card-items-label">Shopping List</div>
-           ${t.shopping_items.map(i => `${esc(i.name)} <strong>×${esc(i.qty)}</strong>`).join('<br>')}
+           <div class="work-card-items-label">Shopping list</div>
+           <ul class="shopping-list">
+             ${t.shopping_items.map(i => `<li><span>${esc(i.name)}</span><strong class="shopping-list-qty">×${esc(i.qty)}</strong></li>`).join('')}
+           </ul>
          </div>` : '';
 
     // Action buttons
     let actionHtml = '';
     if (!isDone) {
       if (isShopping) {
-        const btnLabel = receipt ? '✏️  Update Receipt' : '📷  Submit Receipt';
+        const btnLabel = receipt ? 'Update receipt' : 'Submit receipt';
         const btnCls   = receipt ? 'btn-outline' : 'btn btn-green';
-        actionHtml = `<button class="${btnCls}" onclick="openReceiptModal('${t.id}')">${btnLabel}</button>`;
+        actionHtml = `<button class="${btnCls}" type="button" onclick="openReceiptModal('${t.id}')">${btnLabel}</button>`;
         if (receipt) {
-          actionHtml += `<div class="receipt-submitted-note">✓ Receipt submitted — pending review</div>`;
+          actionHtml += `<div class="receipt-submitted-note">Receipt submitted — awaiting review.</div>`;
         }
       } else if (isDelivery) {
-        actionHtml = `<button class="btn-outline" onclick="completeTask('${t.id}')">✓ Mark as Done</button>`;
+        actionHtml = `<button class="btn-outline" type="button" onclick="completeTask('${t.id}')">Mark as done</button>`;
       }
     }
 
-    const opacity = isDone ? 'opacity:0.6;' : '';
-
     return `
-      <div class="work-card" style="${opacity}">
+      <article class="work-card${isDone ? ' is-complete' : ''}">
         <div class="work-card-header">
-          <div class="work-card-role">${roleLabel}</div>
+          <div><div class="work-card-label">Assignment</div><h3 class="work-card-role">${roleLabel}</h3></div>
           ${statusChip}
         </div>
         <div class="work-card-body">
           <div class="work-card-family">${esc(t.family_code || t.family_name || '—')}</div>
-          <div class="work-card-meta">${esc(t.cycle_title)} · ${fmtDate(t.delivery_date_end)}</div>
+          <div class="work-card-meta">${esc(t.cycle_title)} · ${fmtDateRange(t.delivery_date_start, t.delivery_date_end)}</div>
           ${itemsBlock}
           ${addressBlock}
         </div>
         ${actionHtml ? `<div class="work-card-footer">${actionHtml}</div>` : ''}
-      </div>`;
+      </article>`;
   }).join('');
 
   document.getElementById('my-work-content').innerHTML = html;
@@ -559,7 +618,7 @@ function renderFamilySlots(results) {
     const { families, task_types, cycle } = data;
 
     if (multiCycle) {
-      html += `<div style="margin:${idx > 0 ? '20px' : '0'} 0 8px;padding:8px 12px;background:var(--gray-1);border:1px solid var(--gray-2);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;">
+      html += `<div class="cycle-group-label${idx > 0 ? ' cycle-group-label-spaced' : ''}">
         ${esc(cycle.title)} · ${fmtDate(cycle.delivery_date_start)}
       </div>`;
     }
@@ -572,26 +631,24 @@ function renderFamilySlots(results) {
 function buildFamilyRow(fam, task_types, cycle) {
   const orderConfirmed = ['confirmed','submitted','delivered'].includes(fam.order_status);
   const orderChip = orderConfirmed
-    ? `<span class="order-chip order-chip-yes">✓ Order</span>`
-    : `<span class="order-chip order-chip-no">⏳ No order</span>`;
+    ? `<span class="order-chip order-chip-yes">Order ready</span>`
+    : `<span class="order-chip order-chip-no">Order pending</span>`;
 
   const taskBtns = task_types.map(tt => {
     const mySlotId = fam.my_slots?.[tt.slug];
     const takenBy  = fam.taken_by?.[tt.slug];
-    const myStatus = fam.my_status?.[tt.slug];
 
     if (mySlotId) {
-      const bg = 'var(--green)';
-      return `<button class="slot-btn slot-btn-mine" style="background:${bg};"
+      return `<button class="slot-btn slot-btn-mine" type="button"
         onclick="cancelSignup('${mySlotId}','${fam.id}')"
-        title="Click to cancel">
-        ✓ ${esc(tt.label)} ×
+        title="Cancel this sign-up">
+        ${esc(tt.label)}: Yours ×
       </button>`;
     }
     if (takenBy) {
-      return `<span class="slot-btn slot-btn-taken">${esc(tt.label)}: ${esc(takenBy)}</span>`;
+      return `<span class="slot-btn slot-btn-taken">${esc(tt.label)}: Assigned</span>`;
     }
-    return `<button class="slot-btn slot-btn-open"
+    return `<button class="slot-btn slot-btn-open" type="button"
       onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">
       ${esc(tt.label)}
     </button>`;
@@ -600,7 +657,7 @@ function buildFamilyRow(fam, task_types, cycle) {
   return `
     <div class="signup-card">
       <div class="signup-card-left">
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div class="signup-family-line">
           <span class="signup-family-code">${esc(fam.family_code || '—')}</span>
           ${orderChip}
         </div>
@@ -618,18 +675,18 @@ function renderUpcoming(cycles) {
   const header   = document.getElementById('upcoming-section-header');
   const wrap     = document.getElementById('upcoming-content');
 
-  if (!upcoming.length) { header.style.display = 'none'; wrap.innerHTML = ''; return; }
-  header.style.display = '';
+  if (!upcoming.length) { header.hidden = true; wrap.innerHTML = ''; return; }
+  header.hidden = false;
 
   wrap.innerHTML = upcoming.map(c => `
-    <div style="margin-bottom:8px;" id="upcoming-row-${c.id}">
-      <div class="cycle-header" onclick="toggleUpcoming('${c.id}')">
+    <div class="upcoming-row" id="upcoming-row-${c.id}">
+      <button class="cycle-header" id="upcoming-trigger-${c.id}" type="button" aria-expanded="false" aria-controls="upcoming-families-${c.id}" onclick="toggleUpcoming('${c.id}')">
         <div>
           <div class="cycle-header-title">${esc(c.title)}</div>
           <div class="cycle-header-meta">${fmtDate(c.delivery_date_start)} · ${c.open_slots ?? '—'} open slots</div>
         </div>
-        <span class="cycle-toggle" id="upcoming-icon-${c.id}">+</span>
-      </div>
+        <span class="cycle-toggle" id="upcoming-icon-${c.id}" aria-hidden="true">+</span>
+      </button>
       <div class="cycle-families-wrap" id="upcoming-families-${c.id}"></div>
     </div>`
   ).join('');
@@ -638,15 +695,18 @@ function renderUpcoming(cycles) {
 async function toggleUpcoming(cycleId) {
   const familiesEl = document.getElementById('upcoming-families-' + cycleId);
   const iconEl     = document.getElementById('upcoming-icon-' + cycleId);
+  const triggerEl  = document.getElementById('upcoming-trigger-' + cycleId);
   const isOpen     = familiesEl.style.display !== 'none' && familiesEl.style.display !== '';
 
   if (isOpen) {
     familiesEl.style.display = 'none';
     iconEl.textContent = '+';
+    triggerEl.setAttribute('aria-expanded', 'false');
     return;
   }
   iconEl.textContent = '−';
   familiesEl.style.display = 'block';
+  triggerEl.setAttribute('aria-expanded', 'true');
 
   if (_upcomingCache[cycleId]) {
     renderUpcomingFamilies(cycleId, _upcomingCache[cycleId]);
@@ -673,25 +733,24 @@ function renderUpcomingFamilies(cycleId, data) {
     const taskBtns = task_types.map(tt => {
       const mySlotId = fam.my_slots?.[tt.slug];
       const takenBy  = fam.taken_by?.[tt.slug];
-      const myStatus = fam.my_status?.[tt.slug];
       if (mySlotId) {
-        return `<button class="slot-btn slot-btn-mine" style="background:var(--green);"
-          onclick="cancelSignup('${mySlotId}','${fam.id}')">✓ ${esc(tt.label)} ×</button>`;
+        return `<button class="slot-btn slot-btn-mine" type="button"
+          onclick="cancelSignup('${mySlotId}','${fam.id}')">${esc(tt.label)}: Yours ×</button>`;
       }
       if (takenBy) {
-        return `<span class="slot-btn slot-btn-taken">${esc(tt.label)}: ${esc(takenBy)}</span>`;
+        return `<span class="slot-btn slot-btn-taken">${esc(tt.label)}: Assigned</span>`;
       }
-      return `<button class="slot-btn slot-btn-open"
+      return `<button class="slot-btn slot-btn-open" type="button"
         onclick="signUp('${cycle.id}','${fam.id}','${tt.slug}')">${esc(tt.label)}</button>`;
     }).join('');
 
     return `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--gray-2);flex-wrap:wrap;gap:6px;">
-        <div>
-          <span style="font-family:monospace;font-size:14px;font-weight:700;">${esc(fam.family_code || '—')}</span>
-          <span style="font-size:11px;color:var(--gray-4);margin-left:8px;">Size: ${fam.family_size || '?'}</span>
+      <div class="upcoming-family-row">
+        <div class="upcoming-family-info">
+          <span class="upcoming-family-code">${esc(fam.family_code || '—')}</span>
+          <span class="upcoming-family-meta">Size: ${fam.family_size || '?'}</span>
         </div>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;">${taskBtns}</div>
+        <div class="signup-btns">${taskBtns}</div>
       </div>`;
   }).join('');
 }
@@ -727,37 +786,68 @@ async function completeTask(slotId) {
 // ── Receipt Modal ─────────────────────────────────────────────────────────────
 let _activeSlotId    = null;
 let _uploadedFileUrl = null;
+let _receiptReturnFocus = null;
 
 function openReceiptModal(slotId) {
+  _receiptReturnFocus = document.activeElement;
   _activeSlotId    = slotId;
   _uploadedFileUrl = null;
   document.getElementById('r-store').value  = '';
   document.getElementById('r-date').value   = new Date().toISOString().slice(0,10);
   document.getElementById('r-amount').value = '';
   document.getElementById('r-file').value   = '';
-  document.getElementById('r-file-preview').style.display = 'none';
-  document.getElementById('r-upload-label').textContent   = '📷 Tap to upload photo (JPG, PNG, PDF)';
-  document.getElementById('r-error').style.display        = 'none';
+  document.getElementById('r-file-preview').hidden = true;
+  document.getElementById('r-upload-label').textContent = 'Choose a JPG, PNG, PDF, or HEIC file';
+  document.getElementById('r-error').hidden = true;
   document.getElementById('r-submit-btn').disabled        = false;
   document.getElementById('r-submit-btn').textContent     = 'Submit';
   document.getElementById('receipt-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  document.querySelector('#receipt-modal .modal-sheet').focus();
 }
 
 function closeReceiptModal() {
   document.getElementById('receipt-modal').classList.remove('open');
+  document.body.style.overflow = '';
   _activeSlotId = null;
+  if (_receiptReturnFocus && document.contains(_receiptReturnFocus)) _receiptReturnFocus.focus();
+  _receiptReturnFocus = null;
 }
+
+document.addEventListener('keydown', event => {
+  const modal = document.getElementById('receipt-modal');
+  if (!modal.classList.contains('open')) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeReceiptModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+
+  const focusable = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]')]
+    .filter(el => !el.hidden);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 function handleFileSelect(input) {
   const file = input.files[0];
   if (!file) return;
-  document.getElementById('r-upload-label').textContent = `✓ ${file.name}`;
+  document.getElementById('r-upload-label').textContent = file.name;
   if (file.type.startsWith('image/')) {
     const reader = new FileReader();
     reader.onload = e => {
       const img = document.getElementById('r-file-preview');
       img.src = e.target.result;
-      img.style.display = 'block';
+      img.hidden = false;
     };
     reader.readAsDataURL(file);
   }
@@ -771,10 +861,10 @@ async function submitReceipt() {
   const amount = parseFloat(document.getElementById('r-amount').value);
   const file   = document.getElementById('r-file').files[0];
 
-  errEl.style.display = 'none';
-  if (!store)                       { errEl.textContent = 'Please enter the store name.'; errEl.style.display = 'block'; return; }
-  if (!date)                        { errEl.textContent = 'Please enter the purchase date.'; errEl.style.display = 'block'; return; }
-  if (isNaN(amount) || amount <= 0) { errEl.textContent = 'Please enter a valid amount.'; errEl.style.display = 'block'; return; }
+  errEl.hidden = true;
+  if (!store)                       { errEl.textContent = 'Please enter the store name.'; errEl.hidden = false; return; }
+  if (!date)                        { errEl.textContent = 'Please enter the purchase date.'; errEl.hidden = false; return; }
+  if (isNaN(amount) || amount <= 0) { errEl.textContent = 'Please enter a valid amount.'; errEl.hidden = false; return; }
 
   btn.disabled = true; btn.textContent = 'Uploading…';
 
@@ -805,11 +895,11 @@ async function submitReceipt() {
     closeReceiptModal();
     refreshWork();
     alert(res.updated
-      ? '✅ Receipt updated. The treasurer has been notified.'
-      : '✅ Receipt submitted. The treasurer will review and process your reimbursement.');
+      ? 'Receipt updated. The treasurer has been notified.'
+      : 'Receipt submitted. The treasurer will review and process your reimbursement.');
   } catch(e) {
     errEl.textContent = e.message;
-    errEl.style.display = 'block';
+    errEl.hidden = false;
     btn.disabled = false; btn.textContent = 'Submit';
   }
 }
@@ -839,18 +929,18 @@ async function loadHistory() {
     const tasksHtml = data.tasks.map(t => `
       <div class="history-row">
         <div class="history-row-left">
-          <div><span class="badge badge-${t.task_type}">${esc(t.task_type)}</span> &nbsp;<strong>${esc(t.cycle_title)}</strong></div>
+          <div class="history-row-title"><span class="badge badge-${t.task_type}">${esc(t.task_type)}</span><strong>${esc(t.cycle_title)}</strong></div>
           <div class="history-row-meta">
-            Family ${t.family_id.slice(0,8)}… · Size: ${t.family_size || '?'}
+            Household served · Size: ${t.family_size || '?'}
             ${t.completed_at ? ' · ' + fmtDate(t.completed_at) : ''}
           </div>
         </div>
-        <span class="badge badge-complete">✓ Done</span>
+        <span class="badge badge-complete">Done</span>
       </div>`).join('');
 
     document.getElementById('history-content').innerHTML =
-      `<div class="section-divider" style="margin-bottom:16px;">Stats</div>${statsHtml}
-       <div class="section-divider" style="margin-bottom:16px;">Completed Tasks</div>${tasksHtml}`;
+      `<div class="section-divider">Stats</div>${statsHtml}
+       <div class="section-divider">Completed tasks</div>${tasksHtml}`;
   } catch(e) {
     if (e.message.includes('expired')) { logout(); return; }
     document.getElementById('history-content').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -862,6 +952,14 @@ function fmtDate(d) {
   if (!d) return '';
   return new Date(d + (d.includes('T') ? '' : 'T12:00:00')).toLocaleDateString('en-US',
     { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function fmtDateRange(start, end) {
+  const startLabel = fmtDate(start);
+  const endLabel = fmtDate(end);
+  if (!startLabel) return endLabel;
+  if (!endLabel || startLabel === endLabel) return startLabel;
+  return `${startLabel}–${endLabel}`;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

@@ -1030,6 +1030,14 @@ class TestPages:
     def test_portal_page_loads(self, client):
         res = client.get('/portal')
         assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert '/css/volunteer.css' in page
+        assert 'class="header-logo sihha-wordmark"' in page
+        assert 'role="tablist"' in page
+        assert 'aria-controls="pane-work"' in page
+        assert 'aria-modal="true"' in page
+        assert 'Family information appears only when it is needed' in page
+        assert client.get('/css/volunteer.css').status_code == 200
 
     def test_order_redirects(self, client):
         # /order redirects to /intake
