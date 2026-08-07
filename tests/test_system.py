@@ -2964,8 +2964,9 @@ class TestAuditRegressions:
     def test_failed_reminder_is_retried(self, client, auth, monkeypatch):
         fam = self._active_family(client, auth)
         fam_headers = {'Authorization': f'Bearer {_get_family_token(client, fam)}'}
-        start = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
-        end = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')
+        today = _server._today_central()
+        start = (today + timedelta(days=2)).isoformat()
+        end = (today + timedelta(days=3)).isoformat()
         cycle = client.post('/api/delivery-cycles', headers=auth, json={
             **_cycle_payload(), 'delivery_date_start': start,
             'delivery_date_end': end, 'status': 'open',
