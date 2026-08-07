@@ -244,20 +244,30 @@
   }
   .success-link:hover { background: var(--black); color: var(--white); }
 </style>
+<link rel="stylesheet" href="/css/public-workflows.css">
 </head>
-<body>
+<body class="public-form-page intake-page">
 
-<header>
-  <a class="logo" href="https://www.sihha.org">sihha</a>
-  <a class="back-link" href="https://www.sihha.org">← Back to sihha.org</a>
+<header class="public-header">
+ <div class="public-header-inner">
+  <div class="public-brand">
+    <a class="logo sihha-wordmark" href="https://www.sihha.org" aria-label="Sihha home">sihha</a>
+    <span class="public-context">Family assistance</span>
+  </div>
+  <a class="back-link" href="https://www.sihha.org">Back to sihha.org</a>
+ </div>
 </header>
 
 <div class="page">
 
   <!-- Form -->
   <div id="form-state">
-    <h1 class="page-title">Request Food Assistance</h1>
-    <p class="page-desc">Please fill out the form below to register for food assistance through our program. All information is kept strictly confidential. We will contact you within 48 hours.</p>
+    <div class="form-intro">
+      <div class="page-eyebrow">Family registration</div>
+      <h1 class="page-title">Request food assistance</h1>
+      <p class="page-desc">Tell us what your household needs. A Sihha coordinator will review your request and contact you within 48 hours.</p>
+      <p class="privacy-callout">Your information is confidential and is shared only with the staff and assigned volunteers who need it to coordinate your care.</p>
+    </div>
 
     <form id="intake-form" onsubmit="submitForm(event)" novalidate>
 
@@ -267,33 +277,33 @@
       <div class="section-label">Personal Information</div>
 
       <div class="field">
-        <label>Full Name <span class="required-star">*</span></label>
+        <label for="name">Full name <span class="required-star">*</span></label>
         <input type="text" id="name" placeholder="Your full name" required autocomplete="name">
       </div>
 
       <div class="field">
-        <label>Date of Birth <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <label for="dob">Date of birth <span class="optional">(optional)</span></label>
         <input type="date" id="dob">
       </div>
 
       <div class="field">
-        <label>Current Address <span class="required-star">*</span></label>
+        <label for="address">Current address <span class="required-star">*</span></label>
         <input type="text" id="address" placeholder="Street address" required autocomplete="street-address">
       </div>
 
       <div class="field-row">
         <div class="field">
-          <label>City <span class="required-star">*</span></label>
+          <label for="city">City <span class="required-star">*</span></label>
           <input type="text" id="city" placeholder="City" required autocomplete="address-level2">
         </div>
         <div class="field">
-          <label>Phone <span class="required-star">*</span></label>
+          <label for="phone">Phone <span class="required-star">*</span></label>
           <input type="tel" id="phone" placeholder="(585) 000-0000" required autocomplete="tel">
         </div>
       </div>
 
       <div class="field">
-        <label>Email Address <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <label for="email">Email address <span class="optional">(optional)</span></label>
         <input type="email" id="email" placeholder="your@email.com" autocomplete="email">
       </div>
 
@@ -301,12 +311,12 @@
 
       <div class="field-row">
         <div class="field">
-          <label>Total People in Household <span class="required-star">*</span></label>
-          <input type="number" id="family_size" min="1" max="30" placeholder="e.g. 4" required>
-          <div class="field-hint">Including yourself and children</div>
+          <label for="family_size">Total people in household <span class="required-star">*</span></label>
+          <input type="number" id="family_size" min="1" max="30" placeholder="e.g. 4" required aria-describedby="family-size-hint">
+          <div class="field-hint" id="family-size-hint">Including yourself and children</div>
         </div>
         <div class="field">
-          <label>Children Ages 0–18 <span class="required-star">*</span></label>
+          <label for="children_count">Children ages 0–18 <span class="required-star">*</span></label>
           <input type="number" id="children_count" min="0" max="20" placeholder="e.g. 2" required>
         </div>
       </div>
@@ -346,7 +356,7 @@
       </div>
 
       <div class="field" id="allergy-field" style="display:none">
-        <label>Please specify allergies or dietary needs</label>
+        <label for="allergy_detail">Please specify allergies or dietary needs</label>
         <input type="text" id="allergy_detail" placeholder="e.g. peanuts, shellfish, tree nuts">
       </div>
 
@@ -375,7 +385,7 @@
       </div>
 
       <div class="field">
-        <label>Household Income Range <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <label for="income_range">Household income range <span class="optional">(optional)</span></label>
         <select id="income_range">
           <option value="">Prefer not to answer</option>
           <option value="<20k">Under $20,000</option>
@@ -386,13 +396,13 @@
       </div>
 
       <button type="submit" class="submit-btn" id="submit-btn">Submit Request</button>
-      <div class="form-error" id="form-error"></div>
+      <div class="form-error" id="form-error" role="alert" aria-live="polite"></div>
 
     </form>
   </div>
 
   <!-- Success -->
-  <div id="success-state">
+  <div id="success-state" aria-live="polite">
     <div class="success-icon">✓</div>
     <h2 class="success-title">Request Received</h2>
     <p class="success-text">Thank you for reaching out. Your request has been submitted and we will contact you within 48 hours. All information is kept strictly confidential.</p>

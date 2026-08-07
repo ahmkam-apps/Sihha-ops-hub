@@ -1017,10 +1017,38 @@ class TestPages:
     def test_admin_spa_loads(self, client):
         res = client.get('/')
         assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert '/css/admin.css' in page
+        assert 'id="staff-nav"' in page
+        assert 'aria-controls="staff-nav"' in page
+        assert 'role="dialog"' in page
+        assert client.get('/css/admin.css').status_code == 200
 
     def test_intake_loads(self, client):
         res = client.get('/intake')
         assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert '/css/public-workflows.css' in page
+        assert 'class="public-form-page intake-page"' in page
+        assert 'for="name"' in page
+        assert 'role="alert"' in page
+
+    def test_volunteer_signup_page_loads(self, client):
+        res = client.get('/volunteer-signup')
+        assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert '/css/public-workflows.css' in page
+        assert 'id="volunteer-form"' in page
+        assert 'aria-pressed="false"' in page
+        assert 'role="alert"' in page
+
+    def test_confirmation_page_loads(self, client):
+        res = client.get('/confirm/test-preview-token')
+        assert res.status_code == 200
+        page = res.get_data(as_text=True)
+        assert '/css/public-workflows.css' in page
+        assert 'class="confirmation-page"' in page
+        assert 'class="logo sihha-wordmark"' in page
 
     def test_volunteer_redirects(self, client):
         # /volunteer redirects to /portal

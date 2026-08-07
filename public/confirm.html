@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Delivery Opt-In — Sihha</title>
+<link rel="stylesheet" href="/css/base.css">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -53,17 +54,22 @@
   .badge-green { background: #e8f5e9; color: #1a5e34; }
   .badge-amber { background: #fffbec; color: #7a6000; }
 </style>
+<link rel="stylesheet" href="/css/public-workflows.css">
 </head>
-<body>
+<body class="confirmation-page">
 
-<div class="header">
-  <h1>Sihha Food Charity</h1>
-  <p>Delivery Opt-In</p>
-</div>
+<header class="header confirmation-header">
+  <div class="confirmation-header-inner">
+    <div class="public-brand">
+      <a class="logo sihha-wordmark" href="https://www.sihha.org" aria-label="Sihha home">sihha</a>
+      <span class="public-context">Delivery confirmation</span>
+    </div>
+  </div>
+</header>
 
-<div class="container" id="app">
+<main class="container" id="app" aria-live="polite">
   <div class="loading">Loading your bundle…</div>
-</div>
+</main>
 
 <script>
 // XSS escaping — same helpers as /js/shared.js (kept inline: this page is standalone)
@@ -104,8 +110,8 @@ function render() {
   const alreadyMsg = already ? `
     <div class="alert alert-warn">
       ${r.status === 'skipped'
-        ? '⚠️ You have already skipped this delivery.'
-        : '✅ Your bundle has already been confirmed.'}
+        ? 'You have already skipped this delivery.'
+        : 'Your bundle has already been confirmed.'}
       You can still update your selections below.
     </div>` : '';
 
@@ -155,8 +161,8 @@ function render() {
       <textarea class="note-field" id="notes" placeholder="Dietary changes, special requests, or anything we should know…">${esc(r.notes || '')}</textarea>
     </div>
 
-    <button class="btn btn-confirm" onclick="confirm()">✓ Yes, I Want This Delivery</button>
-    <button class="btn btn-skip"    onclick="skip()">No Thanks — Skip This Delivery</button>
+    <button class="btn btn-confirm" type="button" onclick="confirm()">Yes, I want this delivery</button>
+    <button class="btn btn-skip" type="button" onclick="skip()">No thanks — skip this delivery</button>
   `;
 
 }
@@ -205,8 +211,8 @@ async function submit(action, selectedItems, notes) {
 function showSuccess(action) {
   document.getElementById('app').innerHTML = `
     <div class="success">
-      <div class="icon">${action === 'skip' ? '🙏' : '✅'}</div>
-      <h2>${action === 'skip' ? 'Got it!' : 'Bundle Confirmed!'}</h2>
+      <div class="icon" aria-hidden="true">${action === 'skip' ? '—' : '✓'}</div>
+      <h2>${action === 'skip' ? 'Request noted' : 'Bundle confirmed'}</h2>
       <p>${action === 'skip'
         ? 'We\'ve noted that you\'re skipping this delivery. We\'ll see you next time, inshAllah.'
         : 'JazakAllah Khair! Your bundle is confirmed. Our volunteer will deliver it on the scheduled date.'
@@ -217,7 +223,6 @@ function showSuccess(action) {
 function showError(data) {
   document.getElementById('app').innerHTML = `
     <div class="card" style="text-align:center;padding:30px 20px;">
-      <div style="font-size:32px;margin-bottom:10px;">⚠️</div>
       <p style="color:#c00;font-size:15px;">${esc(data.error || 'Something went wrong.')}</p>
     </div>`;
 }

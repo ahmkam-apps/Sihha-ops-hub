@@ -1,0 +1,241 @@
+/* Public Sihha workflows — assistance, volunteering, and delivery confirmation. */
+
+:root {
+  --black: var(--sihha-black);
+  --white: var(--sihha-white);
+  --gray-1: var(--sihha-mist);
+  --gray-2: var(--sihha-line);
+  --gray-3: #b8b8b8;
+  --gray-4: var(--sihha-gray);
+  --gray-5: var(--sihha-charcoal);
+  --green: var(--sihha-success);
+  --font-body: var(--sihha-font-body);
+  --font-head: var(--sihha-font-emphasis);
+  --font-display: var(--sihha-font-display);
+}
+
+html { background: var(--black); }
+
+body {
+  min-width: 320px;
+  background: var(--white);
+  color: var(--sihha-ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 3px;
+}
+
+.public-header,
+.confirmation-header {
+  padding: 0;
+  border: 0;
+  background: var(--black);
+  color: var(--white);
+}
+
+.public-header-inner,
+.confirmation-header-inner {
+  width: min(100%, 1280px);
+  min-height: 88px;
+  margin: 0 auto;
+  padding: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.public-brand { display: flex; align-items: baseline; gap: 18px; }
+.public-header .logo,
+.confirmation-header .logo {
+  color: var(--white);
+  font-family: var(--sihha-font-wordmark);
+  font-size: 48px;
+  font-weight: 400;
+  letter-spacing: -.02em;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.public-context { color: #bdbdbd; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
+.public-header .back-link { color: #d0d0d0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; }
+.public-header .back-link:hover { color: var(--white); }
+
+/* Intake and volunteer application */
+.public-form-page .page {
+  width: min(100%, 1180px);
+  max-width: none;
+  margin: 0 auto;
+  padding: 72px 40px 112px;
+}
+
+.public-form-page #form-state {
+  display: grid;
+  grid-template-columns: minmax(280px, .72fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 88px;
+}
+
+.form-intro { position: sticky; inset-block-start: 40px; }
+.page-eyebrow { margin-block-end: 18px; color: var(--gray-4); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
+.public-form-page .page-title { margin: 0; font-family: var(--font-display); font-size: clamp(48px, 6vw, 72px); font-weight: 300; letter-spacing: -.055em; line-height: .98; }
+.public-form-page .page-desc,
+.public-form-page .page-sub { margin: 28px 0 0; padding: 0; border: 0; color: var(--gray-5); font-size: 15px; line-height: 1.65; }
+.privacy-callout { margin-block-start: 28px; padding-block-start: 18px; border-block-start: 1px solid var(--gray-2); color: var(--gray-4); font-size: 13px; }
+
+.public-form-page form { padding-block-start: 4px; border-block-start: 2px solid var(--black); }
+.public-form-page .form-section { margin: 0 0 46px; }
+.public-form-page .section-label { margin: 0 0 24px; padding: 20px 0 10px; border-block-end: 1px solid var(--black); color: var(--gray-5); font-size: 10px; font-weight: 400; letter-spacing: .15em; text-transform: uppercase; }
+.public-form-page .field { margin-block-end: 24px; }
+.public-form-page .field label,
+.public-form-page form > .section-label + .field label { margin-block-end: 8px; color: var(--gray-5); font-size: 10px; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; }
+.public-form-page .required-star { color: var(--sihha-danger); }
+.optional { color: var(--gray-4); font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+.public-form-page .field input,
+.public-form-page .field select,
+.public-form-page .field textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 13px 15px;
+  border: 1px solid var(--gray-3);
+  border-radius: 0;
+  background: var(--white);
+  color: var(--black);
+  font-family: var(--font-body);
+  font-size: 16px;
+  outline: none;
+}
+
+.public-form-page .field input:focus,
+.public-form-page .field select:focus,
+.public-form-page .field textarea:focus { border-color: var(--black); }
+.public-form-page .field textarea { min-height: 110px; }
+.public-form-page .field-hint { color: var(--gray-4); font-size: 12px; }
+.public-form-page .field-row { gap: 18px; }
+
+.check-group,
+.radio-group,
+.role-options { gap: 0; }
+.public-form-page .check-item,
+.public-form-page .radio-item,
+.public-form-page .role-option {
+  min-height: 54px;
+  margin-block-start: -1px;
+  padding: 14px 16px;
+  border: 1px solid var(--gray-2);
+  border-radius: 0;
+  background: var(--white);
+}
+.public-form-page .role-option { color: var(--black); font-size: 14px; letter-spacing: 0; text-transform: none; }
+.public-form-page .check-item:hover,
+.public-form-page .radio-item:hover,
+.public-form-page .role-option:hover { border-color: var(--gray-3); background: var(--gray-1); }
+.public-form-page .check-item.selected,
+.public-form-page .radio-item.selected,
+.public-form-page .role-option.selected { position: relative; z-index: 1; border-color: var(--black); background: var(--gray-1); }
+.public-form-page .check-item:focus-within,
+.public-form-page .radio-item:focus-within,
+.public-form-page .role-option:focus-within { position: relative; z-index: 2; outline: 3px solid var(--black); outline-offset: 2px; }
+
+.public-form-page .role-option input[type="radio"] {
+  display: block !important;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.role-icon { width: 34px; color: var(--gray-4); font-family: var(--font-display); font-size: 20px; }
+.role-title { font-weight: 400; letter-spacing: .02em; text-transform: uppercase; }
+.role-desc { color: var(--gray-5); font-size: 13px; letter-spacing: 0; line-height: 1.5; text-transform: none; }
+
+.avail-grid { gap: 0; }
+.public-form-page .avail-chip { min-height: 48px; margin: -1px 0 0 -1px; border: 1px solid var(--gray-2); border-radius: 0; background: var(--white); color: var(--black); font-family: var(--font-body); cursor: pointer; }
+.public-form-page .avail-chip:hover { background: var(--gray-1); }
+.public-form-page .avail-chip.selected { position: relative; z-index: 1; border-color: var(--black); background: var(--black); color: var(--white); }
+
+.public-form-page .submit-btn {
+  width: 100%;
+  min-height: 54px;
+  margin-block-start: 18px;
+  padding: 15px 20px;
+  border: 1px solid var(--black);
+  border-radius: 0;
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.public-form-page .submit-btn:hover { background: var(--gray-5); }
+.public-form-page .submit-btn:disabled { border-color: var(--gray-3); background: var(--gray-3); }
+.public-form-page .form-error { padding: 14px 16px; border: 1px solid var(--sihha-danger); background: #fff5f5; color: var(--sihha-danger); }
+
+.public-form-page #success-state { min-height: 520px; padding: 76px 20px; }
+.public-form-page .success-icon { width: auto; height: auto; margin: 0 0 18px; background: transparent; color: var(--green); font-family: var(--font-display); font-size: 54px; }
+.public-form-page .success-title { font-family: var(--font-display); font-size: 46px; font-weight: 300; letter-spacing: -.04em; }
+.public-form-page .success-link { border-radius: 0; }
+
+/* Tokenized delivery confirmation */
+.confirmation-page { background: var(--white); }
+.confirmation-page .header { padding: 0; border: 0; background: var(--black); color: var(--white); }
+.confirmation-page .header h1 { color: var(--white); font-family: var(--sihha-font-wordmark); font-size: 48px; font-weight: 400; line-height: 1; }
+.confirmation-page .header p { color: #bdbdbd; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
+.confirmation-page .container { width: min(100%, 780px); max-width: none; margin: 0 auto; padding: 60px 24px 100px; }
+.confirmation-page .card { margin-block-end: 28px; padding: 0; border: 0; border-block-start: 2px solid var(--black); border-radius: 0; background: var(--white); box-shadow: none; }
+.confirmation-page .card-title { margin: 0; padding: 18px 0 14px; border-block-end: 1px solid var(--gray-2); color: var(--gray-5); font-size: 10px; font-weight: 400; letter-spacing: .15em; }
+.confirmation-page .info-row { padding: 13px 0; border-block-end-color: var(--gray-2); }
+.confirmation-page .info-label { color: var(--gray-4); }
+.confirmation-page .info-value { max-width: 60%; font-weight: 400; text-align: end; }
+.confirmation-page .category-label { margin: 22px 0 8px; color: var(--gray-5); font-size: 10px; font-weight: 400; letter-spacing: .14em; }
+.confirmation-page .item-row { min-height: 50px; border-block-end-color: var(--gray-2); }
+.confirmation-page .item-row input[type="checkbox"] { accent-color: var(--black); }
+.confirmation-page .note-field { min-height: 110px; border: 1px solid var(--gray-3); border-radius: 0; }
+.confirmation-page .note-field:focus { border-color: var(--black); }
+.confirmation-page .btn { min-height: 54px; border: 1px solid var(--black); border-radius: 0; font-family: var(--font-body); font-size: 12px; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; }
+.confirmation-page .btn-confirm { background: var(--black); color: var(--white); }
+.confirmation-page .btn-skip { background: var(--white); color: var(--black); }
+.confirmation-page .badge { border-radius: 0; }
+.confirmation-page .alert { border-radius: 0; }
+.confirmation-page .success { padding: 80px 20px; border-block-start: 2px solid var(--black); }
+.confirmation-page .success .icon { color: var(--green); font-family: var(--font-display); font-size: 52px; }
+.confirmation-page .success h2 { color: var(--black); font-family: var(--font-display); font-size: 42px; font-weight: 300; letter-spacing: -.04em; }
+
+@media (max-width: 760px) {
+  .public-header-inner,
+  .confirmation-header-inner { min-height: 74px; padding: 0 18px; gap: 12px; }
+  .public-header .logo,
+  .confirmation-header .logo,
+  .confirmation-page .header h1 { font-size: 38px; }
+  .public-context { display: none; }
+  .public-header .back-link { font-size: 10px; }
+  .public-form-page .page { padding: 44px 18px 80px; }
+  .public-form-page #form-state { grid-template-columns: 1fr; gap: 44px; }
+  .form-intro { position: static; }
+  .public-form-page .page-title { font-size: clamp(44px, 14vw, 60px); }
+  .public-form-page .field-row { grid-template-columns: 1fr; }
+  .confirmation-page .container { padding: 40px 18px 80px; }
+}
+
+@media (max-width: 420px) {
+  .public-header .back-link { max-width: 110px; text-align: end; }
+  .avail-grid { grid-template-columns: 1fr; }
+  .public-form-page .avail-chip { margin-inline-start: 0; }
+  .confirmation-page .info-row { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .confirmation-page .info-value { max-width: none; text-align: start; }
+}

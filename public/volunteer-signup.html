@@ -220,19 +220,31 @@
   }
   .success-link:hover { background: var(--black); color: var(--white); }
 </style>
+<link rel="stylesheet" href="/css/public-workflows.css">
 </head>
-<body>
+<body class="public-form-page volunteer-application-page">
 
-<header>
-  <a class="logo" href="https://www.sihha.org">sihha</a>
-  <a class="back-link" href="https://www.sihha.org">← Back</a>
+<header class="public-header">
+ <div class="public-header-inner">
+  <div class="public-brand">
+    <a class="logo sihha-wordmark" href="https://www.sihha.org" aria-label="Sihha home">sihha</a>
+    <span class="public-context">Volunteer application</span>
+  </div>
+  <a class="back-link" href="https://www.sihha.org">Back to sihha.org</a>
+ </div>
 </header>
 
 <div class="page">
 
   <div id="form-state">
-    <h1 class="page-title">Volunteer with Sihha</h1>
-    <p class="page-sub">Fill out this form to join our volunteer team. A coordinator will review your application and reach out within 48 hours.</p>
+    <div class="form-intro">
+      <div class="page-eyebrow">Community care</div>
+      <h1 class="page-title">Volunteer with Sihha</h1>
+      <p class="page-sub">Join the neighbors who shop, organize, and deliver food with care. A coordinator will review your application and reach out within 48 hours.</p>
+      <p class="privacy-callout">Family details are shared only when they are needed for a confirmed assignment.</p>
+    </div>
+
+    <form id="volunteer-form" onsubmit="submitForm(event)" novalidate>
 
     <input type="text" id="_website" tabindex="-1" autocomplete="off" aria-hidden="true"
            style="position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden">
@@ -263,27 +275,27 @@
       <div class="section-label">How Would You Like to Help? <span class="required-star">*</span></div>
       <div class="role-options" id="role-options">
 
-        <label class="role-option" onclick="selectRole(this, 'shopper')">
-          <input type="radio" name="role" value="shopper">
-          <div class="role-icon">🛒</div>
+        <label class="role-option">
+          <input type="radio" name="role" value="shopper" onchange="selectRole(this.closest('.role-option'), 'shopper')">
+          <div class="role-icon" aria-hidden="true">01</div>
           <div>
             <div class="role-title">Shopper</div>
             <div class="role-desc">Purchase groceries for assigned families based on their food list. Receipts are reimbursed via Zelle.</div>
           </div>
         </label>
 
-        <label class="role-option" onclick="selectRole(this, 'delivery')">
-          <input type="radio" name="role" value="delivery">
-          <div class="role-icon">🚗</div>
+        <label class="role-option">
+          <input type="radio" name="role" value="delivery" onchange="selectRole(this.closest('.role-option'), 'delivery')">
+          <div class="role-icon" aria-hidden="true">02</div>
           <div>
             <div class="role-title">Driver / Delivery</div>
             <div class="role-desc">Pick up bundles and deliver them to families on the scheduled delivery day.</div>
           </div>
         </label>
 
-        <label class="role-option" onclick="selectRole(this, 'both')">
-          <input type="radio" name="role" value="both">
-          <div class="role-icon">⭐</div>
+        <label class="role-option">
+          <input type="radio" name="role" value="both" onchange="selectRole(this.closest('.role-option'), 'both')">
+          <div class="role-icon" aria-hidden="true">03</div>
           <div>
             <div class="role-title">Both — Shop &amp; Deliver</div>
             <div class="role-desc">Handle the full cycle for your assigned families. Most flexible option.</div>
@@ -298,10 +310,10 @@
       <div class="section-label">Weekend Availability</div>
       <p style="font-size:13px;color:var(--gray-4);margin-bottom:14px">Deliveries run bi-weekly on Saturdays and Sundays.</p>
       <div class="avail-grid" id="avail-grid">
-        <div class="avail-chip" onclick="toggleAvail(this)" data-val="Saturday">Saturday</div>
-        <div class="avail-chip" onclick="toggleAvail(this)" data-val="Sunday">Sunday</div>
-        <div class="avail-chip" onclick="toggleAvail(this)" data-val="Saturday AM">Saturday AM only</div>
-        <div class="avail-chip" onclick="toggleAvail(this)" data-val="Sunday PM">Sunday PM only</div>
+        <button class="avail-chip" type="button" onclick="toggleAvail(this)" data-val="Saturday" aria-pressed="false">Saturday</button>
+        <button class="avail-chip" type="button" onclick="toggleAvail(this)" data-val="Sunday" aria-pressed="false">Sunday</button>
+        <button class="avail-chip" type="button" onclick="toggleAvail(this)" data-val="Saturday AM" aria-pressed="false">Saturday AM only</button>
+        <button class="avail-chip" type="button" onclick="toggleAvail(this)" data-val="Sunday PM" aria-pressed="false">Sunday PM only</button>
       </div>
     </div>
 
@@ -314,11 +326,12 @@
       </div>
     </div>
 
-    <button class="submit-btn" id="submit-btn" onclick="submitForm()">Submit Application</button>
-    <div class="form-error" id="form-error"></div>
+    <button class="submit-btn" id="submit-btn" type="submit">Submit Application</button>
+    <div class="form-error" id="form-error" role="alert" aria-live="polite"></div>
+    </form>
   </div>
 
-  <div id="success-state">
+  <div id="success-state" aria-live="polite">
     <div class="success-icon">✓</div>
     <h2 class="success-title">Application Received</h2>
     <p class="success-text">Thank you for signing up to volunteer with Sihha. A coordinator will review your application and reach out within 48 hours.</p>
@@ -339,9 +352,11 @@
 
   function toggleAvail(el) {
     el.classList.toggle('selected');
+    el.setAttribute('aria-pressed', String(el.classList.contains('selected')));
   }
 
-  async function submitForm() {
+  async function submitForm(event) {
+    if (event) event.preventDefault();
     const name  = document.getElementById('name').value.trim();
     const phone = document.getElementById('phone').value.replace(/\D/g,'');
     const email = document.getElementById('email').value.trim();

@@ -573,6 +573,7 @@
     .drawer { width: 100%; }
   }
 </style>
+<link rel="stylesheet" href="/css/admin.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
@@ -594,61 +595,61 @@
 <!-- ── App Shell ───────────────────────────────────────────────────────────── -->
 <div id="app">
   <!-- Sidebar -->
-  <div class="sidebar">
+  <aside class="sidebar" id="staff-nav" aria-label="Staff navigation">
     <div class="sidebar-logo">
-      <div class="wordmark">sihha</div>
+      <a class="sidebar-logo-link" href="https://www.sihha.org" aria-label="Sihha home"><div class="wordmark sihha-wordmark">sihha</div></a>
       <div class="tagline">Operations Hub</div>
     </div>
 
     <div class="sidebar-nav">
-      <div class="nav-item active" onclick="nav('dashboard')" id="nav-dashboard">
+      <button class="nav-item active" type="button" onclick="nav('dashboard')" id="nav-dashboard">
         <i class="ti ti-layout-dashboard icon" aria-hidden="true"></i> Dashboard
-      </div>
-      <div class="nav-item" onclick="nav('orders')" id="nav-orders">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('orders')" id="nav-orders">
         <i class="ti ti-clipboard-list icon" aria-hidden="true"></i> Orders
-      </div>
+      </button>
 
       <div class="nav-section">Operations</div>
-      <div class="nav-item" onclick="nav('active-cycle')" id="nav-active-cycle">
+      <button class="nav-item" type="button" onclick="nav('active-cycle')" id="nav-active-cycle">
         <i class="ti ti-calendar-event icon" aria-hidden="true"></i> Active Cycle
-      </div>
-      <div class="nav-item" onclick="nav('deliveries')" id="nav-deliveries">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('deliveries')" id="nav-deliveries">
         <i class="ti ti-truck-delivery icon" aria-hidden="true"></i> Deliveries
-      </div>
-      <div class="nav-item" onclick="nav('families')" id="nav-families">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('families')" id="nav-families">
         <i class="ti ti-users icon" aria-hidden="true"></i> Families
-      </div>
-      <div class="nav-item" onclick="nav('volunteers')" id="nav-volunteers">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('volunteers')" id="nav-volunteers">
         <i class="ti ti-heart-handshake icon" aria-hidden="true"></i> Volunteers
-      </div>
+      </button>
 
       <div class="nav-section">Finance</div>
-      <div class="nav-item" onclick="nav('summary')" id="nav-summary">
+      <button class="nav-item" type="button" onclick="nav('summary')" id="nav-summary">
         <i class="ti ti-chart-bar icon" aria-hidden="true"></i> Finance
-      </div>
-      <div class="nav-item" onclick="nav('payments')" id="nav-payments">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('payments')" id="nav-payments">
         <i class="ti ti-cash-banknote icon" aria-hidden="true"></i> Reimbursements
-      </div>
-      <div class="nav-item" onclick="nav('receipts')" id="nav-receipts">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('receipts')" id="nav-receipts">
         <i class="ti ti-receipt icon" aria-hidden="true"></i> Receipts
-      </div>
-      <div class="nav-item" onclick="nav('expenses')" id="nav-expenses">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('expenses')" id="nav-expenses">
         <i class="ti ti-building-store icon" aria-hidden="true"></i> Expenses
-      </div>
-      <div class="nav-item" onclick="nav('donations')" id="nav-donations">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('donations')" id="nav-donations">
         <i class="ti ti-gift icon" aria-hidden="true"></i> Donations
-      </div>
+      </button>
 
       <div class="nav-section" id="nav-section-admin" style="display:none;color:var(--sidebar-cumin);">Administrator</div>
-      <div class="nav-item" onclick="nav('users')" id="nav-users" style="display:none">
+      <button class="nav-item" type="button" onclick="nav('users')" id="nav-users" style="display:none">
         <i class="ti ti-user-cog icon" aria-hidden="true"></i> Users
-      </div>
-      <div class="nav-item" onclick="nav('pricing')" id="nav-pricing" style="display:none">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('pricing')" id="nav-pricing" style="display:none">
         <i class="ti ti-table icon" aria-hidden="true"></i> Pricing Table
-      </div>
-      <div class="nav-item" onclick="nav('catalog')" id="nav-catalog" style="display:none">
+      </button>
+      <button class="nav-item" type="button" onclick="nav('catalog')" id="nav-catalog" style="display:none">
         <i class="ti ti-basket icon" aria-hidden="true"></i> Food Catalog
-      </div>
+      </button>
 
       <div class="nav-section">Public Sign-up Links</div>
       <a class="nav-item" href="/intake" target="_blank" rel="noopener" style="font-size:12px;text-decoration:none;color:inherit">
@@ -662,26 +663,30 @@
     <div class="sidebar-footer">
       <div class="sidebar-user" id="sidebar-username"></div>
       <div class="sidebar-role" id="sidebar-role"></div>
-      <div class="logout-btn" onclick="doLogout()">Sign out</div>
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
     </div>
-  </div>
+  </aside>
+  <button class="sidebar-scrim" id="sidebar-scrim" type="button" aria-label="Close navigation" onclick="closeSidebar()"></button>
 
   <!-- Main -->
-  <div class="main">
-    <div class="topbar">
-      <h1 id="page-title">Dashboard</h1>
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-heading">
+        <button class="mobile-menu-btn" id="mobile-menu-btn" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="staff-nav" onclick="toggleSidebar()"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
+        <h1 id="page-title">Dashboard</h1>
+      </div>
       <div class="topbar-actions" id="topbar-actions"></div>
-    </div>
+    </header>
     <div class="content" id="content"></div>
-  </div>
+  </main>
 </div>
 
 <!-- ── Drawer ──────────────────────────────────────────────────────────────── -->
 <div class="overlay" id="overlay" onclick="closeDrawer()"></div>
-<div class="drawer" id="drawer">
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" tabindex="-1">
   <div class="drawer-header">
     <div class="drawer-title" id="drawer-title">—</div>
-    <div class="drawer-close" onclick="closeDrawer()">✕</div>
+    <button class="drawer-close" type="button" aria-label="Close panel" onclick="closeDrawer()">✕</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>
   <div class="drawer-footer" id="drawer-footer"></div>
@@ -691,6 +696,7 @@
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 let STATE = { token: null, user: null, page: 'dashboard', filter: 'all', editId: null };
+let _drawerReturnFocus = null;
 
 // ── API ───────────────────────────────────────────────────────────────────────
 // shared.js makeApi — truthy-body semantics (legacy index.html behavior)
@@ -772,11 +778,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('login-pass').addEventListener('keydown', e => {
     if (e.key === 'Enter') doLogin();
   });
+  syncSidebarAccessibility();
   checkSession();
 });
+window.addEventListener('resize', syncSidebarAccessibility);
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 function nav(page) {
+  closeSidebar();
   STATE.page = page; STATE.filter = 'all'; STATE.editId = null;
   if (page !== 'orders') { STATE._ordersFilter = 'all'; STATE._ordersSearch = ''; STATE._ordersCycleId = null; }
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -805,19 +814,93 @@ function nav(page) {
   if (renders[page]) renders[page]();
 }
 
+function toggleSidebar() {
+  const sidebar = document.getElementById('staff-nav');
+  const scrim = document.getElementById('sidebar-scrim');
+  const button = document.getElementById('mobile-menu-btn');
+  const willOpen = !sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', willOpen);
+  scrim.classList.toggle('open', willOpen);
+  button.setAttribute('aria-expanded', String(willOpen));
+  button.setAttribute('aria-label', willOpen ? 'Close navigation' : 'Open navigation');
+  syncSidebarAccessibility();
+  if (willOpen) sidebar.querySelector('.nav-item:not([style*="display:none"])')?.focus();
+}
+
+function closeSidebar() {
+  document.getElementById('staff-nav').classList.remove('open');
+  document.getElementById('sidebar-scrim').classList.remove('open');
+  const button = document.getElementById('mobile-menu-btn');
+  button.setAttribute('aria-expanded', 'false');
+  button.setAttribute('aria-label', 'Open navigation');
+  syncSidebarAccessibility();
+}
+
+function syncSidebarAccessibility() {
+  const sidebar = document.getElementById('staff-nav');
+  if (!sidebar) return;
+  const hiddenOnMobile = window.matchMedia('(max-width: 900px)').matches && !sidebar.classList.contains('open');
+  sidebar.inert = hiddenOnMobile;
+  if (hiddenOnMobile) sidebar.setAttribute('aria-hidden', 'true');
+  else sidebar.removeAttribute('aria-hidden');
+}
+
 // ── Drawer ────────────────────────────────────────────────────────────────────
 function openDrawer(title, bodyHTML, footerHTML) {
+  _drawerReturnFocus = document.activeElement;
   document.getElementById('drawer-title').textContent = title;
   document.getElementById('drawer-body').innerHTML = bodyHTML;
   document.getElementById('drawer-footer').innerHTML = footerHTML || '';
+  document.getElementById('app').inert = true;
   document.getElementById('overlay').classList.add('open');
-  document.getElementById('drawer').classList.add('open');
+  const drawer = document.getElementById('drawer');
+  drawer.classList.add('open');
+  drawer.setAttribute('aria-hidden', 'false');
+  drawer.focus();
 }
 function closeDrawer() {
   document.getElementById('overlay').classList.remove('open');
-  document.getElementById('drawer').classList.remove('open');
+  const drawer = document.getElementById('drawer');
+  const wasOpen = drawer.classList.contains('open');
+  drawer.classList.remove('open');
+  drawer.setAttribute('aria-hidden', 'true');
+  document.getElementById('app').inert = false;
+  syncSidebarAccessibility();
   STATE.editId = null;
+  if (wasOpen && _drawerReturnFocus && document.contains(_drawerReturnFocus)) _drawerReturnFocus.focus();
+  _drawerReturnFocus = null;
 }
+
+document.addEventListener('keydown', event => {
+  const drawer = document.getElementById('drawer');
+  if (event.key === 'Escape') {
+    if (drawer.classList.contains('open')) {
+      event.preventDefault();
+      closeDrawer();
+      return;
+    }
+    if (document.getElementById('staff-nav').classList.contains('open')) {
+      event.preventDefault();
+      closeSidebar();
+      document.getElementById('mobile-menu-btn').focus();
+    }
+    return;
+  }
+  if (event.key !== 'Tab' || !drawer.classList.contains('open')) return;
+
+  const focusable = [...drawer.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')]
+    .filter(el => el.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
 function badge(status) {
@@ -1698,9 +1781,9 @@ async function renderFamilies(filter, search) {
               oninput="renderFamilies('${filter}', this.value)">
             <div class="filter-tabs">
               ${['all','pending','active','inactive'].map(f =>
-                `<div class="filter-tab ${filter===f?'active':''}"
+                `<button class="filter-tab ${filter===f?'active':''}" type="button"
                   onclick="renderFamilies('${f}', document.getElementById('family-search').value)"
-                  >${f}</div>`
+                  >${f}</button>`
               ).join('')}
             </div>
           </div>
@@ -2464,9 +2547,9 @@ async function renderVolunteers(filter, search) {
               oninput="renderVolunteers('${filter}', this.value)">
             <div class="filter-tabs">
               ${['all','pending','active','inactive'].map(f =>
-                `<div class="filter-tab ${filter===f?'active':''}"
+                `<button class="filter-tab ${filter===f?'active':''}" type="button"
                   onclick="renderVolunteers('${f}', document.getElementById('vol-search').value)"
-                  >${f}</div>`
+                  >${f}</button>`
               ).join('')}
             </div>
           </div>
@@ -2884,8 +2967,8 @@ async function viewVolunteer(id) {
 
     openDrawer(r.name,
       `<div class="drawer-tabs">
-         <div class="drawer-tab active" id="dtab-details" onclick="switchDrawerTab('details','vol')">Details</div>
-         <div class="drawer-tab" id="dtab-history" onclick="switchDrawerTab('history','vol')">Task History (${s.total_tasks||0})</div>
+         <button class="drawer-tab active" type="button" id="dtab-details" onclick="switchDrawerTab('details','vol')">Details</button>
+         <button class="drawer-tab" type="button" id="dtab-history" onclick="switchDrawerTab('history','vol')">Task History (${s.total_tasks||0})</button>
        </div>
        <div class="drawer-pane active" id="dpane-details">${detailsHTML}</div>
        <div class="drawer-pane" id="dpane-history">${statsHTML}${taskRows}</div>`,
@@ -2915,8 +2998,8 @@ async function renderAssignments(filter) {
           <span class="table-title">Assignments</span>
           <div class="filter-tabs">
             ${['all','pending','assigned','in_progress','completed','cancelled'].map(f =>
-              `<div class="filter-tab ${filter===f?'active':''}"
-                onclick="renderAssignments('${f}')">${f.replace('_',' ')}</div>`
+              `<button class="filter-tab ${filter===f?'active':''}" type="button"
+                onclick="renderAssignments('${f}')">${f.replace('_',' ')}</button>`
             ).join('')}
           </div>
         </div>
@@ -3049,8 +3132,8 @@ async function renderReceipts(filter) {
           <span class="table-title">Receipts</span>
           <div class="filter-tabs">
             ${['all','pending','approved','rejected'].map(f =>
-              `<div class="filter-tab ${filter===f?'active':''}"
-                onclick="renderReceipts('${f}')">${f}</div>`
+              `<button class="filter-tab ${filter===f?'active':''}" type="button"
+                onclick="renderReceipts('${f}')">${f}</button>`
             ).join('')}
           </div>
         </div>
@@ -3581,7 +3664,7 @@ async function renderExpenses(filter) {
         <div class="table-card">
           <div class="table-header">
             <span class="table-title">Operating expenses</span>
-            <div class="filter-tabs">${['all','paid','pending'].map(f => `<div class="filter-tab ${filter===f?'active':''}" onclick="renderExpenses('${f}')">${f}</div>`).join('')}</div>
+            <div class="filter-tabs">${['all','paid','pending'].map(f => `<button class="filter-tab ${filter===f?'active':''}" type="button" onclick="renderExpenses('${f}')">${f}</button>`).join('')}</div>
           </div>
           <table>
             <thead><tr><th>Date</th><th>Category</th><th>Vendor / description</th><th>Method</th><th style="text-align:right">Amount</th><th>Status</th><th></th></tr></thead>
@@ -3960,7 +4043,7 @@ async function renderPayments(filter) {
           <div class="table-header">
             <span class="table-title">Volunteer reimbursement</span>
             <div class="filter-tabs">
-              ${['all','owed','paid'].map(f => `<div class="filter-tab ${filter===f?'active':''}" onclick="renderPayments('${f}')">${f}</div>`).join('')}
+              ${['all','owed','paid'].map(f => `<button class="filter-tab ${filter===f?'active':''}" type="button" onclick="renderPayments('${f}')">${f}</button>`).join('')}
             </div>
           </div>
           <div id="vr-acc" style="padding:12px 14px">${acc || '<div style="text-align:center;color:var(--text-3);padding:36px">No reimbursements found.</div>'}</div>
@@ -4589,9 +4672,9 @@ async function renderOrders() {
         </div>
         <div style="padding:4px 16px 10px;display:flex;gap:6px;flex-wrap:wrap;">
           ${['all','confirmed','submitted','no_order'].map(f =>
-            `<div class="filter-tab ${STATE._ordersFilter===f?'active':''}" id="otab-${f}"
+            `<button class="filter-tab ${STATE._ordersFilter===f?'active':''}" id="otab-${f}" type="button"
               onclick="STATE._ordersFilter='${f}';document.querySelectorAll('[id^=otab-]').forEach(el=>el.classList.remove('active'));document.getElementById('otab-${f}').classList.add('active');loadOrders()">
-              ${f==='no_order'?'No Order':f.charAt(0).toUpperCase()+f.slice(1)}</div>`
+              ${f==='no_order'?'No Order':f.charAt(0).toUpperCase()+f.slice(1)}</button>`
           ).join('')}
         </div>
         <div id="orders-body"><p style="padding:24px;color:var(--gray-4);">Loading…</p></div>
@@ -4732,7 +4815,7 @@ async function renderDeliveries(filterStatus) {
       <div style="margin-bottom:16px">
         <div class="filter-tabs">
           ${['all','upcoming','open','shopping','delivered'].map(s =>
-            `<div class="filter-tab ${filterStatus===s?'active':''}" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]||s}</div>`
+            `<button class="filter-tab ${filterStatus===s?'active':''}" type="button" onclick="renderDeliveries('${s}')">${s === 'all' ? 'All' : statusLabels[s]||s}</button>`
           ).join('')}
         </div>
       </div>
