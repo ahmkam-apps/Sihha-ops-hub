@@ -2183,7 +2183,7 @@ async function viewFamily(id) {
     let topbarBtns = `<button class="btn btn-outline" onclick="renderFamilies(STATE.filter)">← Families</button>
      <button class="btn" id="fam-save-btn" onclick="saveFamilyAll('${id}')" style="display:none;">Save Changes</button>`;
     if (famUser) {
-      topbarBtns += ` <button class="btn btn-outline" onclick="openResetPassword('${famUser.id}','${escJs(famUser.username)}','${escJs(r.name)}')">🔑 Reset Password</button>
+      topbarBtns += ` <button class="btn btn-outline" ${famUser.has_access_email ? '' : 'disabled title="Add an email address before sending access"'} onclick="openSendAccessLink('${famUser.id}','${escJs(famUser.username)}','${escJs(r.name)}','${escJs(famUser.access_email_hint||'')}')">✉ Send Access</button>
           <button class="btn btn-outline" onclick="previewFamilyPortal('${fid}')">👁 Preview Portal</button>`;
     }
     topbarBtns += ` <button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="deleteFamily('${fid}')"><i class="ti ti-trash" aria-hidden="true"></i> Delete</button>`;
@@ -4433,7 +4433,9 @@ async function renderUsers() {
                 <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
-                  <button class="btn btn-sm btn-outline" style="margin-left:4px" onclick="openResetPassword('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}')">🔑 Reset PW</button>
+                  <button class="btn btn-sm btn-outline" style="margin-left:4px"
+                    ${r.has_access_email ? '' : 'disabled title="Add an email address before sending access"'}
+                    onclick="openSendAccessLink('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}','${escJs(r.access_email_hint||'')}')">✉ Send Access</button>
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -4444,39 +4446,31 @@ async function renderUsers() {
   }
 }
 
-function openResetPassword(uid, username, name) {
-  openDrawer(`Reset Password — ${name}`,
+function openSendAccessLink(uid, username, name, emailHint) {
+  openDrawer(`Send Account Access — ${name}`,
     `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
-       A new password will be generated and shown here. You can share it with the user directly or it will be emailed if they have an email on file.
+       Sihha will email a secure, single-use link to <strong>${esc(emailHint)}</strong>. The user will create their own password; no password will be sent or displayed to an administrator.
      </p>
-     <div class="form-group">
-       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-         <input type="checkbox" id="rp-must-change" checked style="width:16px;height:16px;">
-         <span>Require user to set a new password on next login</span>
-       </label>
-       <div style="font-size:11px;color:var(--gray-4);margin-top:4px;margin-left:24px;">Uncheck this if you want to set a fixed password the user can keep using directly.</div>
+     <div style="background:var(--gray-1);border-radius:8px;padding:14px 16px;font-size:12px;line-height:1.6;color:var(--gray-4)">
+       The link expires in 60 minutes, works once, and replaces any older unused access link. The account password and current sessions remain unchanged until the recipient uses the link.
      </div>`,
-    `<button class="btn" onclick="doResetPassword('${uid}','${escJs(username)}')">Generate New Password</button>
+    `<button class="btn" onclick="doSendAccessLink('${uid}','${escJs(username)}')">Send Secure Link</button>
      <button class="btn btn-outline" onclick="closeDrawer()" style="margin-left:8px">Cancel</button>`
   );
 }
 
-async function doResetPassword(uid, username) {
-  const mustChange = document.getElementById('rp-must-change')?.checked !== false;
+async function doSendAccessLink(uid, username) {
   try {
-    const res = await POST('/users/' + uid + '/reset-password', {must_change: mustChange});
-    openDrawer(`New Password — ${username}`,
+    const res = await POST('/users/' + uid + '/send-access-link', {});
+    openDrawer(`Access Sent — ${username}`,
       `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
-         Share these credentials with the user.${mustChange ? ' They will be asked to set a new password on first login.' : ''}
+         The secure account-access email was sent to <strong>${esc(res.email_hint)}</strong>.
        </p>
-       <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-family:monospace;font-size:15px;line-height:2">
-         <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${esc(res.username)}</strong></div>
-         <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">NEW PASSWORD</span><br><strong>${esc(res.new_password)}</strong></div>
+       <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-size:13px;line-height:1.7">
+         <div><span style="color:var(--gray-4);font-size:11px">USERNAME</span><br><strong>${esc(res.username)}</strong></div>
+         <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px">LINK VALID FOR</span><br><strong>${esc(String(res.expires_in_minutes))} minutes</strong></div>
        </div>
-       <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
-       ${res.email_sent ? `<p style="font-size:12px;color:var(--accent);margin-top:4px">✓ Emailed to ${esc(res.email)}</p>` :
-         res.email ? `<p style="font-size:12px;color:var(--danger);margin-top:4px">⚠ Email failed — share manually</p>` :
-         `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email on file — share manually</p>`}`,
+       <p style="font-size:12px;color:var(--accent);margin-top:12px">✓ No password was emailed or exposed.</p>`,
       `<button class="btn" onclick="closeDrawer();renderUsers()">Done</button>`
     );
   } catch(e) { alert(e.message); }
