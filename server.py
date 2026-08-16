@@ -70,8 +70,14 @@ UPLOAD_FILES_PER_DAY = int(os.environ.get('UPLOAD_FILES_PER_DAY', 20))
 UPLOAD_BYTES_PER_DAY = int(os.environ.get('UPLOAD_BYTES_PER_DAY', 64 * 1024 * 1024))
 UPLOAD_TOTAL_BYTES = int(os.environ.get('UPLOAD_TOTAL_BYTES', 2 * 1024 * 1024 * 1024))
 CONFIRMATION_TOKEN_HOURS = int(os.environ.get('CONFIRMATION_TOKEN_HOURS', 168))
-SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '')
+EMAIL_PROVIDER = os.environ.get('EMAIL_PROVIDER', 'sendgrid').strip().lower() or 'sendgrid'
+SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '').strip()
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
+TWILIO_EMAIL_API_KEY_SID = os.environ.get('TWILIO_EMAIL_API_KEY_SID', '').strip()
+TWILIO_EMAIL_API_KEY_SECRET = os.environ.get('TWILIO_EMAIL_API_KEY_SECRET', '').strip()
+TWILIO_EMAIL_ENDPOINT = 'https://comms.twilio.com/v1/Emails'
+TWILIO_EMAIL_MAX_REQUEST_BYTES = 9_500_000
+EMAIL_ATTACHMENT_MAX_BYTES = 7_000_000
 
 def _env_flag(name, default=False):
     """Parse a conventional boolean environment variable."""
@@ -99,10 +105,16 @@ ENABLE_RECEIPT_PARSING  = os.environ.get('ENABLE_RECEIPT_PARSING', '').strip().l
 # Only actually call the API when parsing is enabled AND a key is present.
 RECEIPT_PARSING_ACTIVE  = ENABLE_RECEIPT_PARSING and bool(ANTHROPIC_API_KEY)
 
-# Twilio removed — all notifications via SendGrid email
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 _early_log = logging.getLogger(__name__)
-_early_log.info(f'SENDGRID configured={bool(SENDGRID_API_KEY)} notify_from={NOTIFY_FROM_EMAIL!r}')
+_early_log.info(
+    'Email provider=%s configured=%s notify_from=%r',
+    EMAIL_PROVIDER,
+    bool(SENDGRID_API_KEY) if EMAIL_PROVIDER == 'sendgrid' else bool(
+        TWILIO_EMAIL_API_KEY_SID and TWILIO_EMAIL_API_KEY_SECRET
+    ),
+    NOTIFY_FROM_EMAIL,
+)
 
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else '.', exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -2209,46 +2221,106 @@ def _notify_coordinators(db, message):
     except Exception as _e:
         log.warning(f'_notify_coordinators failed: {_e}')
 
+
+def _provider_error_summary(exc):
+    """Return a credential-safe provider error label for APIs and logs."""
+    status = getattr(exc, 'code', None)
+    if status is not None:
+        return f'HTTP {status}'
+    return type(exc).__name__
+
+
+def _email_provider_configured(provider=None):
+    """Return whether the selected email provider has its required credentials."""
+    selected = (provider or EMAIL_PROVIDER).strip().lower()
+    if selected == 'sendgrid':
+        return bool(SENDGRID_API_KEY)
+    if selected == 'twilio':
+        return bool(TWILIO_EMAIL_API_KEY_SID and TWILIO_EMAIL_API_KEY_SECRET)
+    return False
+
+
 def _email_send(to_email, subject, text_body, attachment=None):
-    """Send an email via SendGrid Web API v3 (no SDK — pure urllib).
-    Requires SENDGRID_API_KEY env var. Falls back silently if not configured.
+    """Send email through EMAIL_PROVIDER (sendgrid rollback default or twilio).
     Returns True on success, False on failure (never raises).
     attachment: optional (filename, bytes) tuple — used by the off-site backup job."""
-    import urllib.request, urllib.parse, json as _json
-    if not SENDGRID_API_KEY:
-        log.warning('Email not sent — SENDGRID_API_KEY not configured')
+    import base64 as _b64
+    import html as _html
+    import json as _json
+    import urllib.request
+
+    if not _email_provider_configured():
+        log.warning('Email not sent — %s email provider is not configured', EMAIL_PROVIDER)
         return False
-    msg = {
-        'personalizations': [{'to': [{'email': to_email}]}],
-        'from': {'email': NOTIFY_FROM_EMAIL, 'name': 'Sihha Ops Hub'},
-        'subject': subject,
-        'content': [{'type': 'text/plain', 'value': text_body}]
-    }
-    if attachment:
-        import base64 as _b64
-        fname, fbytes = attachment
-        msg['attachments'] = [{
-            'content': _b64.b64encode(fbytes).decode('ascii'),
-            'filename': fname,
-            'type': 'application/gzip',
-            'disposition': 'attachment'
-        }]
-    payload = _json.dumps(msg).encode('utf-8')
-    req = urllib.request.Request(
-        'https://api.sendgrid.com/v3/mail/send',
-        data=payload,
-        headers={
+
+    if EMAIL_PROVIDER == 'sendgrid':
+        msg = {
+            'personalizations': [{'to': [{'email': to_email}]}],
+            'from': {'email': NOTIFY_FROM_EMAIL, 'name': 'Sihha Ops Hub'},
+            'subject': subject,
+            'content': [{'type': 'text/plain', 'value': text_body}],
+        }
+        if attachment:
+            fname, fbytes = attachment
+            msg['attachments'] = [{
+                'content': _b64.b64encode(fbytes).decode('ascii'),
+                'filename': fname,
+                'type': 'application/gzip',
+                'disposition': 'attachment',
+            }]
+        endpoint = 'https://api.sendgrid.com/v3/mail/send'
+        headers = {
             'Authorization': f'Bearer {SENDGRID_API_KEY}',
-            'Content-Type': 'application/json'
-        },
-        method='POST'
+            'Content-Type': 'application/json',
+        }
+    elif EMAIL_PROVIDER == 'twilio':
+        msg = {
+            'from': {'address': NOTIFY_FROM_EMAIL, 'name': 'Sihha Ops Hub'},
+            'to': [{'address': to_email}],
+            'content': {
+                'subject': subject,
+                'text': text_body,
+                'html': _html.escape(text_body).replace('\n', '<br>'),
+            },
+        }
+        if attachment:
+            fname, fbytes = attachment
+            msg['content']['attachments'] = [{
+                'filename': fname,
+                'contentType': 'application/gzip',
+                'content': _b64.b64encode(fbytes).decode('ascii'),
+            }]
+        credentials = _b64.b64encode(
+            f'{TWILIO_EMAIL_API_KEY_SID}:{TWILIO_EMAIL_API_KEY_SECRET}'.encode('utf-8')
+        ).decode('ascii')
+        endpoint = TWILIO_EMAIL_ENDPOINT
+        headers = {
+            'Authorization': f'Basic {credentials}',
+            'Content-Type': 'application/json',
+        }
+    else:
+        log.warning('Email not sent — unsupported EMAIL_PROVIDER=%r', EMAIL_PROVIDER)
+        return False
+
+    payload = _json.dumps(msg).encode('utf-8')
+    if EMAIL_PROVIDER == 'twilio' and len(payload) > TWILIO_EMAIL_MAX_REQUEST_BYTES:
+        log.warning('Email not sent — Twilio Email request exceeds the safe request-size limit')
+        return False
+    req = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers=headers,
+        method='POST',
     )
     try:
-        urllib.request.urlopen(req, timeout=(30 if attachment else 10))
-        log.info(f'Email sent to {to_email}: {subject}')
-        return True
+        with urllib.request.urlopen(req, timeout=(30 if attachment else 10)) as response:
+            sent = 200 <= response.status < 300
+        if sent:
+            log.info('Email accepted by %s: %s', EMAIL_PROVIDER, subject)
+        return sent
     except Exception as e:
-        log.warning(f'Email send failed to {to_email}: {e}')
+        log.warning('Email send failed through %s: %s',
+                    EMAIL_PROVIDER, _provider_error_summary(e))
         return False
 
 def _notify_treasurers(db, subject, message):
@@ -2291,8 +2363,13 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.1.0', 'time': now(),
-            'checks': {'database': 'ok', 'schema': 'ok'}
+            'status': 'ok', 'version': '1.1.1', 'time': now(),
+            'checks': {'database': 'ok', 'schema': 'ok'},
+            'communications': {
+                'email_provider': EMAIL_PROVIDER,
+                'email_configured': _email_provider_configured(),
+                'sendgrid_configured': bool(SENDGRID_API_KEY),
+            },
         })
     except Exception as exc:
         log.error(f'Readiness check failed: {exc}')
@@ -2303,6 +2380,72 @@ def health():
     finally:
         if conn is not None:
             conn.close()
+
+
+@app.route('/api/admin/communications/health', methods=['GET'])
+@require_auth(roles=['admin'])
+def communications_health():
+    """Verify the selected email credentials without sending a message."""
+    import base64 as _b64
+    import urllib.error
+    import urllib.request
+
+    result = {
+        'email': {
+            'provider': EMAIL_PROVIDER,
+            'configured': _email_provider_configured(),
+            'authenticated': False,
+        },
+        'sendgrid': {'configured': bool(SENDGRID_API_KEY), 'authenticated': False},
+        'twilio_email': {
+            'configured': bool(TWILIO_EMAIL_API_KEY_SID and TWILIO_EMAIL_API_KEY_SECRET),
+            'authenticated': False,
+        },
+    }
+    if EMAIL_PROVIDER == 'sendgrid' and SENDGRID_API_KEY:
+        try:
+            req = urllib.request.Request(
+                'https://api.sendgrid.com/v3/scopes',
+                headers={'Authorization': f'Bearer {SENDGRID_API_KEY}'},
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result['sendgrid']['authenticated'] = 200 <= response.status < 300
+        except Exception as exc:
+            result['sendgrid']['error'] = _provider_error_summary(exc)
+        result['email']['authenticated'] = result['sendgrid']['authenticated']
+        if 'error' in result['sendgrid']:
+            result['email']['error'] = result['sendgrid']['error']
+    elif EMAIL_PROVIDER == 'twilio' and result['twilio_email']['configured']:
+        try:
+            credentials = _b64.b64encode(
+                f'{TWILIO_EMAIL_API_KEY_SID}:{TWILIO_EMAIL_API_KEY_SECRET}'.encode('utf-8')
+            ).decode('ascii')
+            req = urllib.request.Request(
+                TWILIO_EMAIL_ENDPOINT,
+                data=b'{}',
+                headers={
+                    'Authorization': f'Basic {credentials}',
+                    'Content-Type': 'application/json',
+                },
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result['twilio_email']['authenticated'] = 200 <= response.status < 300
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 422):
+                result['twilio_email']['authenticated'] = True
+            else:
+                result['twilio_email']['error'] = _provider_error_summary(exc)
+        except Exception as exc:
+            result['twilio_email']['error'] = _provider_error_summary(exc)
+        result['email']['authenticated'] = result['twilio_email']['authenticated']
+        if 'error' in result['twilio_email']:
+            result['email']['error'] = result['twilio_email']['error']
+    elif EMAIL_PROVIDER not in ('sendgrid', 'twilio'):
+        result['email']['error'] = 'unsupported_provider'
+
+    result['status'] = 'ok' if result['email']['authenticated'] else 'attention_required'
+    return jsonify(result), (200 if result['email']['authenticated'] else 503)
 
 # ── Auth Routes ───────────────────────────────────────────────────────────────
 
@@ -10238,9 +10381,10 @@ def _offsite_backup(dest):
         with open(dest, 'rb') as f:
             gz = gzip.compress(f.read(), compresslevel=9)
         stamp = os.path.basename(dest)
-        if len(gz) > 10 * 1024 * 1024:  # SendGrid hard limit ~30MB total; stay well under
+        if len(gz) > EMAIL_ATTACHMENT_MAX_BYTES:
             _email_send(recipient, f'Sihha backup TOO LARGE to email — {stamp}',
-                        f'Compressed DB snapshot is {len(gz)//1024//1024} MB (>10 MB email cap). '
+                        f'Compressed DB snapshot is {len(gz)//1024//1024} MB '
+                        f'(>{EMAIL_ATTACHMENT_MAX_BYTES//1_000_000} MB email cap). '
                         f'Time to move off-site backups to object storage (S3/B2) — see MEMORY.md backlog 0.2.')
             log.warning(f'Off-site backup skipped — gz size {len(gz)} bytes exceeds email cap')
             return
