@@ -49,7 +49,10 @@ def add_security_headers(response):
     response.headers.setdefault(
         'Permissions-Policy', 'camera=(self), geolocation=(), microphone=(), payment=()'
     )
-    if request.path.startswith('/confirm/') or request.path.startswith('/api/family/confirm/'):
+    if (request.path.startswith('/confirm/')
+            or request.path.startswith('/api/family/confirm/')
+            or request.path == '/activate'
+            or request.path.startswith('/api/auth/access-invitation')):
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Cache-Control'] = 'no-store'
     if request.is_secure:
@@ -70,6 +73,8 @@ UPLOAD_FILES_PER_DAY = int(os.environ.get('UPLOAD_FILES_PER_DAY', 20))
 UPLOAD_BYTES_PER_DAY = int(os.environ.get('UPLOAD_BYTES_PER_DAY', 64 * 1024 * 1024))
 UPLOAD_TOTAL_BYTES = int(os.environ.get('UPLOAD_TOTAL_BYTES', 2 * 1024 * 1024 * 1024))
 CONFIRMATION_TOKEN_HOURS = int(os.environ.get('CONFIRMATION_TOKEN_HOURS', 168))
+ACCOUNT_INVITATION_MINUTES = 60
+ACCOUNT_INVITATION_URL = 'https://ops.sihha.org/activate'
 EMAIL_PROVIDER = os.environ.get('EMAIL_PROVIDER', 'sendgrid').strip().lower() or 'sendgrid'
 SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '').strip()
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
@@ -261,6 +266,36 @@ def bootstrap_db():
             expires_at  TEXT NOT NULL,
             created_at  TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+
+        -- Account invitations never store the bearer token itself. Only its
+        -- SHA-256 digest is retained, and a token becomes unusable after one
+        -- successful password creation, expiry, or explicit invalidation.
+        CREATE TABLE IF NOT EXISTS account_invitations (
+            id               TEXT PRIMARY KEY,
+            user_id          TEXT NOT NULL,
+            token_hash       TEXT UNIQUE NOT NULL,
+            delivery_email   TEXT NOT NULL,
+            created_by       TEXT,
+            created_at       TEXT NOT NULL,
+            expires_at       TEXT NOT NULL,
+            email_sent_at    TEXT,
+            used_at          TEXT,
+            invalidated_at   TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (created_by) REFERENCES users(id)
+        );
+
+        -- Append-only security audit trail for invitation and credential events.
+        -- It intentionally excludes raw tokens, passwords, email addresses, and IPs.
+        CREATE TABLE IF NOT EXISTS account_access_events (
+            id               TEXT PRIMARY KEY,
+            user_id          TEXT NOT NULL,
+            invitation_id    TEXT,
+            event_type       TEXT NOT NULL,
+            actor_user_id    TEXT,
+            detail           TEXT,
+            created_at       TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS families (
@@ -594,6 +629,9 @@ def bootstrap_db():
         "CREATE INDEX IF NOT EXISTS idx_upload_user_time  ON uploaded_files(uploader_user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_upload_vol_time   ON uploaded_files(volunteer_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_upload_claimed    ON uploaded_files(claimed_at, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_account_invites_user ON account_invitations(user_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_account_invites_expiry ON account_invitations(expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_account_events_user ON account_access_events(user_id, created_at)",
     ]
     for _idx_sql in _performance_indexes:
         try:
@@ -2240,7 +2278,7 @@ def _email_provider_configured(provider=None):
     return False
 
 
-def _email_send(to_email, subject, text_body, attachment=None):
+def _email_send(to_email, subject, text_body, attachment=None, html_body=None):
     """Send email through EMAIL_PROVIDER (sendgrid rollback default or twilio).
     Returns True on success, False on failure (never raises).
     attachment: optional (filename, bytes) tuple — used by the off-site backup job."""
@@ -2260,6 +2298,8 @@ def _email_send(to_email, subject, text_body, attachment=None):
             'subject': subject,
             'content': [{'type': 'text/plain', 'value': text_body}],
         }
+        if html_body:
+            msg['content'].append({'type': 'text/html', 'value': html_body})
         if attachment:
             fname, fbytes = attachment
             msg['attachments'] = [{
@@ -2280,7 +2320,7 @@ def _email_send(to_email, subject, text_body, attachment=None):
             'content': {
                 'subject': subject,
                 'text': text_body,
-                'html': _html.escape(text_body).replace('\n', '<br>'),
+                'html': html_body or _html.escape(text_body).replace('\n', '<br>'),
             },
         }
         if attachment:
@@ -2363,7 +2403,7 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.1.1', 'time': now(),
+            'status': 'ok', 'version': '1.2.0', 'time': now(),
             'checks': {'database': 'ok', 'schema': 'ok'},
             'communications': {
                 'email_provider': EMAIL_PROVIDER,
@@ -2511,6 +2551,184 @@ def _valid_public_email(value):
     if not value:
         return True
     return bool(re.fullmatch(r'[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}', value))
+
+def _account_invitation_digest(token):
+    """Return the one-way database representation of an invitation bearer token."""
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+def _account_delivery_email(db, user):
+    """Resolve the verified delivery address attached to an account or linked record."""
+    direct = ((user['email'] if 'email' in user.keys() else None) or '').strip()
+    if direct:
+        return direct
+    linked_id = user['linked_id'] if 'linked_id' in user.keys() else None
+    if not linked_id:
+        return ''
+    if user['role'] == 'family':
+        row = db.execute("SELECT email FROM families WHERE id=?", (linked_id,)).fetchone()
+    elif user['role'] == 'volunteer':
+        row = db.execute("SELECT email FROM volunteers WHERE id=?", (linked_id,)).fetchone()
+    else:
+        row = None
+    return ((row['email'] if row else None) or '').strip()
+
+def _email_hint(email):
+    """Return a non-sensitive destination hint suitable for API responses and UI."""
+    local, _, domain = (email or '').partition('@')
+    if not domain:
+        return ''
+    visible = local[:1]
+    return f'{visible}{"*" * max(3, len(local) - 1)}@{domain}'
+
+def _record_account_access_event(db, user_id, event_type,
+                                 invitation_id=None, actor_user_id=None, detail=None):
+    db.execute(
+        '''INSERT INTO account_access_events
+           (id,user_id,invitation_id,event_type,actor_user_id,detail,created_at)
+           VALUES (?,?,?,?,?,?,?)''',
+        (str(uuid.uuid4()), user_id, invitation_id, event_type,
+         actor_user_id, detail, now())
+    )
+
+def _invalidate_account_invitations(db, user_id, actor_user_id=None, detail=None,
+                                    except_invitation_id=None):
+    """Invalidate every outstanding link for a user and append one audit event."""
+    invalidated_at = now()
+    sql = '''UPDATE account_invitations SET invalidated_at=?
+             WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL'''
+    params = [invalidated_at, user_id]
+    if except_invitation_id:
+        sql += ' AND id!=?'
+        params.append(except_invitation_id)
+    changed = db.execute(sql, tuple(params)).rowcount
+    if changed:
+        _record_account_access_event(
+            db, user_id, 'invitations_invalidated',
+            actor_user_id=actor_user_id, detail=detail
+        )
+    return changed
+
+def _valid_account_invitation(db, token):
+    if not token or len(token) > 256:
+        return None
+    return db.execute(
+        '''SELECT ai.*, u.username, u.name, u.role, u.active,
+                  u.linked_id, u.linked_type
+           FROM account_invitations ai
+           JOIN users u ON u.id=ai.user_id
+           WHERE ai.token_hash=? AND ai.email_sent_at IS NOT NULL
+             AND ai.used_at IS NULL AND ai.invalidated_at IS NULL
+             AND ai.expires_at>?''',
+        (_account_invitation_digest(token), now())
+    ).fetchone()
+
+def _invalid_account_invitation_response():
+    return jsonify({
+        'error': 'This access link is invalid or has expired. Ask your Sihha coordinator for a new link.'
+    }), 400
+
+@app.route('/api/auth/access-invitation', methods=['POST'])
+def account_invitation_info():
+    """Validate an invitation without changing credentials or creating a session."""
+    data = request.get_json(silent=True) or {}
+    raw_token = data.get('token') if isinstance(data, dict) else None
+    token = raw_token.strip() if isinstance(raw_token, str) else ''
+    db = get_db()
+    if not _consume_rate_limit(
+            db, 'account_invitation_info_ip', _client_ip(), 60, 3600):
+        return _rate_limit_response(3600)
+    invitation = _valid_account_invitation(db, token)
+    if (not invitation or not invitation['active']
+            or not _linked_account_is_active(db, invitation)):
+        return _invalid_account_invitation_response()
+    return jsonify({
+        'valid': True,
+        'username': invitation['username'],
+        'name': invitation['name'],
+        'expires_at': invitation['expires_at'],
+    })
+
+@app.route('/api/auth/access-invitation/activate', methods=['POST'])
+def activate_account_invitation():
+    """Consume a single-use invitation and let its owner create the account password."""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return _invalid_account_invitation_response()
+    raw_token = data.get('token')
+    raw_password = data.get('password')
+    raw_confirmation = data.get('password_confirmation')
+    token = raw_token.strip() if isinstance(raw_token, str) else ''
+    password = raw_password if isinstance(raw_password, str) else ''
+    password_confirmation = raw_confirmation if isinstance(raw_confirmation, str) else ''
+    if password != password_confirmation:
+        return jsonify({'error': 'Passwords do not match.'}), 422
+    ok, error = _validate_password(password)
+    if not ok:
+        return jsonify({'error': error}), 422
+
+    db = get_db()
+    token_identity = _account_invitation_digest(token) if token else 'missing'
+    if (not _consume_rate_limit(
+                db, 'account_invitation_activate_ip', _client_ip(), 30, 3600)
+            or not _consume_rate_limit(
+                db, 'account_invitation_activate_token', token_identity, 10, 3600)):
+        return _rate_limit_response(3600)
+
+    invitation = _valid_account_invitation(db, token)
+    if (not invitation or not invitation['active']
+            or not _linked_account_is_active(db, invitation)):
+        return _invalid_account_invitation_response()
+
+    used_at = now()
+    consumed = db.execute(
+        '''UPDATE account_invitations SET used_at=?
+           WHERE id=? AND token_hash=? AND email_sent_at IS NOT NULL
+             AND used_at IS NULL AND invalidated_at IS NULL AND expires_at>?''',
+        (used_at, invitation['id'], _account_invitation_digest(token), used_at)
+    ).rowcount
+    if consumed != 1:
+        db.rollback()
+        return _invalid_account_invitation_response()
+
+    db.execute(
+        '''UPDATE users SET password_hash=?, must_change_password=0,
+           password_changed_at=? WHERE id=?''',
+        (generate_password_hash(password), used_at, invitation['user_id'])
+    )
+    _revoke_user_sessions(db, invitation['user_id'])
+    _invalidate_account_invitations(
+        db, invitation['user_id'], detail='password_created',
+        except_invitation_id=invitation['id']
+    )
+    _record_account_access_event(
+        db, invitation['user_id'], 'password_created', invitation['id']
+    )
+    db.commit()
+
+    confirmation_body = (
+        f"Hello {invitation['name'] or invitation['username']},\n\n"
+        f"Your Sihha account password was created successfully.\n\n"
+        f"Sign in at: https://ops.sihha.org/login\n\n"
+        f"If you did not make this change, contact your Sihha coordinator immediately "
+        f"at info@sihha.org.\n\n"
+        f"— Sihha Food Program"
+    )
+    confirmation_sent = _email_send(
+        invitation['delivery_email'], 'Your Sihha Password Was Created', confirmation_body
+    )
+    _record_account_access_event(
+        db, invitation['user_id'],
+        'password_confirmation_sent' if confirmation_sent else 'password_confirmation_failed',
+        invitation['id']
+    )
+    db.commit()
+    log.info('Account invitation consumed for user_id=%s', invitation['user_id'])
+    return jsonify({
+        'ok': True,
+        'username': invitation['username'],
+        'login_url': '/login',
+        'confirmation_email_sent': confirmation_sent,
+    })
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -2663,6 +2881,14 @@ def set_password():
     )
     # A password reset is a security boundary: expire every pre-reset session.
     _revoke_user_sessions(db, session['user_id'])
+    _invalidate_account_invitations(
+        db, session['user_id'], actor_user_id=session['user_id'],
+        detail='legacy_temporary_password_completed'
+    )
+    _record_account_access_event(
+        db, session['user_id'], 'password_created_legacy',
+        actor_user_id=session['user_id']
+    )
 
     # Issue a full session
     token = secrets.token_urlsafe(32)  # CSPRNG session token (was uuid4)
@@ -2713,6 +2939,13 @@ def change_password():
     )
     current_token = request.headers.get('Authorization', '')[7:]
     _revoke_user_sessions(db, g.user['user_id'], except_token=current_token)
+    _invalidate_account_invitations(
+        db, g.user['user_id'], actor_user_id=g.user['user_id'],
+        detail='password_changed'
+    )
+    _record_account_access_event(
+        db, g.user['user_id'], 'password_changed', actor_user_id=g.user['user_id']
+    )
     db.commit()
     return jsonify({'ok': True, 'message': 'Password updated successfully'})
 
@@ -2721,12 +2954,20 @@ def change_password():
 @app.route('/api/users', methods=['GET'])
 @require_auth(roles=['admin'])
 def list_users():
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         '''SELECT id, username, name, role, email, active, linked_id, linked_type,
                   must_change_password, password_changed_at, last_login_at, created_at
            FROM users ORDER BY created_at'''
     ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    result = []
+    for row in rows:
+        item = dict(row)
+        delivery_email = _account_delivery_email(db, row)
+        item['has_access_email'] = bool(delivery_email)
+        item['access_email_hint'] = _email_hint(delivery_email)
+        result.append(item)
+    return jsonify(result)
 
 def _generate_temp_password():
     """Generate a cryptographically secure temp password that meets the rules."""
@@ -2815,6 +3056,12 @@ def update_user(uid):
                 'password', 'role', 'active', 'linked_id', 'linked_type',
                 'must_change_password')):
             _revoke_user_sessions(db, uid)
+        if any(k in data for k in (
+                'password', 'email', 'role', 'active', 'linked_id',
+                'linked_type', 'must_change_password')):
+            _invalidate_account_invitations(
+                db, uid, actor_user_id=g.user['user_id'], detail='account_updated'
+            )
         db.commit()
     except sqlite3.IntegrityError as e:
         return jsonify({'error': str(e)}), 400
@@ -2832,48 +3079,108 @@ def force_password_reset(uid):
         return jsonify({'error': 'Not found'}), 404
     db.execute("UPDATE users SET must_change_password=1 WHERE id=?", (uid,))
     _revoke_user_sessions(db, uid)
+    _invalidate_account_invitations(
+        db, uid, actor_user_id=g.user['user_id'], detail='forced_password_reset'
+    )
     db.commit()
     return jsonify({'ok': True})
 
+@app.route('/api/users/<uid>/send-access-link', methods=['POST'])
 @app.route('/api/users/<uid>/reset-password', methods=['POST'])
 @require_auth(roles=['admin'])
-def admin_reset_password(uid):
-    """Admin sets a new password for any user.
-    Body: {must_change: bool}  — if true, user must change on next login.
-    Returns: {new_password, email_sent}"""
+def send_account_access_link(uid):
+    """Email a single-use password-creation link without changing the account first.
+
+    The legacy reset-password URL intentionally aliases this safer behavior so
+    older admin clients cannot continue emailing generated passwords.
+    """
     db = get_db()
-    row = db.execute(
-        "SELECT u.*, f.email as family_email FROM users u "
-        "LEFT JOIN families f ON u.linked_id = f.id AND u.role='family' "
-        "WHERE u.id=?", (uid,)
-    ).fetchone()
+    row = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    data = request.json or {}
-    must_change = 1 if data.get('must_change', True) else 0
-    new_pw = _generate_temp_password()
+    if not row['active'] or not _linked_account_is_active(db, row):
+        return jsonify({'error': 'Account must be active before access can be sent.'}), 409
+    delivery_email = _account_delivery_email(db, row)
+    if not delivery_email or not _valid_public_email(delivery_email):
+        return jsonify({'error': 'Add a valid email address before sending access.'}), 422
+    if not _consume_rate_limit(db, 'account_invitation_send_user', uid, 3, 3600):
+        return _rate_limit_response(3600)
+
+    invitation_id = str(uuid.uuid4())
+    raw_token = secrets.token_urlsafe(32)
+    created_at = now()
+    expires_at = (
+        datetime.utcnow() + timedelta(minutes=ACCOUNT_INVITATION_MINUTES)
+    ).isoformat()
     db.execute(
-        "UPDATE users SET password_hash=?, must_change_password=?, password_changed_at=? WHERE id=?",
-        (generate_password_hash(new_pw), must_change, now() if not must_change else None, uid)
+        '''INSERT INTO account_invitations
+           (id,user_id,token_hash,delivery_email,created_by,created_at,expires_at)
+           VALUES (?,?,?,?,?,?,?)''',
+        (invitation_id, uid, _account_invitation_digest(raw_token), delivery_email,
+         g.user['user_id'], created_at, expires_at)
     )
-    _revoke_user_sessions(db, uid)
+    _record_account_access_event(
+        db, uid, 'invitation_created', invitation_id, g.user['user_id']
+    )
     db.commit()
-    # Email if family has email on file
-    email_sent = False
-    to_email = (row['email'] or '') or (row['family_email'] or '')
-    if to_email:
-        body = (
-            f"Your Sihha Food Program password has been reset by an admin.\n\n"
-            f"  Login URL:  https://ops.sihha.org/login\n"
-            f"  Username:   {row['username']}\n"
-            f"  Password:   {new_pw}\n\n"
-            + (f"You will be asked to set a new password after logging in.\n\n" if must_change else "")
-            + f"— Sihha Food Program"
+
+    access_url = f'{ACCOUNT_INVITATION_URL}#token={raw_token}'
+    body = (
+        f"Hello {row['name'] or row['username']},\n\n"
+        f"Sihha has created a secure account-access link for you.\n\n"
+        f"Username: {row['username']}\n"
+        f"Create your password: {access_url}\n\n"
+        f"This link works once and expires in {ACCOUNT_INVITATION_MINUTES} minutes. "
+        f"If you were not expecting it, you can ignore this email.\n\n"
+        f"— Sihha Food Program"
+    )
+    import html as _html
+    safe_name = _html.escape(row['name'] or row['username'])
+    safe_username = _html.escape(row['username'])
+    safe_access_url = _html.escape(access_url, quote=True)
+    html_body = (
+        f'<p>Hello {safe_name},</p>'
+        f'<p>Sihha has created a secure account-access link for you.</p>'
+        f'<p>Username: <strong>{safe_username}</strong></p>'
+        f'<p><a href="{safe_access_url}">Create your Sihha password</a></p>'
+        f'<p>This link works once and expires in {ACCOUNT_INVITATION_MINUTES} minutes. '
+        f'If you were not expecting it, you can ignore this email.</p>'
+        f'<p>— Sihha Food Program</p>'
+    )
+    email_sent = _email_send(
+        delivery_email, 'Create Your Sihha Password', body, html_body=html_body
+    )
+    if email_sent:
+        sent_at = now()
+        db.execute(
+            "UPDATE account_invitations SET email_sent_at=? WHERE id=?",
+            (sent_at, invitation_id)
         )
-        email_sent = _email_send(to_email, 'Your Sihha Password Has Been Reset', body)
-    log.info(f'Admin reset password for user {row["username"]} (must_change={must_change})')
-    return jsonify({'new_password': new_pw, 'username': row['username'],
-                    'email_sent': email_sent, 'email': to_email or None})
+        _invalidate_account_invitations(
+            db, uid, actor_user_id=g.user['user_id'],
+            detail='new_invitation_sent', except_invitation_id=invitation_id
+        )
+        _record_account_access_event(
+            db, uid, 'invitation_email_sent', invitation_id, g.user['user_id']
+        )
+        db.commit()
+        log.info('Account invitation email accepted for user_id=%s', uid)
+        return jsonify({
+            'username': row['username'],
+            'email_sent': True,
+            'email_hint': _email_hint(delivery_email),
+            'expires_in_minutes': ACCOUNT_INVITATION_MINUTES,
+        })
+
+    db.execute(
+        "UPDATE account_invitations SET invalidated_at=? WHERE id=?",
+        (now(), invitation_id)
+    )
+    _record_account_access_event(
+        db, uid, 'invitation_email_failed', invitation_id, g.user['user_id']
+    )
+    db.commit()
+    return jsonify({'error': 'The access email could not be sent. Please try again.'}), 502
 
 @app.route('/api/users/bulk-create', methods=['POST'])
 @require_auth(roles=['admin'])
@@ -6895,6 +7202,10 @@ def report_cycle_summary(cid):
 @app.route('/login')
 def login_page():
     return send_from_directory('public', 'login.html')
+
+@app.route('/activate')
+def activate_page():
+    return send_from_directory('public', 'activate.html')
 
 @app.route('/family')
 def family_page():

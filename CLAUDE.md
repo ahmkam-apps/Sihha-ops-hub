@@ -2,6 +2,18 @@
 
 **Read this file at the start of every dev session before touching server.py or any DB/route code.**
 
+> **2026-08-15 — secure account invitations (v1.2.0).** Branch
+> `agent/secure-account-invitations` replaces administrator-emailed passwords with a
+> single-use 60-minute `Create Your Sihha Password` link. Tokens are 256-bit random values;
+> only SHA-256 digests are stored. The link token is carried in the URL fragment, removed
+> from browser history immediately, rate-limited, invalidated on use/account changes, and
+> never creates a session automatically. Password creation revokes prior sessions and sends
+> a separate security notification. New tables: `account_invitations` and
+> `account_access_events`; new page: `/activate`; new admin route:
+> `POST /api/users/<uid>/send-access-link`. The legacy `reset-password` route aliases the
+> safe link flow and no longer returns or emails a generated password. Verification:
+> 227 passed, 1 intentional skip; Python and inline-JavaScript syntax checks pass.
+>
 > **Code audit 2026-06-09:** full security/architecture audit completed. Prioritized remediation backlog (Phase 0 operational → Phase 4 structural) lives in `MEMORY.md → Active Backlog`. Check it before starting work.
 >
 > **Remediation status (2026-06-11): COMPLETE through Phase 3 + Phase 4 high-value items** (final commit `2201810`). Everything from the 2026-06-10 note, plus: off-site backup email (`BACKUP_EMAIL` env, verified), heartbeat digest 11:00 UTC, staging-first deploys, finance test suite (157 total tests), dead legacy routes removed, session purge 06:45 UTC + hourly expiry slide, atomic cancel flows, N+1 batching in get_orders/list_families, shared `public/js/shared.js` (`esc`/`escJs`/`makeApi`) + `public/css/base.css` — **use these for all new pages/interpolations**, `secrets.token_urlsafe` sessions, `tmp_`-prefixed temp tokens (rejected by require_auth; only set-password accepts), receipts list gated to admin/finance/treasurer, Procfile gone (railway.json owns the start command). Remaining low-priority Phase 4 items in `MEMORY.md → Active Backlog`.
@@ -102,6 +114,19 @@
 | `created_at` | TEXT NOT NULL | CREATE TABLE (original) |
 
 No migrations. Fully original.
+
+---
+
+### Table: `account_invitations`
+
+Stores only a SHA-256 token digest plus user, delivery, creator, expiry, delivery, use,
+and invalidation timestamps. Raw invitation tokens and passwords are never stored here.
+
+### Table: `account_access_events`
+
+Append-only security audit events for invitation creation/delivery/failure/invalidation,
+password creation/change, and confirmation-email delivery. It excludes raw tokens,
+passwords, email addresses, and IP addresses.
 
 ---
 
@@ -594,6 +619,8 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | POST | `/api/auth/login` | None | Username + password login; returns `must_change_password+temp_token` on first login, else full `token` |
 | POST | `/api/auth/set-password` | temp_token | Complete first-login or forced-reset; issues full session token |
 | POST | `/api/auth/change-password` | Bearer (any) | Change own password |
+| POST | `/api/auth/access-invitation` | None | Validate a single-use account invitation without changing the account |
+| POST | `/api/auth/access-invitation/activate` | None | Consume an invitation and create a password; does not auto-login |
 | POST | `/api/auth/logout` | Bearer token (any) | Deletes session |
 | GET | `/api/auth/me` | Bearer token (any) | Returns current user info |
 
@@ -609,6 +636,9 @@ Complete ordered list of every ALTER TABLE / table-recreation migration in `boot
 | GET | `/api/users` | admin | List all users | users |
 | POST | `/api/users` | admin | Create user (all roles) | users |
 | PUT | `/api/users/<uid>` | admin | Update user (role, password, WA creds, active) | users |
+| POST | `/api/users/<uid>/send-access-link` | admin | Email a one-time 60-minute password-creation link | users, account_invitations, account_access_events |
+| POST | `/api/users/<uid>/reset-password` | admin | Backward-compatible alias for the secure access-link flow | users, account_invitations, account_access_events |
+| POST | `/api/users/<uid>/force-reset` | admin | Require password change on next login and invalidate sessions/access links | users, sessions, account_invitations |
 | POST | `/api/admin/fix-schema` | admin | Manual trigger for users table CHECK repair | users (sqlite_master) |
 
 ### Families

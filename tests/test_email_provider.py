@@ -71,6 +71,36 @@ def test_twilio_email_rejects_oversize_request_before_network(monkeypatch):
     ) is False
 
 
+def test_twilio_email_preserves_trusted_html_for_clickable_access_link(monkeypatch):
+    captured = {}
+
+    class AcceptedResponse:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        captured['payload'] = json.loads(request.data)
+        return AcceptedResponse()
+
+    monkeypatch.setattr(app_server, 'EMAIL_PROVIDER', 'twilio')
+    monkeypatch.setattr(app_server, 'TWILIO_EMAIL_API_KEY_SID', 'SK-test-production')
+    monkeypatch.setattr(app_server, 'TWILIO_EMAIL_API_KEY_SECRET', 'secret-value')
+    monkeypatch.setattr('urllib.request.urlopen', fake_urlopen)
+
+    html_body = '<p><a href="https://ops.sihha.org/activate#token=test">Create password</a></p>'
+    assert app_server._email_send(
+        'user@example.org', 'Create Your Sihha Password',
+        'Create password: https://ops.sihha.org/activate#token=test',
+        html_body=html_body,
+    ) is True
+    assert captured['payload']['content']['html'] == html_body
+
+
 def test_twilio_email_health_authenticates_without_sending(
         client, auth, monkeypatch):
     captured = {}

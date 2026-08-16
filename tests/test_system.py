@@ -1416,6 +1416,265 @@ class TestUserManagement:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 14B — SECURE ACCOUNT INVITATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAccountInvitations:
+    """Single-use email links replace emailed administrator-generated passwords."""
+
+    @staticmethod
+    def _create_user(client, auth, *, email='invitee@example.org', active=1):
+        username = f'invite_{uuid.uuid4().hex[:8]}'
+        created = client.post('/api/users', headers=auth, json={
+            'username': username,
+            'name': 'Invitation Test User',
+            'email': email,
+            'password': 'ExistingPass1!',
+            'must_change_password': 0,
+            'active': active,
+            'role': 'viewer',
+        })
+        assert created.status_code == 201
+        return created.get_json()['id'], username
+
+    @staticmethod
+    def _token_from_email(email_calls, index=-1):
+        body = email_calls[index][2]
+        assert '#token=' in body
+        return body.split('#token=', 1)[1].split()[0]
+
+    def test_invitation_send_requires_admin(self, client, auth):
+        uid, _ = self._create_user(client, auth)
+        assert client.post(f'/api/users/{uid}/send-access-link').status_code == 401
+
+    def test_public_invitation_routes_reject_malformed_types(self, client):
+        info = client.post('/api/auth/access-invitation', json={'token': ['invalid']})
+        assert info.status_code == 400
+        activate = client.post('/api/auth/access-invitation/activate', json={
+            'token': {'invalid': True},
+            'password': 12345678,
+            'password_confirmation': 12345678,
+        })
+        assert activate.status_code == 422
+
+    def test_invitation_requires_email(self, client, auth, monkeypatch):
+        uid, _ = self._create_user(client, auth, email='')
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        response = client.post(f'/api/users/{uid}/send-access-link', headers=auth)
+        assert response.status_code == 422
+        assert email_calls == []
+
+    def test_send_does_not_change_password_or_revoke_session(
+            self, client, auth, monkeypatch):
+        uid, username = self._create_user(client, auth)
+        login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'ExistingPass1!'
+        }).get_json()
+        existing_headers = {'Authorization': f'Bearer {login["token"]}'}
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+
+        response = client.post(f'/api/users/{uid}/send-access-link', headers=auth)
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['email_sent'] is True
+        assert 'new_password' not in data
+        assert 'token' not in data
+        assert client.get('/api/auth/me', headers=existing_headers).status_code == 200
+        assert client.post('/api/auth/login', json={
+            'username': username, 'password': 'ExistingPass1!'
+        }).status_code == 200
+
+        token = self._token_from_email(email_calls)
+        assert 'Password:' not in email_calls[0][2]
+        db = _server.make_conn()
+        try:
+            invitation = db.execute(
+                "SELECT * FROM account_invitations WHERE user_id=?", (uid,)
+            ).fetchone()
+            assert invitation['token_hash'] == _server._account_invitation_digest(token)
+            assert token not in tuple(str(value) for value in invitation)
+        finally:
+            db.close()
+
+    def test_invitation_activation_is_single_use_and_does_not_auto_login(
+            self, client, auth, monkeypatch):
+        uid, username = self._create_user(client, auth)
+        login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'ExistingPass1!'
+        }).get_json()
+        previous_headers = {'Authorization': f'Bearer {login["token"]}'}
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        sent = client.post(f'/api/users/{uid}/send-access-link', headers=auth)
+        assert sent.status_code == 200
+        token = self._token_from_email(email_calls)
+
+        info = client.post('/api/auth/access-invitation', json={'token': token})
+        assert info.status_code == 200
+        assert info.get_json()['username'] == username
+        mismatch = client.post('/api/auth/access-invitation/activate', json={
+            'token': token,
+            'password': 'NewSecure1!',
+            'password_confirmation': 'Different1!',
+        })
+        assert mismatch.status_code == 422
+
+        activated = client.post('/api/auth/access-invitation/activate', json={
+            'token': token,
+            'password': 'NewSecure1!',
+            'password_confirmation': 'NewSecure1!',
+        })
+        assert activated.status_code == 200
+        activation_data = activated.get_json()
+        assert activation_data['ok'] is True
+        assert 'token' not in activation_data
+        assert client.get('/api/auth/me', headers=previous_headers).status_code == 401
+        assert client.post('/api/auth/login', json={
+            'username': username, 'password': 'ExistingPass1!'
+        }).status_code == 401
+        new_login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'NewSecure1!'
+        })
+        assert new_login.status_code == 200
+        assert new_login.get_json().get('must_change_password') is not True
+        assert client.post('/api/auth/access-invitation', json={'token': token}).status_code == 400
+        assert client.post('/api/auth/access-invitation/activate', json={
+            'token': token,
+            'password': 'AnotherPass1!',
+            'password_confirmation': 'AnotherPass1!',
+        }).status_code == 400
+        assert len(email_calls) == 2
+        assert email_calls[1][1] == 'Your Sihha Password Was Created'
+        assert 'NewSecure1!' not in email_calls[1][2]
+
+        db = _server.make_conn()
+        try:
+            events = {
+                row['event_type'] for row in db.execute(
+                    "SELECT event_type FROM account_access_events WHERE user_id=?", (uid,)
+                ).fetchall()
+            }
+            assert {'invitation_created', 'invitation_email_sent',
+                    'password_created', 'password_confirmation_sent'} <= events
+        finally:
+            db.close()
+
+    def test_new_invitation_invalidates_older_link(self, client, auth, monkeypatch):
+        uid, _ = self._create_user(client, auth)
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        assert client.post(
+            f'/api/users/{uid}/send-access-link', headers=auth
+        ).status_code == 200
+        first_token = self._token_from_email(email_calls)
+        assert client.post(
+            f'/api/users/{uid}/send-access-link', headers=auth
+        ).status_code == 200
+        second_token = self._token_from_email(email_calls)
+        assert first_token != second_token
+        assert client.post(
+            '/api/auth/access-invitation', json={'token': first_token}
+        ).status_code == 400
+        assert client.post(
+            '/api/auth/access-invitation', json={'token': second_token}
+        ).status_code == 200
+
+    def test_invitation_sends_are_rate_limited_per_account(
+            self, client, auth, monkeypatch):
+        uid, _ = self._create_user(client, auth)
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        for _ in range(3):
+            assert client.post(
+                f'/api/users/{uid}/send-access-link', headers=auth
+            ).status_code == 200
+        limited = client.post(f'/api/users/{uid}/send-access-link', headers=auth)
+        assert limited.status_code == 429
+        assert limited.headers['Retry-After'] == '3600'
+        assert len(email_calls) == 3
+
+    def test_expired_invitation_is_rejected(self, client, auth, monkeypatch):
+        uid, _ = self._create_user(client, auth)
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        assert client.post(
+            f'/api/users/{uid}/send-access-link', headers=auth
+        ).status_code == 200
+        token = self._token_from_email(email_calls)
+        db = _server.make_conn()
+        try:
+            db.execute(
+                "UPDATE account_invitations SET expires_at=? WHERE user_id=?",
+                ((datetime.utcnow() - timedelta(minutes=1)).isoformat(), uid)
+            )
+            db.commit()
+        finally:
+            db.close()
+        assert client.post(
+            '/api/auth/access-invitation', json={'token': token}
+        ).status_code == 400
+
+    def test_failed_email_leaves_password_unchanged(self, client, auth, monkeypatch):
+        uid, username = self._create_user(client, auth)
+        monkeypatch.setattr(_server, '_email_send', lambda *_args, **_kwargs: False)
+        response = client.post(f'/api/users/{uid}/send-access-link', headers=auth)
+        assert response.status_code == 502
+        assert client.post('/api/auth/login', json={
+            'username': username, 'password': 'ExistingPass1!'
+        }).status_code == 200
+        db = _server.make_conn()
+        try:
+            invitation = db.execute(
+                "SELECT * FROM account_invitations WHERE user_id=?", (uid,)
+            ).fetchone()
+            assert invitation['email_sent_at'] is None
+            assert invitation['invalidated_at'] is not None
+        finally:
+            db.close()
+
+    def test_legacy_reset_url_uses_secure_link_flow(
+            self, client, auth, monkeypatch):
+        uid, _ = self._create_user(client, auth)
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        response = client.post(f'/api/users/{uid}/reset-password', headers=auth)
+        assert response.status_code == 200
+        assert response.get_json()['email_sent'] is True
+        assert 'new_password' not in response.get_json()
+        assert '#token=' in email_calls[0][2]
+
+    def test_activation_page_is_private_and_not_cached(self, client):
+        response = client.get('/activate')
+        assert response.status_code == 200
+        assert response.headers['Referrer-Policy'] == 'no-referrer'
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert b'Create Your Password' in response.data
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 15 — SET-PASSWORD FLOW (first login + forced reset)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2791,6 +3050,8 @@ class TestAuditRegressions:
             'idx_donations_cycle', 'idx_donations_ref', 'idx_rl_slot_sent',
             'idx_rate_limit_bucket', 'idx_rate_limit_time',
             'idx_upload_user_time', 'idx_upload_vol_time', 'idx_upload_claimed',
+            'idx_account_invites_user', 'idx_account_invites_expiry',
+            'idx_account_events_user',
         }
         db = _server.make_conn()
         try:

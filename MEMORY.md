@@ -1,5 +1,13 @@
 # SIHAA Food Charity — Operations Hub Memory
 
+_**2026-08-15 secure account invitations (v1.2.0):** branch
+`agent/secure-account-invitations` adds a 60-minute, single-use, hashed-token account
+activation flow and removes password disclosure from the admin reset workflow. The admin
+now sends a secure link; the recipient creates the password at `/activate`; consumption
+revokes prior sessions and writes an append-only security event. The old reset URL aliases
+the new behavior. Verified locally with 227 passing tests, 1 intentional skip, and Python/
+inline-JavaScript syntax checks._
+
 _**2026-08-06 current hardening status:** non-paid security/workflow batch `94cbfbf` is live on staging and production. Commit `2b79457` on staging adds DB-backed readiness/throttling, transactional family deletion with financial-history preservation, fail-closed order validation, expiring single-use legacy confirmation tokens, and verified/quota-controlled uploads with orphan cleanup. Signed-in staging acceptance found and locally fixed a cross-portal bundle-quantity mismatch plus a UTC/Central reminder-date edge case. Current verification: 209 passed, 1 intentional live-smoke skip. Paid receipt/payment invariants remain deliberately deferred. Treat `CLAUDE.md` as the current schema/route reference._
 
 _Last updated: 2026-06-11 — **AUDIT REMEDIATION COMPLETE.** Phases 0–3 fully done + Phase 4 high-value items, all deployed to prod (final commit `2201810`). Sequence: `252d986` (backup job + Phase 1) → `c8db8d2` (Phase 2 hardening) → `937097d` (43 finance tests + 4 bug fixes) → `4fcc631`/`20725e4` (Phase 3: dead code, sessions, transactions, N+1, empty-DB dashboard fix) → `2201810` (Phase 4 lite: shared base.css/shared.js, secrets tokens, tmp_ temp-token scoping, receipts gate, Procfile removed). Test suite: 157 passed / 2 skipped. Staging-first deploy protocol in effect and exercised. Off-site backup verified to info@sihha.org; heartbeat 11:00 UTC. Phase 4 remainder (versioned migrations, status constants, exception logging, error envelope, family↔my-order merge) in backlog below — low priority. Manual items: CI 3.10→3.11 via GitHub UI (PAT lacks workflow scope); consider removing SENDGRID_API_KEY from staging._
