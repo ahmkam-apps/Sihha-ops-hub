@@ -2,6 +2,16 @@
 
 **Read this file at the start of every dev session before touching server.py or any DB/route code.**
 
+> **2026-08-16 — secure portal onboarding completion (v1.2.1).** Family and
+> volunteer portal accounts now use the secure invitation flow throughout normal
+> onboarding: direct record creation, approval/reactivation, and legacy bulk account
+> creation. These paths create an unknown placeholder credential, never return or
+> email a temporary password, and send the same single-use 60-minute password-creation
+> link used by the administrator's Send Access action. Account names/emails/active
+> state stay synchronized with linked family and volunteer records. The admin UI now
+> reports secure-link delivery instead of displaying credentials. Verification:
+> 234 passed, 1 intentional skip; Python and inline-JavaScript syntax checks pass.
+>
 > **2026-08-15 — secure account invitations (v1.2.0).** Branch
 > `agent/secure-account-invitations` replaces administrator-emailed passwords with a
 > single-use 60-minute `Create Your Sihha Password` link. Tokens are 256-bit random values;

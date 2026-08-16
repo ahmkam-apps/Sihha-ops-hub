@@ -1514,13 +1514,26 @@ async function renderDashboard() {
 
 async function dashApprove(type, id, name) {
   try {
+    let result;
     if (type === 'family') {
-      await PUT('/families/' + id, { status: 'active' });
+      result = await PUT('/families/' + id, { status: 'active' });
     } else {
-      await PUT('/volunteers/' + id, { status: 'active' });
+      result = await PUT('/volunteers/' + id, { status: 'active' });
     }
+    notifyAccessDelivery(result, name);
     renderDashboard(); // refresh
   } catch(e) { alert('Failed to approve ' + name + ': ' + e.message); }
+}
+
+function notifyAccessDelivery(result, name) {
+  if (!result || !Object.prototype.hasOwnProperty.call(result, 'access_email_sent')) return;
+  if (result.access_email_sent) {
+    alert(`Approved ${name}.\n\nA secure password-creation link was sent to ${result.access_email_hint}.`);
+  } else if (result.access_email_error) {
+    alert(`Approved ${name}, but the secure access email was not sent.\n\nOpen the account and use Send Access to retry.`);
+  } else {
+    alert(`Approved ${name}.\n\nNo access link was sent because the account does not have an email address.`);
+  }
 }
 
 function switchDonTab(tab) {
@@ -2019,26 +2032,32 @@ async function saveFamily() {
   };
   try {
     if (STATE.editId) {
-      await PUT('/families/' + STATE.editId, payload);
+      const res = await PUT('/families/' + STATE.editId, payload);
       closeDrawer();
       renderFamilies(STATE.filter);
+      notifyAccessDelivery(res, res.name || name);
     } else {
       const res = await POST('/families', payload);
       closeDrawer();
       renderFamilies(STATE.filter);
-      // Show login credentials — auto-created alongside family record
+      // Show the username and secure access delivery result. Passwords are
+      // created only by the family through a single-use invitation link.
       if (res.login_username) {
         setTimeout(() => {
-          openDrawer('Family Created — Login Credentials',
+          openDrawer('Family Created — Secure Access',
             `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
-               Share these credentials with <strong>${esc(res.name)}</strong>. They will be asked to set a new password on first login.
+               The portal account for <strong>${esc(res.name)}</strong> is ready. Sihha never displays or emails a temporary password.
              </p>
              <div style="background:var(--gray-1);border-radius:8px;padding:16px 18px;font-family:monospace;font-size:15px;line-height:2">
                <div><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">USERNAME</span><br><strong>${esc(res.login_username)}</strong></div>
-               <div style="margin-top:10px"><span style="color:var(--gray-4);font-size:11px;font-family:sans-serif">TEMP PASSWORD</span><br><strong>${esc(res.login_temp_password)}</strong></div>
              </div>
-             <p style="font-size:12px;color:var(--gray-4);margin-top:12px">Login URL: <strong>ops.sihha.org/login</strong></p>
-             ${res.email_sent ? `<p style="font-size:12px;color:var(--accent);margin-top:4px">✓ Credentials emailed to ${esc(res.email)}</p>` : (res.email ? `<p style="font-size:12px;color:var(--danger);margin-top:4px">⚠ Email failed to send — share credentials manually</p>` : `<p style="font-size:12px;color:var(--gray-4);margin-top:4px">No email provided — share credentials manually</p>`)}`,
+             ${res.access_email_sent
+               ? `<p style="font-size:12px;color:var(--accent);margin-top:12px">✓ Secure password-creation link sent to ${esc(res.access_email_hint)}</p>`
+               : (res.status !== 'active'
+                   ? `<p style="font-size:12px;color:var(--gray-4);margin-top:12px">The secure access link will be sent when this family is approved.</p>`
+                   : (res.email
+                       ? `<p style="font-size:12px;color:var(--danger);margin-top:12px">⚠ The access email was not sent. Use Send Access to retry.</p>`
+                       : `<p style="font-size:12px;color:var(--gray-4);margin-top:12px">Add an email address, then use Send Access.</p>`))}`,
             `<button class="btn" onclick="closeDrawer()">Done</button>`
           );
         }, 200);
@@ -2785,7 +2804,8 @@ async function quickStatusVolunteer(id, status) {
   const row = document.getElementById('vrow-' + id);
   if (row) row.style.opacity = '0.4';
   try {
-    await PUT('/volunteers/' + id, { status });
+    const result = await PUT('/volunteers/' + id, { status });
+    notifyAccessDelivery(result, result.name || 'volunteer');
     if (status === 'active') {
       viewVolunteer(id);
     } else {
@@ -2870,10 +2890,12 @@ async function saveVolunteer() {
     notes: document.getElementById('v-notes').value.trim()
   };
   try {
-    if (STATE.editId) await PUT('/volunteers/' + STATE.editId, payload);
-    else await POST('/volunteers', payload);
+    const result = STATE.editId
+      ? await PUT('/volunteers/' + STATE.editId, payload)
+      : await POST('/volunteers', payload);
     closeDrawer();
     renderVolunteers(STATE.filter);
+    if (result.status === 'active') notifyAccessDelivery(result, result.name || name);
   } catch(e) { showErr(e.message); }
 }
 
@@ -4487,7 +4509,7 @@ async function forceReset(uid, username) {
 
 async function bulkCreateUsers(type) {
   const label = type === 'volunteer' ? 'volunteers' : 'families';
-  if (!confirm(`Create login accounts for all active ${label} who don't have one yet?\n\nTemp passwords will be shown once — copy them to share.`)) return;
+  if (!confirm(`Create login accounts for all active ${label} who don't have one yet?\n\nSecure password-creation links will be emailed when an address is available.`)) return;
   try {
     const res = await POST('/users/bulk-create', {type});
     if (!res.created.length && !res.skipped.length) {
@@ -4495,8 +4517,8 @@ async function bulkCreateUsers(type) {
     }
     let msg = `Created ${res.created.length} account(s)`;
     if (res.skipped.length) msg += `, skipped ${res.skipped.length} (already have accounts)`;
-    msg += '.\n\nCredentials (save these now — passwords won\'t be shown again):\n\n';
-    msg += res.created.map(u => `${u.name}\n  Username: ${u.username}\n  Temp PW:  ${u.temp_password}`).join('\n\n');
+    msg += '.\n\nAccount access:\n\n';
+    msg += res.created.map(u => `${u.name}\n  Username: ${u.username}\n  ${u.access_email_sent ? `Secure link sent to ${u.access_email_hint}` : 'No link sent — add an email and use Send Access'}`).join('\n\n');
     alert(msg);
     renderUsers();
   } catch(e) { alert(e.message); }
@@ -4626,6 +4648,12 @@ async function saveUser() {
       result = await POST('/users', payload);
       if (result && result.temp_password) {
         alert(`Account created!\n\nUsername: ${result.username}\nTemp Password: ${result.temp_password}\n\nShare these credentials with the user. They will be prompted to set a new password on first login.`);
+      } else if (result && Object.prototype.hasOwnProperty.call(result, 'access_email_sent')) {
+        if (result.access_email_sent) {
+          alert(`Account created!\n\nUsername: ${result.username}\nA secure password-creation link was sent to ${result.access_email_hint}.`);
+        } else {
+          alert(`Account created!\n\nUsername: ${result.username}\nNo password was generated. Add an email address to the linked record, activate it, then use Send Access.`);
+        }
       }
     }
     closeDrawer();

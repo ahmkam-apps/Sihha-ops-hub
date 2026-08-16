@@ -5,16 +5,33 @@ Run: pytest tests/ -v
 """
 import secrets, uuid, pytest
 from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash
 
 
 def _get_family_token(client, family_data, new_password='FamPass1!'):
-    """Complete the first-login set-password flow and return a full session Bearer token.
-    family_data must include login_username and login_temp_password (from POST /api/families response).
+    """Give a test family a known password and return a full session token.
+
+    Production family accounts receive an invitation-only placeholder credential;
+    broad portal tests set a known hash directly while invitation behavior is
+    exercised separately in TestAccountInvitations.
     """
     username  = family_data.get('login_username')
     temp_pass = family_data.get('login_temp_password')
-    if not username or not temp_pass:
+    if not username:
         return None
+    if not temp_pass:
+        import server as _server
+        db = _server.make_conn()
+        try:
+            db.execute(
+                '''UPDATE users SET password_hash=?, must_change_password=0, active=1
+                   WHERE username=?''',
+                (generate_password_hash(new_password), username)
+            )
+            db.commit()
+        finally:
+            db.close()
+        temp_pass = new_password
     login = client.post('/api/auth/login',
                         json={'username': username, 'password': temp_pass}).get_json()
     if login.get('must_change_password'):
@@ -26,16 +43,27 @@ def _get_family_token(client, family_data, new_password='FamPass1!'):
 
 
 def _get_volunteer_token(client, vol_id, auth_headers, new_password='VolPass1!'):
-    """Create a user account for a volunteer and return a portal session token."""
-    username = f'vol_{vol_id[:8]}'
-    user_res = client.post('/api/users', headers=auth_headers,
-                           json={'username': username, 'role': 'volunteer',
-                                 'linked_id': vol_id, 'linked_type': 'volunteer'}).get_json()
-    temp_pass = user_res.get('temp_password')
-    if not temp_pass:
-        return None
+    """Give an auto-created volunteer account a known test password."""
+    import server as _server
+    db = _server.make_conn()
+    try:
+        user = db.execute(
+            "SELECT id, username FROM users WHERE linked_id=? AND role='volunteer'",
+            (vol_id,)
+        ).fetchone()
+        if not user:
+            return None
+        username = user['username']
+        db.execute(
+            '''UPDATE users SET password_hash=?, must_change_password=0, active=1
+               WHERE id=?''',
+            (generate_password_hash(new_password), user['id'])
+        )
+        db.commit()
+    finally:
+        db.close()
     login = client.post('/api/auth/login',
-                        json={'username': username, 'password': temp_pass}).get_json()
+                        json={'username': username, 'password': new_password}).get_json()
     if login.get('must_change_password'):
         sp = client.post('/api/auth/set-password',
                          json={'temp_token': login['temp_token'],
@@ -1364,11 +1392,18 @@ class TestUserManagement:
         assert res.status_code == 401
 
     def test_bulk_create_volunteers_generates_accounts(self, client, auth):
-        # Create a volunteer with no linked user account
+        # Simulate a legacy active volunteer record with no linked account.
         phone = f'587{uuid.uuid4().hex[:7]}'
-        client.post('/api/volunteers', headers=auth,
-                    json={'name': 'BulkVol Test', 'phone': phone,
-                          'role': 'delivery', 'status': 'active'})
+        volunteer = client.post('/api/volunteers', headers=auth,
+                                json={'name': 'BulkVol Test', 'phone': phone,
+                                      'role': 'delivery', 'status': 'pending'}).get_json()
+        db = _server.make_conn()
+        try:
+            db.execute("DELETE FROM users WHERE linked_id=? AND role='volunteer'", (volunteer['id'],))
+            db.execute("UPDATE volunteers SET status='active' WHERE id=?", (volunteer['id'],))
+            db.commit()
+        finally:
+            db.close()
 
         res = client.post('/api/users/bulk-create', headers=auth,
                           json={'type': 'volunteer'})
@@ -1391,18 +1426,17 @@ class TestUserManagement:
 
     def test_bulk_create_families_generates_accounts(self, client, auth):
         """create_family now auto-creates the user account, so bulk-create skips it.
-        Verify the family was created with credentials returned directly."""
+        Verify the family was created without disclosing a password."""
         phone = f'588{uuid.uuid4().hex[:7]}'
         res = client.post('/api/families', headers=auth,
                           json={'name': 'BulkFam Test', 'phone': phone,
                                 'family_size': 2, 'status': 'active'})
         assert res.status_code == 201
         data = res.get_json()
-        # Credentials are returned inline — no separate bulk-create step needed
+        # The username is returned, but a password is never exposed.
         assert 'login_username' in data, 'create_family should return login_username'
-        assert 'login_temp_password' in data, 'create_family should return login_temp_password'
         assert data['login_username'], 'username must not be empty'
-        assert data['login_temp_password'], 'temp password must not be empty'
+        assert 'login_temp_password' not in data
         # Bulk-create should now skip this family (account already exists)
         bc = client.post('/api/users/bulk-create', headers=auth, json={'type': 'family'})
         assert bc.status_code == 200
@@ -1442,6 +1476,211 @@ class TestAccountInvitations:
         body = email_calls[index][2]
         assert '#token=' in body
         return body.split('#token=', 1)[1].split()[0]
+
+    def test_active_family_creation_sends_secure_link_without_password(
+            self, client, auth, monkeypatch):
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        tag = uuid.uuid4().hex[:8]
+        created = client.post('/api/families', headers=auth, json={
+            'name': f'Invited Family {tag}',
+            'phone': f'586{uuid.uuid4().int % 10000000:07d}',
+            'email': f'family-{tag}@example.org',
+            'family_size': 3,
+            'status': 'active',
+        })
+        assert created.status_code == 201
+        data = created.get_json()
+        assert data['access_email_sent'] is True
+        assert data['login_username']
+        assert 'login_temp_password' not in data
+        assert len(email_calls) == 1
+        assert email_calls[0][1] == 'Create Your Sihha Password'
+        assert 'Password:' not in email_calls[0][2]
+
+        token = self._token_from_email(email_calls)
+        assert client.post(
+            '/api/auth/access-invitation', json={'token': token}
+        ).status_code == 200
+        activated = client.post('/api/auth/access-invitation/activate', json={
+            'token': token,
+            'password': 'FamilySecure1!',
+            'password_confirmation': 'FamilySecure1!',
+        })
+        assert activated.status_code == 200
+        login = client.post('/api/auth/login', json={
+            'username': data['login_username'], 'password': 'FamilySecure1!'
+        })
+        assert login.status_code == 200
+        assert login.get_json()['redirect'] == '/family'
+
+    def test_active_volunteer_creation_sends_secure_link_without_password(
+            self, client, auth, monkeypatch):
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        tag = uuid.uuid4().hex[:8]
+        created = client.post('/api/volunteers', headers=auth, json={
+            'name': f'Invited Volunteer {tag}',
+            'phone': f'586{uuid.uuid4().int % 10000000:07d}',
+            'email': f'volunteer-{tag}@example.org',
+            'role': 'delivery',
+            'status': 'active',
+        })
+        assert created.status_code == 201
+        data = created.get_json()
+        assert data['access_email_sent'] is True
+        assert data['login_username']
+        assert 'login_temp_password' not in data
+        assert len(email_calls) == 1
+        assert email_calls[0][1] == 'Create Your Sihha Password'
+        assert 'Password:' not in email_calls[0][2]
+
+        token = self._token_from_email(email_calls)
+        activated = client.post('/api/auth/access-invitation/activate', json={
+            'token': token,
+            'password': 'VolunteerSecure1!',
+            'password_confirmation': 'VolunteerSecure1!',
+        })
+        assert activated.status_code == 200
+        login = client.post('/api/auth/login', json={
+            'username': data['login_username'], 'password': 'VolunteerSecure1!'
+        })
+        assert login.status_code == 200
+        assert login.get_json()['redirect'] == '/portal'
+
+    def test_family_approval_sends_secure_link_without_temp_credentials(
+            self, client, auth, monkeypatch):
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        tag = uuid.uuid4().hex[:8]
+        created = client.post('/api/families', headers=auth, json={
+            'name': f'Pending Family {tag}',
+            'phone': f'587{uuid.uuid4().int % 10000000:07d}',
+            'email': f'pending-family-{tag}@example.org',
+            'family_size': 4,
+            'status': 'pending',
+        })
+        assert created.status_code == 201
+        assert email_calls == []
+
+        approved = client.put(
+            f'/api/families/{created.get_json()["id"]}', headers=auth,
+            json={'status': 'active'}
+        )
+        assert approved.status_code == 200
+        assert approved.get_json()['access_email_sent'] is True
+        assert len(email_calls) == 1
+        assert email_calls[0][1] == 'Create Your Sihha Password'
+        assert 'Password:' not in email_calls[0][2]
+
+    def test_volunteer_approval_sends_secure_link_without_temp_credentials(
+            self, client, auth, monkeypatch):
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        tag = uuid.uuid4().hex[:8]
+        created = client.post('/api/volunteers', headers=auth, json={
+            'name': f'Pending Volunteer {tag}',
+            'phone': f'588{uuid.uuid4().int % 10000000:07d}',
+            'email': f'pending-volunteer-{tag}@example.org',
+            'role': 'delivery',
+            'status': 'pending',
+        })
+        assert created.status_code == 201
+        assert email_calls == []
+
+        approved = client.put(
+            f'/api/volunteers/{created.get_json()["id"]}', headers=auth,
+            json={'status': 'active'}
+        )
+        assert approved.status_code == 200
+        data = approved.get_json()
+        assert data['access_email_sent'] is True
+        assert len(email_calls) == 1
+        assert email_calls[0][1] == 'Create Your Sihha Password'
+        assert 'Password:' not in email_calls[0][2]
+        token = self._token_from_email(email_calls)
+        info = client.post('/api/auth/access-invitation', json={'token': token})
+        assert info.status_code == 200
+
+    def test_bulk_portal_account_creation_never_returns_passwords(
+            self, client, auth, monkeypatch):
+        email_calls = []
+        monkeypatch.setattr(
+            _server, '_email_send',
+            lambda *args, **kwargs: email_calls.append(args) or True
+        )
+        tag = uuid.uuid4().hex[:8]
+        volunteer = client.post('/api/volunteers', headers=auth, json={
+            'name': f'Bulk Secure Volunteer {tag}',
+            'phone': f'589{uuid.uuid4().int % 10000000:07d}',
+            'email': f'bulk-volunteer-{tag}@example.org',
+            'role': 'shopper',
+            'status': 'pending',
+        })
+        assert volunteer.status_code == 201
+        volunteer_id = volunteer.get_json()['id']
+        db = _server.make_conn()
+        try:
+            db.execute(
+                "DELETE FROM users WHERE linked_id=? AND role='volunteer'",
+                (volunteer_id,)
+            )
+            db.execute(
+                "UPDATE volunteers SET status='active' WHERE id=?",
+                (volunteer_id,)
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.post(
+            '/api/users/bulk-create', headers=auth, json={'type': 'volunteer'}
+        )
+        assert response.status_code == 200
+        created = next(
+            item for item in response.get_json()['created']
+            if item['name'] == f'Bulk Secure Volunteer {tag}'
+        )
+        assert created['access_email_sent'] is True
+        assert 'temp_password' not in created
+        assert any(call[1] == 'Create Your Sihha Password' for call in email_calls)
+
+    def test_general_user_form_does_not_disclose_portal_passwords(
+            self, client, auth):
+        username = f'portal_{uuid.uuid4().hex[:8]}'
+        created = client.post('/api/users', headers=auth, json={
+            'username': username,
+            'name': 'Unlinked Portal User',
+            'role': 'volunteer',
+        })
+        assert created.status_code == 201
+        data = created.get_json()
+        assert data['username'] == username
+        assert data['access_email_sent'] is False
+        assert 'temp_password' not in data
+
+    def test_general_user_form_rejects_admin_set_portal_password(
+            self, client, auth):
+        response = client.post('/api/users', headers=auth, json={
+            'username': f'portal_pw_{uuid.uuid4().hex[:8]}',
+            'name': 'Portal Password Rejected',
+            'role': 'family',
+            'password': 'ShouldNotShare1!',
+        })
+        assert response.status_code == 422
+        assert 'secure access link' in response.get_json()['error'].lower()
 
     def test_invitation_send_requires_admin(self, client, auth):
         uid, _ = self._create_user(client, auth)
@@ -1688,14 +1927,8 @@ class TestSetPassword:
     def setup(self, client, auth):
         self.client = client
         uname = f'newu_{uuid.uuid4().hex[:6]}'
-        vol = client.post('/api/volunteers', headers=auth, json={
-            'name': f'Password Flow {uname}',
-            'phone': f'5851{uuid.uuid4().int % 1000000:06d}',
-            'role': 'general', 'status': 'active',
-        }).get_json()
         create = client.post('/api/users', headers=auth,
-                             json={'username': uname, 'role': 'volunteer',
-                                   'linked_id': vol['id'], 'linked_type': 'volunteer'})
+                             json={'username': uname, 'role': 'viewer'})
         data = create.get_json()
         self.uid       = data['id']
         self.username  = uname
@@ -1823,22 +2056,8 @@ class TestFamilySessionAuth:
                                 'family_size': 3, 'status': 'active'}).get_json()
         self.family_id = fam['id']
 
-        # Family user linked to this family
-        uname = f'sf_{uuid.uuid4().hex[:6]}'
-        cdata = client.post('/api/users', headers=auth,
-                            json={'username': uname, 'role': 'family',
-                                  'linked_id': self.family_id,
-                                  'linked_type': 'family'}).get_json()
-        self.uname     = uname
-        self.temp_pass = cdata['temp_password']
-
-        # Complete set-password → get full session token
-        ldata = client.post('/api/auth/login',
-                            json={'username': uname, 'password': self.temp_pass}).get_json()
-        sp = client.post('/api/auth/set-password',
-                         json={'temp_token': ldata['temp_token'],
-                               'password': 'FamPass1!'}).get_json()
-        self.family_token   = sp['token']
+        self.uname = fam['login_username']
+        self.family_token = _get_family_token(client, fam)
         self.family_headers = {'Authorization': f'Bearer {self.family_token}'}
 
     def test_bearer_token_returns_family_data(self, client):
@@ -3071,16 +3290,10 @@ class TestAuditRegressions:
         })
         assert res.status_code == 401
 
-        vol = client.post('/api/volunteers', headers=auth, json={
-            'name': 'Temp Boundary Vol',
-            'phone': f'5859{uuid.uuid4().int % 1000000:06d}',
-            'role': 'delivery', 'status': 'active',
-        }).get_json()
         username = f'tmp_{uuid.uuid4().hex[:8]}'
         created = client.post('/api/users', headers=auth, json={
             'username': username, 'password': 'TempPass1!',
-            'role': 'volunteer', 'linked_id': vol['id'],
-            'linked_type': 'volunteer', 'must_change_password': 1,
+            'role': 'viewer', 'must_change_password': 1,
         })
         assert created.status_code == 201
         login = client.post('/api/auth/login', json={
@@ -3091,9 +3304,23 @@ class TestAuditRegressions:
         assert client.get('/api/portal/cycles', headers=temp_headers).status_code == 401
 
         fam = self._active_family(client, auth)
+        db = _server.make_conn()
+        try:
+            fam_user = db.execute(
+                "SELECT id, username FROM users WHERE linked_id=? AND role='family'",
+                (fam['id'],)
+            ).fetchone()
+            db.execute(
+                '''UPDATE users SET password_hash=?, must_change_password=1
+                   WHERE id=?''',
+                (generate_password_hash('TempPass1!'), fam_user['id'])
+            )
+            db.commit()
+        finally:
+            db.close()
         fam_login = client.post('/api/auth/login', json={
-            'username': fam['login_username'],
-            'password': fam['login_temp_password'],
+            'username': fam_user['username'],
+            'password': 'TempPass1!',
         }).get_json()
         fam_temp = {'Authorization': f'Bearer {fam_login["temp_token"]}'}
         assert client.post(
