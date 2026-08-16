@@ -1,5 +1,13 @@
 # SIHAA Food Charity — Operations Hub Memory
 
+_**2026-08-16 secure portal onboarding completion (v1.2.1):** family and volunteer
+accounts now use invitation-only onboarding across direct creation, approval/reactivation,
+and legacy bulk account creation. Portal onboarding no longer returns, displays, or emails
+temporary passwords. Linked email/name/active state is synchronized before access delivery;
+the same hashed, one-time 60-minute invitation serves both `/family` and `/portal` users.
+Verified with 234 passing tests, 1 intentional skip, and Python/inline-JavaScript syntax
+checks._
+
 _**2026-08-15 secure account invitations (v1.2.0):** branch
 `agent/secure-account-invitations` adds a 60-minute, single-use, hashed-token account
 activation flow and removes password disclosure from the admin reset workflow. The admin

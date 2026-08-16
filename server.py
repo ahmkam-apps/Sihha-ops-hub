@@ -2403,7 +2403,7 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.2.0', 'time': now(),
+            'status': 'ok', 'version': '1.2.1', 'time': now(),
             'checks': {'database': 'ok', 'schema': 'ok'},
             'communications': {
                 'email_provider': EMAIL_PROVIDER,
@@ -2626,6 +2626,102 @@ def _invalid_account_invitation_response():
     return jsonify({
         'error': 'This access link is invalid or has expired. Ask your Sihha coordinator for a new link.'
     }), 400
+
+def _send_account_access_invitation(db, user, actor_user_id=None):
+    """Create and email one secure password-creation invitation for an account.
+
+    Callers must enforce their own authorization and any applicable send-rate limit.
+    The account's existing password and sessions are deliberately left unchanged
+    until the recipient consumes the single-use link.
+    """
+    if not user['active'] or not _linked_account_is_active(db, user):
+        return {
+            'error': 'Account must be active before access can be sent.'
+        }, 409
+
+    delivery_email = _account_delivery_email(db, user)
+    if not delivery_email or not _valid_public_email(delivery_email):
+        return {
+            'error': 'Add a valid email address before sending access.'
+        }, 422
+
+    invitation_id = str(uuid.uuid4())
+    raw_token = secrets.token_urlsafe(32)
+    created_at = now()
+    expires_at = (
+        datetime.utcnow() + timedelta(minutes=ACCOUNT_INVITATION_MINUTES)
+    ).isoformat()
+    db.execute(
+        '''INSERT INTO account_invitations
+           (id,user_id,token_hash,delivery_email,created_by,created_at,expires_at)
+           VALUES (?,?,?,?,?,?,?)''',
+        (invitation_id, user['id'], _account_invitation_digest(raw_token),
+         delivery_email, actor_user_id, created_at, expires_at)
+    )
+    _record_account_access_event(
+        db, user['id'], 'invitation_created', invitation_id, actor_user_id
+    )
+    db.commit()
+
+    access_url = f'{ACCOUNT_INVITATION_URL}#token={raw_token}'
+    body = (
+        f"Hello {user['name'] or user['username']},\n\n"
+        f"Sihha has created a secure account-access link for you.\n\n"
+        f"Username: {user['username']}\n"
+        f"Create your password: {access_url}\n\n"
+        f"This link works once and expires in {ACCOUNT_INVITATION_MINUTES} minutes. "
+        f"If you were not expecting it, you can ignore this email.\n\n"
+        f"— Sihha Food Program"
+    )
+    import html as _html
+    safe_name = _html.escape(user['name'] or user['username'])
+    safe_username = _html.escape(user['username'])
+    safe_access_url = _html.escape(access_url, quote=True)
+    html_body = (
+        f'<p>Hello {safe_name},</p>'
+        f'<p>Sihha has created a secure account-access link for you.</p>'
+        f'<p>Username: <strong>{safe_username}</strong></p>'
+        f'<p><a href="{safe_access_url}">Create your Sihha password</a></p>'
+        f'<p>This link works once and expires in {ACCOUNT_INVITATION_MINUTES} minutes. '
+        f'If you were not expecting it, you can ignore this email.</p>'
+        f'<p>— Sihha Food Program</p>'
+    )
+    email_sent = _email_send(
+        delivery_email, 'Create Your Sihha Password', body, html_body=html_body
+    )
+    if email_sent:
+        sent_at = now()
+        db.execute(
+            "UPDATE account_invitations SET email_sent_at=? WHERE id=?",
+            (sent_at, invitation_id)
+        )
+        _invalidate_account_invitations(
+            db, user['id'], actor_user_id=actor_user_id,
+            detail='new_invitation_sent', except_invitation_id=invitation_id
+        )
+        _record_account_access_event(
+            db, user['id'], 'invitation_email_sent', invitation_id, actor_user_id
+        )
+        db.commit()
+        log.info('Account invitation email accepted for user_id=%s', user['id'])
+        return {
+            'username': user['username'],
+            'email_sent': True,
+            'email_hint': _email_hint(delivery_email),
+            'expires_in_minutes': ACCOUNT_INVITATION_MINUTES,
+        }, 200
+
+    db.execute(
+        "UPDATE account_invitations SET invalidated_at=? WHERE id=?",
+        (now(), invitation_id)
+    )
+    _record_account_access_event(
+        db, user['id'], 'invitation_email_failed', invitation_id, actor_user_id
+    )
+    db.commit()
+    return {
+        'error': 'The access email could not be sent. Please try again.'
+    }, 502
 
 @app.route('/api/auth/access-invitation', methods=['POST'])
 def account_invitation_info():
@@ -2979,6 +3075,10 @@ def _generate_temp_password():
         if ok:
             return pw
 
+def _generate_unclaimed_password_hash():
+    """Create an unknown placeholder credential for invitation-only accounts."""
+    return generate_password_hash(secrets.token_urlsafe(48))
+
 @app.route('/api/users', methods=['POST'])
 @require_auth(roles=['admin'])
 def create_user():
@@ -2989,16 +3089,28 @@ def create_user():
     if new_role not in VALID_ROLES:
         return jsonify({'error': f'Invalid role "{new_role}"'}), 400
 
-    # Use provided password or auto-generate a temp one
-    raw_password = data.get('password') or _generate_temp_password()
-    ok, err = _validate_password(raw_password)
-    if not ok:
-        return jsonify({'error': err}), 422
+    portal_account = new_role in ('family', 'volunteer')
+    if portal_account and data.get('password'):
+        return jsonify({
+            'error': 'Family and volunteer passwords are created through a secure access link.'
+        }), 422
+
+    # Portal users receive an unknown placeholder credential and create their own
+    # password from a secure invitation. Staff accounts retain the existing
+    # explicit/temporary-password creation behavior for this focused portal change.
+    raw_password = None if portal_account else (data.get('password') or _generate_temp_password())
+    if raw_password:
+        ok, err = _validate_password(raw_password)
+        if not ok:
+            return jsonify({'error': err}), 422
 
     uid = str(uuid.uuid4())
     linked_id = data.get('linked_id')
     linked_type = data.get('linked_type')
-    must_change = 1 if not data.get('password') else int(data.get('must_change_password', 1))
+    must_change = (
+        1 if portal_account or not data.get('password')
+        else int(data.get('must_change_password', 1))
+    )
 
     db = get_db()
     try:
@@ -3006,7 +3118,9 @@ def create_user():
             '''INSERT INTO users (id, username, password_hash, name, role, email,
                linked_id, linked_type, must_change_password, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)''',
-            (uid, data['username'], generate_password_hash(raw_password),
+            (uid, data['username'],
+             _generate_unclaimed_password_hash() if portal_account
+             else generate_password_hash(raw_password),
              data.get('name'), new_role, data.get('email'),
              linked_id, linked_type, must_change, now())
         )
@@ -3016,11 +3130,27 @@ def create_user():
             return jsonify({'error': 'Username already exists'}), 409
         return jsonify({'error': str(e)}), 400
 
-    return jsonify({
-        'id': uid, 'username': data['username'],
-        'temp_password': raw_password,  # Return once — admin shares with user
-        'must_change_password': bool(must_change)
-    }), 201
+    result = {
+        'id': uid,
+        'username': data['username'],
+        'must_change_password': bool(must_change),
+    }
+    if not portal_account:
+        result['temp_password'] = raw_password  # Existing staff-account workflow.
+        return jsonify(result), 201
+
+    result['access_email_sent'] = False
+    user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    delivery_email = _account_delivery_email(db, user)
+    result['access_email_hint'] = _email_hint(delivery_email) if delivery_email else ''
+    if user['active'] and _linked_account_is_active(db, user) and delivery_email:
+        access_payload, access_status = _send_account_access_invitation(
+            db, user, actor_user_id=g.user['user_id']
+        )
+        result['access_email_sent'] = access_status == 200
+        if access_status != 200:
+            result['access_email_error'] = access_payload['error']
+    return jsonify(result), 201
 
 @app.route('/api/users/<uid>', methods=['PUT'])
 @require_auth(roles=['admin'])
@@ -3033,6 +3163,11 @@ def update_user(uid):
     new_role = data.get('role', row['role'])
     if new_role not in VALID_ROLES:
         return jsonify({'error': f'Invalid role "{new_role}". Must be one of: {", ".join(sorted(VALID_ROLES))}'}), 400
+    if data.get('password') and (row['role'] in ('family', 'volunteer')
+                                 or new_role in ('family', 'volunteer')):
+        return jsonify({
+            'error': 'Use Send Access for family and volunteer password setup.'
+        }), 422
     new_hash = row['password_hash']
     if data.get('password'):
         ok, err = _validate_password(data['password'])
@@ -3105,89 +3240,17 @@ def send_account_access_link(uid):
         return jsonify({'error': 'Add a valid email address before sending access.'}), 422
     if not _consume_rate_limit(db, 'account_invitation_send_user', uid, 3, 3600):
         return _rate_limit_response(3600)
-
-    invitation_id = str(uuid.uuid4())
-    raw_token = secrets.token_urlsafe(32)
-    created_at = now()
-    expires_at = (
-        datetime.utcnow() + timedelta(minutes=ACCOUNT_INVITATION_MINUTES)
-    ).isoformat()
-    db.execute(
-        '''INSERT INTO account_invitations
-           (id,user_id,token_hash,delivery_email,created_by,created_at,expires_at)
-           VALUES (?,?,?,?,?,?,?)''',
-        (invitation_id, uid, _account_invitation_digest(raw_token), delivery_email,
-         g.user['user_id'], created_at, expires_at)
+    payload, status = _send_account_access_invitation(
+        db, row, actor_user_id=g.user['user_id']
     )
-    _record_account_access_event(
-        db, uid, 'invitation_created', invitation_id, g.user['user_id']
-    )
-    db.commit()
-
-    access_url = f'{ACCOUNT_INVITATION_URL}#token={raw_token}'
-    body = (
-        f"Hello {row['name'] or row['username']},\n\n"
-        f"Sihha has created a secure account-access link for you.\n\n"
-        f"Username: {row['username']}\n"
-        f"Create your password: {access_url}\n\n"
-        f"This link works once and expires in {ACCOUNT_INVITATION_MINUTES} minutes. "
-        f"If you were not expecting it, you can ignore this email.\n\n"
-        f"— Sihha Food Program"
-    )
-    import html as _html
-    safe_name = _html.escape(row['name'] or row['username'])
-    safe_username = _html.escape(row['username'])
-    safe_access_url = _html.escape(access_url, quote=True)
-    html_body = (
-        f'<p>Hello {safe_name},</p>'
-        f'<p>Sihha has created a secure account-access link for you.</p>'
-        f'<p>Username: <strong>{safe_username}</strong></p>'
-        f'<p><a href="{safe_access_url}">Create your Sihha password</a></p>'
-        f'<p>This link works once and expires in {ACCOUNT_INVITATION_MINUTES} minutes. '
-        f'If you were not expecting it, you can ignore this email.</p>'
-        f'<p>— Sihha Food Program</p>'
-    )
-    email_sent = _email_send(
-        delivery_email, 'Create Your Sihha Password', body, html_body=html_body
-    )
-    if email_sent:
-        sent_at = now()
-        db.execute(
-            "UPDATE account_invitations SET email_sent_at=? WHERE id=?",
-            (sent_at, invitation_id)
-        )
-        _invalidate_account_invitations(
-            db, uid, actor_user_id=g.user['user_id'],
-            detail='new_invitation_sent', except_invitation_id=invitation_id
-        )
-        _record_account_access_event(
-            db, uid, 'invitation_email_sent', invitation_id, g.user['user_id']
-        )
-        db.commit()
-        log.info('Account invitation email accepted for user_id=%s', uid)
-        return jsonify({
-            'username': row['username'],
-            'email_sent': True,
-            'email_hint': _email_hint(delivery_email),
-            'expires_in_minutes': ACCOUNT_INVITATION_MINUTES,
-        })
-
-    db.execute(
-        "UPDATE account_invitations SET invalidated_at=? WHERE id=?",
-        (now(), invitation_id)
-    )
-    _record_account_access_event(
-        db, uid, 'invitation_email_failed', invitation_id, g.user['user_id']
-    )
-    db.commit()
-    return jsonify({'error': 'The access email could not be sent. Please try again.'}), 502
+    return jsonify(payload), status
 
 @app.route('/api/users/bulk-create', methods=['POST'])
 @require_auth(roles=['admin'])
 def bulk_create_users():
     """Bulk-create user accounts from existing volunteer or family records.
     Body: {type: 'volunteer'|'family'}
-    Returns list of created accounts with temp passwords."""
+    Secure access links are emailed when the linked record has an address."""
     data = request.json or {}
     kind = data.get('type')
     if kind not in ('volunteer', 'family'):
@@ -3202,7 +3265,7 @@ def bulk_create_users():
         linked_type = 'volunteer'
     else:
         records = db.execute(
-            "SELECT id, name FROM families WHERE status='active'"
+            "SELECT id, name, email FROM families WHERE status='active'"
         ).fetchall()
         role = 'family'
         linked_type = 'family'
@@ -3229,18 +3292,33 @@ def bulk_create_users():
             skipped.append({'id': rec['id'], 'name': rec['name'], 'reason': 'account exists'})
             continue
 
-        temp_pw = _generate_temp_password()
         uid = str(uuid.uuid4())
+        delivery_email = (rec['email'] or '').strip() or None
         db.execute(
             '''INSERT INTO users (id, username, password_hash, name, role, email,
                linked_id, linked_type, must_change_password, created_at)
                VALUES (?,?,?,?,?,?,?,?,1,?)''',
-            (uid, username, generate_password_hash(temp_pw),
-             rec['name'], role, rec['email'] if 'email' in rec.keys() else None,
+            (uid, username, _generate_unclaimed_password_hash(),
+             rec['name'], role, delivery_email,
              rec['id'], linked_type, now())
         )
-        created.append({'id': uid, 'username': username,
-                        'name': rec['name'], 'temp_password': temp_pw})
+        db.commit()
+        created_item = {
+            'id': uid,
+            'username': username,
+            'name': rec['name'],
+            'access_email_sent': False,
+            'access_email_hint': _email_hint(delivery_email) if delivery_email else '',
+        }
+        if delivery_email:
+            user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+            payload, status = _send_account_access_invitation(
+                db, user, actor_user_id=g.user['user_id']
+            )
+            created_item['access_email_sent'] = status == 200
+            if status != 200:
+                created_item['access_email_error'] = payload['error']
+        created.append(created_item)
 
     db.commit()
     return jsonify({'created': created, 'skipped': skipped})
@@ -3634,6 +3712,7 @@ def create_family():
     db = get_db()
     family_code = _make_family_code(phone, data.get('family_size'), db_conn=db)
     family_email = (data.get('email') or '').strip() or None
+    family_status = data.get('status', 'pending')
     db.execute(
         '''INSERT INTO families
            (id,name,phone,address,city,family_size,children_count,
@@ -3642,7 +3721,7 @@ def create_family():
         (fid, data['name'], phone, data.get('address'), data.get('city'),
          data.get('family_size'), data.get('children_count'), data.get('dietary_notes'),
          data.get('frequency'), data.get('income_range'),
-         data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'),
+         family_status, data.get('notes'), data.get('source', 'admin'),
          family_code, family_email, now())
     )
 
@@ -3655,37 +3734,31 @@ def create_family():
     while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
         username = f'{base_username}{suffix}'
         suffix += 1
-    temp_pw = _generate_temp_password()
     uid = str(uuid.uuid4())
     db.execute(
-        '''INSERT INTO users (id, username, password_hash, name, role,
-           linked_id, linked_type, must_change_password, created_at)
-           VALUES (?,?,?,?,?,?,?,1,?)''',
-        (uid, username, generate_password_hash(temp_pw),
-         data['name'], 'family', fid, 'family', now())
+        '''INSERT INTO users (id, username, password_hash, name, role, email,
+           active, linked_id, linked_type, must_change_password, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,1,?)''',
+        (uid, username, _generate_unclaimed_password_hash(),
+         data['name'], 'family', family_email,
+         1 if family_status == 'active' else 0, fid, 'family', now())
     )
     db.commit()
 
     fam = dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone())
     fam['login_username'] = username
-    fam['login_temp_password'] = temp_pw
     log.info(f'Family created: {data["name"]} — account: {username}')
 
-    # Send credentials email if email provided
-    email_sent = False
-    if family_email:
-        email_body = (
-            f"Welcome to the Sihha Food Program!\n\n"
-            f"Your account has been created. Use the credentials below to log in:\n\n"
-            f"  Login URL:  https://ops.sihha.org/login\n"
-            f"  Username:   {username}\n"
-            f"  Password:   {temp_pw}\n\n"
-            f"You will be asked to set a new password after your first login.\n\n"
-            f"If you have any questions, please contact us.\n\n"
-            f"— Sihha Food Program"
+    fam['access_email_sent'] = False
+    fam['access_email_hint'] = _email_hint(family_email) if family_email else ''
+    if family_status == 'active' and family_email:
+        user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        access_result, access_status = _send_account_access_invitation(
+            db, user, actor_user_id=g.user['user_id']
         )
-        email_sent = _email_send(family_email, 'Your Sihha Food Program Login', email_body)
-    fam['email_sent'] = email_sent
+        fam['access_email_sent'] = access_status == 200
+        if access_status != 200:
+            fam['access_email_error'] = access_result['error']
 
     return jsonify(fam), 201
 
@@ -3778,12 +3851,13 @@ def update_family(fid):
     new_phone = _normalize_phone(d.get('phone', row['phone']))
     new_size  = d.get('family_size', row['family_size'])
     new_code  = _make_family_code(new_phone, new_size, db_conn=db, exclude_id=fid)
+    new_email = (d.get('email', row['email']) or '').strip() or None
     prev_status = row['status']
     new_status  = d.get('status', row['status'])
     db.execute(
         '''UPDATE families SET name=?,phone=?,address=?,city=?,family_size=?,children_count=?,
            dietary_notes=?,frequency=?,income_range=?,status=?,bundle_size=?,notes=?,family_code=?,
-           wa_phone=?,wa_apikey=?,updated_at=? WHERE id=?''',
+           wa_phone=?,wa_apikey=?,email=?,updated_at=? WHERE id=?''',
         (d.get('name', row['name']), new_phone,
          d.get('address', row['address']), d.get('city', row['city']),
          new_size, d.get('children_count', row['children_count']),
@@ -3792,27 +3866,30 @@ def update_family(fid):
          d.get('bundle_size', row['bundle_size']),
          d.get('notes', row['notes']), new_code,
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
-         now(), fid)
+         new_email, now(), fid)
     )
     linked_user = db.execute(
         "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
     ).fetchone()
     if linked_user:
         is_active = 1 if new_status == 'active' else 0
-        db.execute("UPDATE users SET active=? WHERE id=?", (is_active, linked_user['id']))
+        db.execute(
+            "UPDATE users SET active=?, email=?, name=? WHERE id=?",
+            (is_active, new_email, d.get('name', row['name']), linked_user['id'])
+        )
         if not is_active:
             _revoke_user_sessions(db, linked_user['id'])
     db.commit()
-    # When a family is activated for the first time (any status → active)
+    access_result = None
+    # When a family is approved or reactivated, ensure the portal account exists
+    # and deliver the same secure password-creation link used by Send Access.
     if new_status == 'active' and prev_status != 'active':
-        # 1. Auto-create login account if none exists
         try:
             existing_user = db.execute(
-                "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
+                "SELECT * FROM users WHERE linked_id=? AND role='family'", (fid,)
             ).fetchone()
             if not existing_user:
                 fam_name      = d.get('name', row['name'])
-                fam_email     = (d.get('email') or row.get('email') or '').strip() or None
                 name_parts    = (fam_name or 'family').lower().split()
                 base_username = '.'.join(name_parts[:2]) if len(name_parts) >= 2 else name_parts[0]
                 username      = base_username
@@ -3820,39 +3897,48 @@ def update_family(fid):
                 while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
                     username = f'{base_username}{suffix}'
                     suffix  += 1
-                temp_pw = _generate_temp_password()
                 uid     = str(uuid.uuid4())
                 db.execute(
-                    '''INSERT INTO users (id, username, password_hash, name, role,
-                       linked_id, linked_type, must_change_password, created_at)
-                       VALUES (?,?,?,?,?,?,?,1,?)''',
-                    (uid, username, generate_password_hash(temp_pw),
-                     fam_name, 'family', fid, 'family', now())
+                    '''INSERT INTO users (id, username, password_hash, name, role, email,
+                       active, linked_id, linked_type, must_change_password, created_at)
+                       VALUES (?,?,?,?,?,?,1,?,?,1,?)''',
+                    (uid, username, _generate_unclaimed_password_hash(),
+                     fam_name, 'family', new_email, fid, 'family', now())
                 )
                 db.commit()
                 log.info(f'update_family: auto-created account "{username}" for newly active family {fid}')
-                if fam_email:
-                    email_body = (
-                        f"Welcome to the Sihha Food Program!\n\n"
-                        f"Your account has been created. Use the credentials below to log in:\n\n"
-                        f"  Login URL:  https://ops.sihha.org/login\n"
-                        f"  Username:   {username}\n"
-                        f"  Password:   {temp_pw}\n\n"
-                        f"You will be asked to set a new password after your first login.\n\n"
-                        f"If you have any questions, please contact us.\n\n"
-                        f"— Sihha Food Program"
-                    )
-                    _email_send(fam_email, 'Your Sihha Food Program Login', email_body)
+                existing_user = db.execute(
+                    "SELECT * FROM users WHERE id=?", (uid,)
+                ).fetchone()
+            if new_email:
+                payload, status = _send_account_access_invitation(
+                    db, existing_user, actor_user_id=g.user['user_id']
+                )
+                access_result = {
+                    'access_email_sent': status == 200,
+                    'access_email_hint': _email_hint(new_email),
+                }
+                if status != 200:
+                    access_result['access_email_error'] = payload['error']
+            else:
+                access_result = {'access_email_sent': False, 'access_email_hint': ''}
         except Exception as _e:
-            log.warning(f'update_family: account auto-creation failed for family {fid}: {_e}')
-        # 2. Pre-create volunteer slots
+            log.warning(f'update_family: secure account onboarding failed for family {fid}: {_e}')
+            access_result = {
+                'access_email_sent': False,
+                'access_email_error': 'Secure access could not be sent. Use Send Access to retry.'
+            }
+        # Pre-create volunteer slots for the newly active family.
         try:
             slots = _pre_create_slots_for_family(db, fid)
             db.commit()
             log.info(f'update_family: pre-created {slots} volunteer slots for newly active family {fid}')
         except Exception as _e:
             log.warning(f'update_family: slot pre-creation failed for family {fid}: {_e}')
-    return jsonify(dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone()))
+    result = dict(db.execute("SELECT * FROM families WHERE id=?", (fid,)).fetchone())
+    if access_result:
+        result.update(access_result)
+    return jsonify(result)
 
 @app.route('/api/families/<fid>', methods=['DELETE'])
 @require_auth(roles=['admin'])
@@ -4020,18 +4106,52 @@ def create_volunteer():
     if volunteer_role not in VALID_VOLUNTEER_ROLES:
         return jsonify({'error': 'Invalid volunteer role'}), 422
     vid = str(uuid.uuid4())
-    get_db().execute(
+    db = get_db()
+    volunteer_email = (data.get('email') or '').strip() or None
+    volunteer_status = data.get('status', 'pending')
+    db.execute(
         '''INSERT INTO volunteers
            (id,name,phone,email,role,availability,service_area,
             wa_phone,wa_apikey,status,notes,source,created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (vid, data['name'], data.get('phone'), data.get('email'),
+        (vid, data['name'], data.get('phone'), volunteer_email,
          volunteer_role, data.get('availability'), data.get('service_area'),
          data.get('wa_phone'), data.get('wa_apikey'),
-         data.get('status', 'pending'), data.get('notes'), data.get('source', 'admin'), now())
+         volunteer_status, data.get('notes'), data.get('source', 'admin'), now())
     )
-    get_db().commit()
-    return jsonify(dict(get_db().execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone())), 201
+
+    name_parts = (data['name'] or 'volunteer').lower().split()
+    base_username = '.'.join(name_parts[:2]) if len(name_parts) >= 2 else name_parts[0]
+    username = base_username
+    suffix = 1
+    while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+        username = f'{base_username}{suffix}'
+        suffix += 1
+    uid = str(uuid.uuid4())
+    db.execute(
+        '''INSERT INTO users (id, username, password_hash, name, role, email,
+           active, linked_id, linked_type, must_change_password, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,1,?)''',
+        (uid, username, _generate_unclaimed_password_hash(), data['name'],
+         'volunteer', volunteer_email,
+         1 if volunteer_status == 'active' else 0, vid, 'volunteer', now())
+    )
+    db.commit()
+
+    result = dict(db.execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone())
+    result['login_username'] = username
+    result['access_email_sent'] = False
+    result['access_email_hint'] = _email_hint(volunteer_email) if volunteer_email else ''
+    if volunteer_status == 'active' and volunteer_email:
+        user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        access_payload, access_status = _send_account_access_invitation(
+            db, user, actor_user_id=g.user['user_id']
+        )
+        result['access_email_sent'] = access_status == 200
+        if access_status != 200:
+            result['access_email_error'] = access_payload['error']
+    log.info(f'Volunteer created: {data["name"]} — account: {username}')
+    return jsonify(result), 201
 
 @app.route('/api/volunteers/<vid>', methods=['GET'])
 @require_auth(roles=['admin', 'finance', 'treasurer', 'viewer'])
@@ -4052,11 +4172,12 @@ def update_volunteer(vid):
     volunteer_role = _normalize_volunteer_role(d.get('role', row['role']))
     if volunteer_role not in VALID_VOLUNTEER_ROLES:
         return jsonify({'error': 'Invalid volunteer role'}), 422
+    new_email = (d.get('email', row['email']) or '').strip() or None
     db.execute(
         '''UPDATE volunteers SET name=?,phone=?,email=?,role=?,availability=?,
            service_area=?,wa_phone=?,wa_apikey=?,status=?,notes=?,updated_at=? WHERE id=?''',
         (d.get('name', row['name']), d.get('phone', row['phone']),
-         d.get('email', row['email']), volunteer_role,
+         new_email, volunteer_role,
          d.get('availability', row['availability']), d.get('service_area', row['service_area']),
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          new_status, d.get('notes', row['notes']), now(), vid)
@@ -4066,18 +4187,21 @@ def update_volunteer(vid):
     ).fetchone()
     if linked_user:
         is_active = 1 if new_status == 'active' else 0
-        db.execute("UPDATE users SET active=? WHERE id=?", (is_active, linked_user['id']))
+        db.execute(
+            "UPDATE users SET active=?, email=?, name=? WHERE id=?",
+            (is_active, new_email, d.get('name', row['name']), linked_user['id'])
+        )
         if not is_active:
             _revoke_user_sessions(db, linked_user['id'])
     db.commit()
 
-    # When a volunteer is activated for the first time — create account + email credentials
+    access_result = None
+    # Approval and reactivation use the same secure invitation as family accounts.
     if new_status == 'active' and prev_status != 'active':
-        vol_email = (d.get('email') or row['email'] or '').strip() or None
         vol_name  = d.get('name', row['name'])
         try:
             existing_user = db.execute(
-                "SELECT id FROM users WHERE linked_id=? AND role='volunteer'", (vid,)
+                "SELECT * FROM users WHERE linked_id=? AND role='volunteer'", (vid,)
             ).fetchone()
             if not existing_user:
                 name_parts    = (vol_name or 'volunteer').lower().split()
@@ -4087,41 +4211,42 @@ def update_volunteer(vid):
                 while db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
                     username = f'{base_username}{suffix}'
                     suffix  += 1
-                temp_pw = _generate_temp_password()
                 uid     = str(uuid.uuid4())
                 db.execute(
-                    '''INSERT INTO users (id, username, password_hash, name, role,
-                       linked_id, linked_type, must_change_password, created_at)
-                       VALUES (?,?,?,?,?,?,?,1,?)''',
-                    (uid, username, generate_password_hash(temp_pw),
-                     vol_name, 'volunteer', vid, 'volunteer', now())
+                    '''INSERT INTO users (id, username, password_hash, name, role, email,
+                       active, linked_id, linked_type, must_change_password, created_at)
+                       VALUES (?,?,?,?,?,?,1,?,?,1,?)''',
+                    (uid, username, _generate_unclaimed_password_hash(),
+                     vol_name, 'volunteer', new_email, vid, 'volunteer', now())
                 )
                 db.commit()
                 log.info(f'update_volunteer: auto-created account "{username}" for newly active volunteer {vid}')
-                if vol_email:
-                    _email_send(vol_email, 'You\'re approved — welcome to the Sihha volunteer team!',
-                        f"Assalamu Alaikum {vol_name},\n\n"
-                        f"Your volunteer account has been approved. You can now log in to the Sihha volunteer portal "
-                        f"to sign up for delivery and shopping slots.\n\n"
-                        f"  Login URL:  https://ops.sihha.org/login\n"
-                        f"  Username:   {username}\n"
-                        f"  Password:   {temp_pw}\n\n"
-                        f"You will be asked to set a new password after your first login.\n\n"
-                        f"JazakAllah Khair for volunteering!\n\n"
-                        f"— Sihha Food Program"
-                    )
-            elif vol_email:
-                # Account already exists — just notify them they've been reactivated
-                _email_send(vol_email, 'Your Sihha volunteer account is active',
-                    f"Assalamu Alaikum {vol_name},\n\n"
-                    f"Your Sihha volunteer account has been reactivated. "
-                    f"You can log in at https://ops.sihha.org/login to sign up for slots.\n\n"
-                    f"JazakAllah Khair!\n\n— Sihha Food Program"
+                existing_user = db.execute(
+                    "SELECT * FROM users WHERE id=?", (uid,)
+                ).fetchone()
+            if new_email:
+                payload, status = _send_account_access_invitation(
+                    db, existing_user, actor_user_id=g.user['user_id']
                 )
+                access_result = {
+                    'access_email_sent': status == 200,
+                    'access_email_hint': _email_hint(new_email),
+                }
+                if status != 200:
+                    access_result['access_email_error'] = payload['error']
+            else:
+                access_result = {'access_email_sent': False, 'access_email_hint': ''}
         except Exception as _e:
-            log.warning(f'update_volunteer: account/email failed for volunteer {vid}: {_e}')
+            log.warning(f'update_volunteer: secure account onboarding failed for volunteer {vid}: {_e}')
+            access_result = {
+                'access_email_sent': False,
+                'access_email_error': 'Secure access could not be sent. Use Send Access to retry.'
+            }
 
-    return jsonify(dict(db.execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone()))
+    result = dict(db.execute("SELECT * FROM volunteers WHERE id=?", (vid,)).fetchone())
+    if access_result:
+        result.update(access_result)
+    return jsonify(result)
 
 # ── Assignments routes removed 2026-06-11 (audit 3.4) ────────────────────────
 # Legacy /api/assignments CRUD deleted — zero frontend callers; superseded by
