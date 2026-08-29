@@ -2520,7 +2520,7 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.2.3', 'time': now(),
+            'status': 'ok', 'version': '1.2.4', 'time': now(),
             'checks': {'database': 'ok', 'schema': 'ok'},
             'communications': {
                 'email_provider': EMAIL_PROVIDER,
@@ -3401,6 +3401,111 @@ def update_user(uid):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify({'ok': True})
+
+
+@app.route('/api/users/<uid>', methods=['DELETE'])
+@require_auth(roles=['admin'])
+def delete_user(uid):
+    """Permanently remove one login account while preserving linked records."""
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Request body must be a JSON object.'}), 400
+    confirmation = data.get('confirm_username')
+    actor_token = request.headers.get('Authorization', '')[7:]
+    db = get_db()
+
+    try:
+        # Re-read every safeguard while holding the write lock so the deletion
+        # cannot race an account edit or a second administrator action.
+        db.execute('BEGIN IMMEDIATE')
+        actor = db.execute(
+            '''SELECT s.user_id,u.role,u.active
+               FROM sessions s JOIN users u ON u.id=s.user_id
+               WHERE s.token=? AND s.expires_at>?''',
+            (actor_token, now())
+        ).fetchone()
+        if not actor or actor['user_id'] != g.user['user_id']:
+            db.rollback()
+            return jsonify({'error': 'Administrator session is no longer valid.'}), 401
+        if not actor['active'] or actor['role'] != 'admin':
+            db.rollback()
+            return jsonify({
+                'error': 'Administrator authorization changed. Refresh and sign in again.'
+            }), 403
+        row = db.execute(
+            '''SELECT id,username,role,linked_id,linked_type
+               FROM users WHERE id=?''',
+            (uid,)
+        ).fetchone()
+        if not row:
+            db.rollback()
+            return jsonify({'error': 'User not found'}), 404
+        if confirmation != row['username']:
+            db.rollback()
+            return jsonify({
+                'error': 'Type the exact username to confirm deletion.'
+            }), 422
+        if uid == g.user['user_id']:
+            db.rollback()
+            return jsonify({
+                'error': 'You cannot delete the account you are signed in with.'
+            }), 409
+        if row['username'] == 'admin':
+            db.rollback()
+            return jsonify({
+                'error': 'The protected administrator account cannot be deleted.'
+            }), 409
+        if row['role'] == 'admin':
+            db.rollback()
+            return jsonify({
+                'error': 'Demote this administrator and save before deleting the account.'
+            }), 409
+
+        _invalidate_account_invitations(
+            db, uid, actor_user_id=g.user['user_id'], detail='account_deleted'
+        )
+        db.execute('DELETE FROM sessions WHERE user_id=?', (uid,))
+        if row['role'] == 'volunteer' and row['linked_id']:
+            # Backward-compatible volunteer tokens are independent of users and
+            # must also be revoked for deletion to remove all login access.
+            db.execute(
+                'DELETE FROM portal_sessions WHERE volunteer_id=?',
+                (row['linked_id'],)
+            )
+        # Preserve invitations created for other people without retaining a
+        # foreign-key reference to the account being removed.
+        db.execute(
+            'UPDATE account_invitations SET created_by=NULL WHERE created_by=?',
+            (uid,)
+        )
+        db.execute('DELETE FROM account_invitations WHERE user_id=?', (uid,))
+        import json as _json
+        deletion_snapshot = _json.dumps({
+            'action': 'login_account_deleted',
+            'linked_record_preserved': bool(row['linked_id']),
+            'role': row['role'],
+            'username': row['username'],
+        }, sort_keys=True, separators=(',', ':'))
+        _record_account_access_event(
+            db, uid, 'account_deleted_by_admin',
+            actor_user_id=g.user['user_id'],
+            detail=deletion_snapshot
+        )
+        db.execute('DELETE FROM users WHERE id=?', (uid,))
+        db.commit()
+    except Exception:
+        db.rollback()
+        log.exception('Failed to delete user_id=%s', uid)
+        return jsonify({'error': 'Unable to delete this user account.'}), 500
+
+    log.info('Administrator deleted login account user_id=%s', uid)
+    return jsonify({
+        'ok': True,
+        'deleted_user_id': uid,
+        'linked_record_preserved': bool(row['linked_id']),
+    })
 
 @app.route('/api/users/<uid>/admin-reset-password', methods=['POST'])
 @require_auth(roles=['admin'])

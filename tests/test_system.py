@@ -1805,7 +1805,411 @@ class TestUserManagement:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 14A — ADMINISTRATOR PASSWORD RESET
+# SECTION 14A — USER DELETION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestUserDeletion:
+    """Administrators can safely remove login accounts from Edit User."""
+
+    @staticmethod
+    def _create_staff(client, auth, role='viewer'):
+        username = f'delete_{role}_{uuid.uuid4().hex[:8]}'
+        created = client.post('/api/users', headers=auth, json={
+            'username': username,
+            'name': f'Delete {role.title()}',
+            'password': 'StrongPass1!',
+            'must_change_password': 0,
+            'role': role,
+        })
+        assert created.status_code == 201, created.get_json()
+        return created.get_json()['id'], username
+
+    def test_delete_requires_admin_exact_confirmation_and_existing_user(
+            self, client, auth):
+        uid, username = self._create_staff(client, auth)
+
+        assert client.delete(
+            f'/api/users/{uid}', json={'confirm_username': username}
+        ).status_code == 401
+
+        _, actor_username = self._create_staff(client, auth)
+        actor_login = client.post('/api/auth/login', json={
+            'username': actor_username, 'password': 'StrongPass1!'
+        }).get_json()
+        actor_auth = {'Authorization': f'Bearer {actor_login["token"]}'}
+        assert client.delete(
+            f'/api/users/{uid}', headers=actor_auth,
+            json={'confirm_username': username}
+        ).status_code == 403
+
+        missing = client.delete(f'/api/users/{uid}', headers=auth, json={})
+        assert missing.status_code == 422
+        mismatch = client.delete(
+            f'/api/users/{uid}', headers=auth,
+            json={'confirm_username': username.upper()}
+        )
+        assert mismatch.status_code == 422
+        assert 'exact username' in mismatch.get_json()['error']
+        malformed = client.delete(
+            f'/api/users/{uid}', headers=auth, json=['not', 'an', 'object']
+        )
+        assert malformed.status_code == 400
+        assert client.delete(
+            f'/api/users/{uuid.uuid4()}', headers=auth,
+            json={'confirm_username': 'missing'}
+        ).status_code == 404
+
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT COUNT(*) FROM users WHERE id=?', (uid,)
+            ).fetchone()[0] == 1
+        finally:
+            db.close()
+
+    def test_delete_protects_current_and_all_administrator_accounts(
+            self, client, auth):
+        users = client.get('/api/users', headers=auth).get_json()
+        primary = next(user for user in users if user['username'] == 'admin')
+        self_delete = client.delete(
+            f'/api/users/{primary["id"]}', headers=auth,
+            json={'confirm_username': 'admin'}
+        )
+        assert self_delete.status_code == 409
+        assert 'signed in' in self_delete.get_json()['error']
+
+        second_id, second_username = self._create_staff(client, auth, role='admin')
+        protected = client.delete(
+            f'/api/users/{second_id}', headers=auth,
+            json={'confirm_username': second_username}
+        )
+        assert protected.status_code == 409
+        assert 'Demote' in protected.get_json()['error']
+
+        second_login = client.post('/api/auth/login', json={
+            'username': second_username, 'password': 'StrongPass1!'
+        }).get_json()
+        protected_primary = client.delete(
+            f'/api/users/{primary["id"]}',
+            headers={'Authorization': f'Bearer {second_login["token"]}'},
+            json={'confirm_username': 'admin'}
+        )
+        assert protected_primary.status_code == 409
+        assert 'protected administrator' in protected_primary.get_json()['error']
+
+        demoted = client.put(
+            f'/api/users/{second_id}', headers=auth, json={'role': 'viewer'}
+        )
+        assert demoted.status_code == 200
+        removed = client.delete(
+            f'/api/users/{second_id}', headers=auth,
+            json={'confirm_username': second_username}
+        )
+        assert removed.status_code == 200
+        assert client.get(
+            '/api/auth/me',
+            headers={'Authorization': f'Bearer {second_login["token"]}'}
+        ).status_code == 401
+
+    def test_delete_revokes_access_and_preserves_linked_record_and_audit(
+            self, client, auth):
+        uid, username, volunteer_id = TestUserManagement._seed_portal_user(
+            'volunteer', 'active'
+        )
+        login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'StrongPass1!'
+        })
+        assert login.status_code == 200
+        user_token = login.get_json()['token']
+
+        other_id, _ = self._create_staff(client, auth)
+        target_invitation_id = str(uuid.uuid4())
+        other_invitation_id = str(uuid.uuid4())
+        db = _server.make_conn()
+        try:
+            admin_id = db.execute(
+                "SELECT id FROM users WHERE username='admin'"
+            ).fetchone()['id']
+            db.execute(
+                '''INSERT INTO portal_sessions
+                   (token,volunteer_id,expires_at,created_at) VALUES (?,?,?,?)''',
+                (f'legacy-{uuid.uuid4()}', volunteer_id,
+                 '2999-01-01T00:00:00', _server.now())
+            )
+            db.execute(
+                '''INSERT INTO account_invitations
+                   (id,user_id,token_hash,delivery_email,created_by,created_at,expires_at)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (target_invitation_id, uid, uuid.uuid4().hex,
+                 'target@example.org', admin_id, _server.now(),
+                 '2999-01-01T00:00:00')
+            )
+            db.execute(
+                '''INSERT INTO account_invitations
+                   (id,user_id,token_hash,delivery_email,created_by,created_at,expires_at)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (other_invitation_id, other_id, uuid.uuid4().hex,
+                 'other@example.org', uid, _server.now(),
+                 '2999-01-01T00:00:00')
+            )
+            _server._record_account_access_event(
+                db, uid, 'pre_delete_audit_marker', actor_user_id=admin_id
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        deleted = client.delete(
+            f'/api/users/{uid}', headers=auth,
+            json={'confirm_username': username}
+        )
+        assert deleted.status_code == 200, deleted.get_json()
+        assert deleted.get_json()['linked_record_preserved'] is True
+        assert client.get(
+            '/api/auth/me', headers={'Authorization': f'Bearer {user_token}'}
+        ).status_code == 401
+        assert client.post('/api/auth/login', json={
+            'username': username, 'password': 'StrongPass1!'
+        }).status_code == 401
+
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT COUNT(*) FROM users WHERE id=?', (uid,)
+            ).fetchone()[0] == 0
+            assert db.execute(
+                'SELECT COUNT(*) FROM sessions WHERE user_id=?', (uid,)
+            ).fetchone()[0] == 0
+            assert db.execute(
+                'SELECT COUNT(*) FROM portal_sessions WHERE volunteer_id=?',
+                (volunteer_id,)
+            ).fetchone()[0] == 0
+            assert db.execute(
+                'SELECT COUNT(*) FROM account_invitations WHERE user_id=?',
+                (uid,)
+            ).fetchone()[0] == 0
+            preserved_invitation = db.execute(
+                'SELECT created_by FROM account_invitations WHERE id=?',
+                (other_invitation_id,)
+            ).fetchone()
+            assert preserved_invitation is not None
+            assert preserved_invitation['created_by'] is None
+            assert db.execute(
+                'SELECT status FROM volunteers WHERE id=?', (volunteer_id,)
+            ).fetchone()['status'] == 'active'
+            event_types = {
+                row['event_type'] for row in db.execute(
+                    'SELECT event_type FROM account_access_events WHERE user_id=?',
+                    (uid,)
+                ).fetchall()
+            }
+            assert 'pre_delete_audit_marker' in event_types
+            assert 'account_deleted_by_admin' in event_types
+            deletion_event = db.execute(
+                '''SELECT detail FROM account_access_events
+                   WHERE user_id=? AND event_type='account_deleted_by_admin' ''',
+                (uid,)
+            ).fetchone()
+            assert f'"username":"{username}"' in deletion_event['detail']
+            assert '"role":"volunteer"' in deletion_event['detail']
+        finally:
+            db.close()
+
+        replacement = client.post('/api/users', headers=auth, json={
+            'username': f'{username}_replacement',
+            'role': 'volunteer',
+            'linked_id': volunteer_id,
+            'linked_type': 'volunteer',
+        })
+        assert replacement.status_code == 201, replacement.get_json()
+
+    def test_delete_preserves_linked_family_record(self, client, auth):
+        uid, username, family_id = TestUserManagement._seed_portal_user(
+            'family', 'active'
+        )
+        deleted = client.delete(
+            f'/api/users/{uid}', headers=auth,
+            json={'confirm_username': username}
+        )
+        assert deleted.status_code == 200, deleted.get_json()
+        assert deleted.get_json()['linked_record_preserved'] is True
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT status FROM families WHERE id=?', (family_id,)
+            ).fetchone()['status'] == 'active'
+            assert db.execute(
+                'SELECT COUNT(*) FROM users WHERE id=?', (uid,)
+            ).fetchone()[0] == 0
+        finally:
+            db.close()
+
+    def test_delete_rolls_back_all_cleanup_on_failure(
+            self, client, auth, monkeypatch):
+        uid, username = self._create_staff(client, auth)
+        login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'StrongPass1!'
+        }).get_json()
+        invitation_id = str(uuid.uuid4())
+        db = _server.make_conn()
+        try:
+            admin_id = db.execute(
+                "SELECT id FROM users WHERE username='admin'"
+            ).fetchone()['id']
+            db.execute(
+                '''INSERT INTO account_invitations
+                   (id,user_id,token_hash,delivery_email,created_by,created_at,expires_at)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (invitation_id, uid, uuid.uuid4().hex, 'rollback@example.org',
+                 admin_id, _server.now(), '2999-01-01T00:00:00')
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        monkeypatch.setattr(
+            _server, '_record_account_access_event',
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('forced'))
+        )
+        failed = client.delete(
+            f'/api/users/{uid}', headers=auth,
+            json={'confirm_username': username}
+        )
+        assert failed.status_code == 500
+
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT COUNT(*) FROM users WHERE id=?', (uid,)
+            ).fetchone()[0] == 1
+            assert db.execute(
+                'SELECT invalidated_at FROM account_invitations WHERE id=?',
+                (invitation_id,)
+            ).fetchone()['invalidated_at'] is None
+            assert db.execute(
+                'SELECT COUNT(*) FROM sessions WHERE token=?',
+                (login['token'],)
+            ).fetchone()[0] == 1
+        finally:
+            db.close()
+
+    def test_delete_revalidates_actor_session_inside_transaction(
+            self, client, auth, monkeypatch):
+        uid, username = self._create_staff(client, auth)
+        db = _server.make_conn()
+        try:
+            admin = db.execute(
+                "SELECT id,username,role,active FROM users WHERE username='admin'"
+            ).fetchone()
+        finally:
+            db.close()
+        stale_session = {
+            'token': 'stale-admin-token',
+            'user_id': admin['id'],
+            'username': admin['username'],
+            'role': admin['role'],
+            'active': admin['active'],
+            'linked_id': None,
+            'linked_type': None,
+            'expires_at': '2999-01-01T00:00:00',
+        }
+        monkeypatch.setattr(_server, 'get_session', lambda token: stale_session)
+        rejected = client.delete(
+            f'/api/users/{uid}',
+            headers={'Authorization': 'Bearer stale-admin-token'},
+            json={'confirm_username': username}
+        )
+        assert rejected.status_code == 401
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT COUNT(*) FROM users WHERE id=?', (uid,)
+            ).fetchone()[0] == 1
+        finally:
+            db.close()
+
+    def test_delete_revalidates_live_actor_role_inside_transaction(
+            self, client, auth, monkeypatch):
+        uid, username = self._create_staff(client, auth)
+        actor_id, actor_username = self._create_staff(client, auth, role='admin')
+        actor_login = client.post('/api/auth/login', json={
+            'username': actor_username, 'password': 'StrongPass1!'
+        }).get_json()
+        original_get_session = _server.get_session
+
+        db = _server.make_conn()
+        try:
+            stale_admin_session = dict(db.execute(
+                '''SELECT s.token,s.expires_at,u.id AS user_id,u.username,
+                          u.name,u.role,u.active,u.linked_id,u.linked_type,
+                          u.must_change_password
+                   FROM sessions s JOIN users u ON u.id=s.user_id
+                   WHERE s.token=?''',
+                (actor_login['token'],)
+            ).fetchone())
+            # Simulate an authorization change after the decorator's session
+            # lookup but before the route obtains its write lock.
+            db.execute("UPDATE users SET role='viewer' WHERE id=?", (actor_id,))
+            db.commit()
+        finally:
+            db.close()
+        monkeypatch.setattr(
+            _server, 'get_session', lambda token: stale_admin_session
+        )
+        rejected = client.delete(
+            f'/api/users/{uid}',
+            headers={'Authorization': f'Bearer {actor_login["token"]}'},
+            json={'confirm_username': username}
+        )
+        assert rejected.status_code == 403
+        assert 'authorization changed' in rejected.get_json()['error']
+
+        monkeypatch.setattr(_server, 'get_session', original_get_session)
+        cleanup = client.delete(
+            f'/api/users/{actor_id}', headers=auth,
+            json={'confirm_username': actor_username}
+        )
+        assert cleanup.status_code == 200
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT COUNT(*) FROM users WHERE id=?', (uid,)
+            ).fetchone()[0] == 1
+        finally:
+            db.close()
+
+    def test_reset_and_delete_actions_live_inside_edit_user(self):
+        html = (Path(__file__).resolve().parents[1] / 'public' / 'index.html').read_text()
+        users_table = html.split('async function renderUsers()', 1)[1].split(
+            'function openAdminResetPassword(', 1
+        )[0]
+        account_actions = html.split('function userAccountActionsMarkup(r)', 1)[1].split(
+            'function openAdminResetPasswordForUser(', 1
+        )[0]
+        edit_user = html.split('function openUserForm(idOrObj)', 1)[1].split(
+            'function toggleLinkedField()', 1
+        )[0]
+        assert 'openAdminResetPassword(' not in users_table
+        assert 'Account Actions' in account_actions
+        assert 'Reset Password' in account_actions
+        assert 'Delete User' in account_actions
+        assert 'openDeleteUser' in account_actions
+        assert 'userDeleteProtection' in html
+        assert "confirm_username: input.value" in html
+        assert "DEL('/users/' + uid" in html
+        assert 'user-delete-submit' in html
+        assert 'Type <strong>${esc(r.username)}</strong> to confirm' in html
+        assert edit_user.count('${userAccountActionsMarkup(r)}') == 2
+        assert 'function showToast(message)' in html
+        assert "toast.setAttribute('role', 'status')" in html
+        assert 'id="admin-reset-submit"' in html
+        assert "submit.textContent = 'Resetting…'" in html
+        assert 'id="admin-reset-password-error" role="alert"' in html
+        assert '.btn:disabled, .btn:disabled:hover' in html
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 14B — ADMINISTRATOR PASSWORD RESET
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestAdministratorPasswordReset:
@@ -2056,7 +2460,8 @@ class TestAdministratorPasswordReset:
         admin_html = (project_root / 'public' / 'index.html').read_text()
         login_html = (project_root / 'public' / 'login.html').read_text()
 
-        assert 'Reset Password</button>' in admin_html
+        assert 'Reset Password' in admin_html
+        assert 'openAdminResetPasswordForUser' in admin_html
         assert "'/admin-reset-password'" in admin_html
         assert "sessionStorage.setItem('sihha_password_change_token'" in admin_html
         assert "sessionStorage.getItem('sihha_password_change_token'" in login_html
@@ -2064,7 +2469,7 @@ class TestAdministratorPasswordReset:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION 14B — SECURE ACCOUNT INVITATIONS
+# SECTION 14C — SECURE ACCOUNT INVITATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestAccountInvitations:

@@ -248,6 +248,12 @@
     color: #fff;
   }
   .btn:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+  .btn:disabled, .btn:disabled:hover {
+    opacity: .48;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
   .btn-green { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn-green:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
   /* Gold reserved for giving actions ONLY */
@@ -564,6 +570,26 @@
     display: none;
   }
   .alert-error { background: #fff0f0; border: 1px solid #fcc; color: var(--danger); }
+  #app-toast {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 10000;
+    max-width: min(420px, calc(100vw - 36px));
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: var(--accent-deep);
+    color: #fff;
+    box-shadow: var(--sh-lg);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.45;
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease;
+  }
+  #app-toast.show { opacity: 1; transform: translateY(0); }
   .alert-success { background: #f0fff4; border: 1px solid #9f9; color: #060; }
 
   /* ── Responsive ─────────────────────────────────────────── */
@@ -697,6 +723,7 @@
 // ── State ─────────────────────────────────────────────────────────────────────
 let STATE = { token: null, user: null, page: 'dashboard', filter: 'all', editId: null };
 let _drawerReturnFocus = null;
+let _toastTimer = null;
 
 // ── API ───────────────────────────────────────────────────────────────────────
 // shared.js makeApi — truthy-body semantics (legacy index.html behavior)
@@ -704,7 +731,24 @@ const api = makeApi(() => STATE.token);
 const GET  = (p)    => api('GET', p);
 const POST = (p, b) => api('POST', p, b);
 const PUT  = (p, b) => api('PUT', p, b);
-const DEL  = (p)    => api('DELETE', p);
+const DEL  = (p, b) => api('DELETE', p, b);
+
+function showToast(message) {
+  let toast = document.getElementById('app-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'app-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.setAttribute('aria-atomic', 'true');
+    document.body.appendChild(toast);
+  }
+  window.clearTimeout(_toastTimer);
+  toast.textContent = message;
+  toast.classList.remove('show');
+  requestAnimationFrame(() => toast.classList.add('show'));
+  _toastTimer = window.setTimeout(() => toast.classList.remove('show'), 4000);
+}
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 async function doLogin() {
@@ -859,13 +903,13 @@ function syncSidebarAccessibility() {
 
 // ── Drawer ────────────────────────────────────────────────────────────────────
 function openDrawer(title, bodyHTML, footerHTML) {
-  _drawerReturnFocus = document.activeElement;
+  const drawer = document.getElementById('drawer');
+  if (!drawer.classList.contains('open')) _drawerReturnFocus = document.activeElement;
   document.getElementById('drawer-title').textContent = title;
   document.getElementById('drawer-body').innerHTML = bodyHTML;
   document.getElementById('drawer-footer').innerHTML = footerHTML || '';
   document.getElementById('app').inert = true;
   document.getElementById('overlay').classList.add('open');
-  const drawer = document.getElementById('drawer');
   drawer.classList.add('open');
   drawer.setAttribute('aria-hidden', 'false');
   drawer.focus();
@@ -4483,8 +4527,6 @@ async function renderUsers() {
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
                   <button class="btn btn-sm btn-outline" style="margin-left:4px"
-                    onclick="openAdminResetPassword('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}')">Reset Password</button>
-                  <button class="btn btn-sm btn-outline" style="margin-left:4px"
                     ${r.has_access_email && r.effective_active ? '' : `disabled title="${esc(r.inactive_reason || 'Add an email address before sending access')}"`}
                     onclick="openSendAccessLink('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}','${escJs(r.access_email_hint||'')}')">✉ Send Access</button>
                 </td>
@@ -4515,8 +4557,8 @@ function openAdminResetPassword(uid, username, name) {
        <label for="admin-reset-password-confirmation">Confirm Temporary Password</label>
        <input type="password" id="admin-reset-password-confirmation" autocomplete="new-password">
      </div>
-     <div class="alert alert-error" id="admin-reset-password-error" style="display:none"></div>`,
-    `<button class="btn" onclick="doAdminResetPassword('${uid}','${escJs(username)}')">Reset Password</button>
+     <div class="alert alert-error" id="admin-reset-password-error" role="alert" style="display:none"></div>`,
+    `<button class="btn" type="button" id="admin-reset-submit" onclick="doAdminResetPassword('${uid}','${escJs(username)}')">Reset Password</button>
      <button class="btn btn-outline" onclick="closeDrawer()" style="margin-left:8px">Cancel</button>`
   );
 }
@@ -4525,6 +4567,7 @@ async function doAdminResetPassword(uid, username) {
   const password = document.getElementById('admin-reset-password').value;
   const confirmation = document.getElementById('admin-reset-password-confirmation').value;
   const errEl = document.getElementById('admin-reset-password-error');
+  const submit = document.getElementById('admin-reset-submit');
   const showError = message => {
     errEl.textContent = message;
     errEl.style.display = 'block';
@@ -4533,6 +4576,8 @@ async function doAdminResetPassword(uid, username) {
   if (!password || !confirmation) return showError('Enter and confirm the temporary password.');
   if (password !== confirmation) return showError('Passwords do not match.');
 
+  submit.disabled = true;
+  submit.textContent = 'Resetting…';
   try {
     await POST('/users/' + uid + '/admin-reset-password', {
       password,
@@ -4552,6 +4597,8 @@ async function doAdminResetPassword(uid, username) {
     renderUsers();
   } catch(e) {
     showError(e.message);
+    submit.disabled = false;
+    submit.textContent = 'Reset Password';
   }
 }
 
@@ -4609,6 +4656,103 @@ async function bulkCreateUsers(type) {
     alert(msg);
     renderUsers();
   } catch(e) { alert(e.message); }
+}
+
+function userDeleteProtection(r) {
+  if (!r?.id) return '';
+  if (STATE.user && STATE.user.id === r.id) {
+    return 'You cannot delete the account you are signed in with.';
+  }
+  if (r.username === 'admin') return 'The protected administrator account cannot be deleted.';
+  if (r.role === 'admin') return 'Demote this administrator and save before deleting the account.';
+  return '';
+}
+
+function userAccountActionsMarkup(r) {
+  if (!r?.id) return '';
+  const protection = userDeleteProtection(r);
+  return `
+    <div class="form-section" style="margin-top:22px">Account Actions</div>
+    <div style="background:var(--gray-1);border-radius:8px;padding:14px 16px">
+      <div style="font-size:12px;line-height:1.6;color:var(--gray-4);margin-bottom:12px">
+        Manage this user's credentials or permanently remove only their Sihha login account.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline" type="button" onclick="openAdminResetPasswordForUser('${escJs(r.id)}')">
+          <i class="ti ti-key" aria-hidden="true"></i> Reset Password
+        </button>
+        <button class="btn btn-outline" type="button"
+          style="color:var(--danger);border-color:var(--danger)"
+          ${protection ? `disabled aria-disabled="true"` : ''}
+          onclick="openDeleteUser('${escJs(r.id)}')">
+          <i class="ti ti-trash" aria-hidden="true"></i> Delete User
+        </button>
+      </div>
+      ${protection ? `<div style="font-size:11px;color:var(--gray-4);margin-top:10px">${esc(protection)}</div>` : ''}
+    </div>`;
+}
+
+function openAdminResetPasswordForUser(uid) {
+  const r = window._users && window._users[uid];
+  if (!r) return showToast('User details are no longer available. Refresh and try again.');
+  openAdminResetPassword(r.id, r.username, r.name || r.username);
+}
+
+function openDeleteUser(uid) {
+  const r = window._users && window._users[uid];
+  if (!r) return showToast('User details are no longer available. Refresh and try again.');
+  const protection = userDeleteProtection(r);
+  if (protection) return showToast(protection);
+  const linkedRecord = r.role === 'family' || r.role === 'volunteer'
+    ? `The linked ${esc(r.role)} record <strong>${esc(r.linked_name || r.name || r.username)}</strong> and its operational history will remain.`
+    : 'Operational and security audit history will remain.';
+
+  openDrawer(`Delete User — ${r.name || r.username}`,
+    `<div style="background:var(--danger-pale);border-radius:8px;padding:14px 16px;font-size:12px;line-height:1.65;color:var(--danger);margin-bottom:18px">
+       <strong>This permanently deletes the login account.</strong><br>
+       Active sessions and unused access links will be revoked. ${linkedRecord}
+     </div>
+     <div class="form-group">
+       <label for="user-delete-confirmation">Type <strong>${esc(r.username)}</strong> to confirm</label>
+       <input type="text" id="user-delete-confirmation" autocomplete="off" autocapitalize="none" spellcheck="false"
+         aria-describedby="user-delete-help" oninput="updateDeleteUserConfirmation('${escJs(r.id)}')">
+       <div id="user-delete-help" style="font-size:11px;color:var(--gray-4);margin-top:6px">This action cannot be undone.</div>
+     </div>
+     <div class="alert alert-error" id="user-delete-error" role="alert" style="display:none"></div>`,
+    `<button class="btn btn-outline" type="button" onclick="closeDrawer()">Cancel</button>
+     <button class="btn" type="button" id="user-delete-submit" disabled
+       style="background:var(--danger);margin-left:8px" onclick="deleteUserAccount('${escJs(r.id)}')">Delete User</button>`
+  );
+  requestAnimationFrame(() => document.getElementById('user-delete-confirmation')?.focus());
+}
+
+function updateDeleteUserConfirmation(uid) {
+  const r = window._users && window._users[uid];
+  const input = document.getElementById('user-delete-confirmation');
+  const submit = document.getElementById('user-delete-submit');
+  if (submit) submit.disabled = !r || !input || input.value !== r.username;
+}
+
+async function deleteUserAccount(uid) {
+  const r = window._users && window._users[uid];
+  const input = document.getElementById('user-delete-confirmation');
+  const submit = document.getElementById('user-delete-submit');
+  const err = document.getElementById('user-delete-error');
+  if (!r || !input || input.value !== r.username) return;
+  err.style.display = 'none';
+  submit.disabled = true;
+  submit.textContent = 'Deleting…';
+  try {
+    await DEL('/users/' + uid, {confirm_username: input.value});
+    closeDrawer();
+    showToast(`${r.username}'s login account was deleted.`);
+    await renderUsers();
+  } catch(e) {
+    err.textContent = e.message;
+    err.style.display = 'block';
+    submit.textContent = 'Delete User';
+    updateDeleteUserConfirmation(uid);
+  }
 }
 
 function openUserForm(idOrObj) {
@@ -4681,6 +4825,7 @@ function openUserForm(idOrObj) {
          <label>Email</label>
          <input type="email" id="u-email" value="${esc(r.email||'')}" placeholder="user@example.com">
        </div>
+       ${userAccountActionsMarkup(r)}
        <div class="alert alert-error" id="user-err" style="display:none"></div>`,
       `<button class="btn" onclick="saveUser()">Save</button>
        <button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
@@ -4703,6 +4848,7 @@ function openUserForm(idOrObj) {
        <input type="hidden" id="u-linked-type" value="${r.linked_type||''}">
        <div id="u-access-guidance" style="display:none"></div>
        <div class="form-group"><label>Email</label><input type="email" id="u-email" value="${esc(r.email||'')}"></div>
+       ${userAccountActionsMarkup(r)}
        <div class="alert alert-error" id="user-err" style="display:none"></div>`,
       `<button class="btn" onclick="saveUser()">Save</button><button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
     );
