@@ -716,9 +716,16 @@ async function doLogin() {
   btn.disabled = true; btn.textContent = 'Signing in…';
   try {
     const res = await POST('/auth/login', { username: user, password: pass });
+    if (res.must_change_password) {
+      sessionStorage.setItem('sihha_password_change_token', res.temp_token);
+      window.location.href = '/login#password-change';
+      return;
+    }
     STATE.token = res.token;
     STATE.user  = res.user;
     localStorage.setItem('sihaa_token', res.token);
+    localStorage.setItem('token', res.token);
+    localStorage.setItem('user', JSON.stringify(res.user));
     showApp();
   } catch (e) {
     err.textContent = e.message;
@@ -732,19 +739,24 @@ async function doLogout() {
   try { await POST('/auth/logout', {}); } catch(e) {}
   STATE.token = null; STATE.user = null;
   localStorage.removeItem('sihaa_token');
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
 }
 
 async function checkSession() {
-  const token = localStorage.getItem('sihaa_token');
+  const token = localStorage.getItem('sihaa_token') || localStorage.getItem('token');
   if (!token) return;
   try {
     STATE.token = token;
     STATE.user  = await GET('/auth/me');
+    localStorage.setItem('sihaa_token', token);
     showApp();
   } catch(e) {
     localStorage.removeItem('sihaa_token');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
     STATE.token = null;
   }
 }
@@ -861,6 +873,7 @@ function openDrawer(title, bodyHTML, footerHTML) {
 function closeDrawer() {
   document.getElementById('overlay').classList.remove('open');
   const drawer = document.getElementById('drawer');
+  drawer.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
   const wasOpen = drawer.classList.contains('open');
   drawer.classList.remove('open');
   drawer.setAttribute('aria-hidden', 'true');
@@ -4456,6 +4469,8 @@ async function renderUsers() {
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
                   <button class="btn btn-sm btn-outline" style="margin-left:4px"
+                    onclick="openAdminResetPassword('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}')">Reset Password</button>
+                  <button class="btn btn-sm btn-outline" style="margin-left:4px"
                     ${r.has_access_email ? '' : 'disabled title="Add an email address before sending access"'}
                     onclick="openSendAccessLink('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}','${escJs(r.access_email_hint||'')}')">✉ Send Access</button>
                 </td>
@@ -4465,6 +4480,64 @@ async function renderUsers() {
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
+  }
+}
+
+function openAdminResetPassword(uid, username, name) {
+  const isSelf = Boolean(STATE.user && STATE.user.id === uid);
+  openDrawer(`Reset Password — ${name}`,
+    `<p style="font-size:13px;color:var(--gray-4);margin-bottom:16px">
+       Set a temporary password for <strong>${esc(username)}</strong>. The current password is not required.
+     </p>
+     <div style="background:var(--gray-1);border-radius:8px;padding:14px 16px;font-size:12px;line-height:1.6;color:var(--gray-4);margin-bottom:16px">
+       This immediately signs the user out everywhere, invalidates unused access links, and requires them to choose a private password at their next sign-in.
+       ${isSelf ? '<br><strong>You are resetting your own account and will be signed out.</strong>' : ''}
+     </div>
+     <div class="form-group">
+       <label for="admin-reset-password">Temporary Password</label>
+       <input type="password" id="admin-reset-password" autocomplete="new-password" placeholder="Min 8 chars, 1 upper, 1 number, 1 special">
+     </div>
+     <div class="form-group">
+       <label for="admin-reset-password-confirmation">Confirm Temporary Password</label>
+       <input type="password" id="admin-reset-password-confirmation" autocomplete="new-password">
+     </div>
+     <div class="alert alert-error" id="admin-reset-password-error" style="display:none"></div>`,
+    `<button class="btn" onclick="doAdminResetPassword('${uid}','${escJs(username)}')">Reset Password</button>
+     <button class="btn btn-outline" onclick="closeDrawer()" style="margin-left:8px">Cancel</button>`
+  );
+}
+
+async function doAdminResetPassword(uid, username) {
+  const password = document.getElementById('admin-reset-password').value;
+  const confirmation = document.getElementById('admin-reset-password-confirmation').value;
+  const errEl = document.getElementById('admin-reset-password-error');
+  const showError = message => {
+    errEl.textContent = message;
+    errEl.style.display = 'block';
+  };
+  errEl.style.display = 'none';
+  if (!password || !confirmation) return showError('Enter and confirm the temporary password.');
+  if (password !== confirmation) return showError('Passwords do not match.');
+
+  try {
+    await POST('/users/' + uid + '/admin-reset-password', {
+      password,
+      password_confirmation: confirmation,
+    });
+    const isSelf = Boolean(STATE.user && STATE.user.id === uid);
+    if (isSelf) {
+      localStorage.removeItem('sihaa_token');
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      alert('Your password was reset. Sign in with the temporary password, then choose a private password.');
+      window.location.href = '/login';
+      return;
+    }
+    closeDrawer();
+    showToast(`${username}'s password was reset. They must change it at next sign-in.`);
+    renderUsers();
+  } catch(e) {
+    showError(e.message);
   }
 }
 
@@ -4550,10 +4623,10 @@ function openUserForm(idOrObj) {
          <label>Username *</label>
          <input type="text" id="u-username" value="${esc(r.username||'')}" ${r.id?'readonly':''}>
        </div>
-       <div class="form-group">
-         <label>${r.id?'New Password (leave blank = auto-generate temp)':'Password (leave blank = auto-generate temp)'}</label>
-         <input type="password" id="u-password" placeholder="Min 8 chars, 1 upper, 1 number, 1 special">
-       </div>
+       ${r.id ? '' : `<div class="form-group">
+         <label>Initial Password (leave blank = auto-generate temporary password)</label>
+         <input type="password" id="u-password" autocomplete="new-password" placeholder="Min 8 chars, 1 upper, 1 number, 1 special">
+       </div>`}
        <div class="form-row">
          <div class="form-group">
            <label>Role *</label>
@@ -4594,7 +4667,7 @@ function openUserForm(idOrObj) {
     openDrawer(r.id ? 'Edit User' : 'Add User',
       `<div class="form-group"><label>Name</label><input type="text" id="u-name" value="${esc(r.name||'')}"></div>
        <div class="form-group"><label>Username *</label><input type="text" id="u-username" value="${esc(r.username||'')}" ${r.id?'readonly':''}></div>
-       <div class="form-group"><label>Password</label><input type="password" id="u-password"></div>
+       ${r.id ? '' : '<div class="form-group"><label>Initial Password</label><input type="password" id="u-password" autocomplete="new-password"></div>'}
        <div class="form-group"><label>Role</label><select id="u-role">
          ${['admin','treasurer','finance','volunteer','family','viewer'].map(v=>`<option value="${v}" ${r.role===v?'selected':''}>${v}</option>`).join('')}
        </select></div>
@@ -4626,7 +4699,7 @@ async function saveUser() {
     el.textContent = msg; el.style.display = 'block';
   };
   const username = document.getElementById('u-username').value.trim();
-  const password = document.getElementById('u-password').value;
+  const password = document.getElementById('u-password')?.value || '';
   if (!username) return showErr('Username is required');
   const linkedId   = document.getElementById('u-linked-id')?.value || null;
   const linkedType = document.getElementById('u-linked-type')?.value || null;

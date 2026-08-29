@@ -154,6 +154,67 @@ def close_db(error):
 def now():
     return datetime.utcnow().isoformat()
 
+ADMIN_PASSWORD_ENV_STATE_KEY = 'admin_password_env_hash'
+
+def _sync_admin_password_from_env(conn, admin_pw):
+    """Apply ADMIN_PASSWORD only when that environment value actually changes.
+
+    The environment variable remains the break-glass recovery mechanism, while a
+    password changed inside the app survives ordinary restarts and deployments.
+    A slow password hash is stored as the environment-state verifier so the
+    database never contains the raw environment password or a fast reusable digest.
+    """
+    admin_row = conn.execute(
+        "SELECT id, password_hash FROM users WHERE username='admin'"
+    ).fetchone()
+    if not admin_row:
+        return False
+
+    state = conn.execute(
+        "SELECT value FROM app_settings WHERE key=?",
+        (ADMIN_PASSWORD_ENV_STATE_KEY,)
+    ).fetchone()
+    env_value_changed = bool(
+        state and not check_password_hash(state['value'], admin_pw)
+    )
+    first_tracking_boot = state is None
+    password_needs_sync = not check_password_hash(admin_row['password_hash'], admin_pw)
+
+    # On the migration boot, preserve the historical contract by reconciling a
+    # mismatch once. After that, only a changed env value is authoritative.
+    should_sync = password_needs_sync and (first_tracking_boot or env_value_changed)
+    if should_sync:
+        changed_at = now()
+        conn.execute(
+            '''UPDATE users SET password_hash=?, must_change_password=0,
+               password_changed_at=? WHERE id=?''',
+            (generate_password_hash(admin_pw), changed_at, admin_row['id'])
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (admin_row['id'],))
+        conn.execute(
+            '''UPDATE account_invitations SET invalidated_at=?
+               WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL''',
+            (changed_at, admin_row['id'])
+        )
+        conn.execute(
+            '''INSERT INTO account_access_events
+               (id,user_id,event_type,actor_user_id,detail,created_at)
+               VALUES (?,?,?,?,?,?)''',
+            (str(uuid.uuid4()), admin_row['id'],
+             'admin_password_reset_from_environment', None,
+             'ADMIN_PASSWORD value changed', changed_at)
+        )
+        log.info('Admin password changed from ADMIN_PASSWORD; existing sessions revoked.')
+
+    if first_tracking_boot or env_value_changed:
+        conn.execute(
+            '''INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+                                              updated_at=excluded.updated_at''',
+            (ADMIN_PASSWORD_ENV_STATE_KEY, generate_password_hash(admin_pw), now())
+        )
+    return should_sync
+
 def _bundle_letter(family_size):
     """Return S / M / L based on household size."""
     size = int(family_size or 1)
@@ -296,6 +357,13 @@ def bootstrap_db():
             actor_user_id    TEXT,
             detail           TEXT,
             created_at       TEXT NOT NULL
+        );
+
+        -- Internal operational state. Values must never contain raw secrets.
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key              TEXT PRIMARY KEY,
+            value            TEXT NOT NULL,
+            updated_at       TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS families (
@@ -656,19 +724,11 @@ def bootstrap_db():
         (str(uuid.uuid4()), 'admin', generate_password_hash(admin_pw),
          'Administrator', 'admin', now())
     )
-    # Sync a changed ADMIN_PASSWORD and revoke pre-change sessions. Avoid re-hashing
-    # the same password on every boot, which also avoids needless DB writes.
+    # ADMIN_PASSWORD remains a break-glass recovery credential. Track the last
+    # applied environment value separately so an in-app admin reset survives
+    # ordinary restarts, while an actual Railway variable change still resets it.
     if os.environ.get('ADMIN_PASSWORD'):
-        admin_row = conn.execute(
-            "SELECT id, password_hash FROM users WHERE username='admin'"
-        ).fetchone()
-        if admin_row and not check_password_hash(admin_row['password_hash'], admin_pw):
-            conn.execute(
-                "UPDATE users SET password_hash=?, password_changed_at=? WHERE id=?",
-                (generate_password_hash(admin_pw), now(), admin_row['id'])
-            )
-            conn.execute("DELETE FROM sessions WHERE user_id=?", (admin_row['id'],))
-            log.info('Admin password changed from ADMIN_PASSWORD; existing sessions revoked.')
+        _sync_admin_password_from_env(conn, admin_pw)
     else:
         log.warning('Admin password is default admin123 — set ADMIN_PASSWORD env var in Railway!')
 
@@ -2403,7 +2463,7 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.2.1', 'time': now(),
+            'status': 'ok', 'version': '1.2.2', 'time': now(),
             'checks': {'database': 'ok', 'schema': 'ok'},
             'communications': {
                 'email_provider': EMAIL_PROVIDER,
@@ -3163,17 +3223,10 @@ def update_user(uid):
     new_role = data.get('role', row['role'])
     if new_role not in VALID_ROLES:
         return jsonify({'error': f'Invalid role "{new_role}". Must be one of: {", ".join(sorted(VALID_ROLES))}'}), 400
-    if data.get('password') and (row['role'] in ('family', 'volunteer')
-                                 or new_role in ('family', 'volunteer')):
-        return jsonify({
-            'error': 'Use Send Access for family and volunteer password setup.'
-        }), 422
-    new_hash = row['password_hash']
     if data.get('password'):
-        ok, err = _validate_password(data['password'])
-        if not ok:
-            return jsonify({'error': err}), 422
-        new_hash = generate_password_hash(data['password'])
+        return jsonify({
+            'error': 'Use the administrator Reset Password action for credential changes.'
+        }), 422
 
     linked_id = data.get('linked_id', row['linked_id'] if 'linked_id' in row.keys() else None)
     linked_type = data.get('linked_type', row['linked_type'] if 'linked_type' in row.keys() else None)
@@ -3181,18 +3234,18 @@ def update_user(uid):
 
     try:
         db.execute(
-            '''UPDATE users SET name=?, role=?, active=?, password_hash=?, email=?,
+            '''UPDATE users SET name=?, role=?, active=?, email=?,
                linked_id=?, linked_type=?, must_change_password=? WHERE id=?''',
             (data.get('name', row['name']), new_role, data.get('active', row['active']),
-             new_hash, data.get('email', row['email']),
+             data.get('email', row['email']),
              linked_id, linked_type, must_change, uid)
         )
         if any(k in data for k in (
-                'password', 'role', 'active', 'linked_id', 'linked_type',
+                'role', 'active', 'linked_id', 'linked_type',
                 'must_change_password')):
             _revoke_user_sessions(db, uid)
         if any(k in data for k in (
-                'password', 'email', 'role', 'active', 'linked_id',
+                'email', 'role', 'active', 'linked_id',
                 'linked_type', 'must_change_password')):
             _invalidate_account_invitations(
                 db, uid, actor_user_id=g.user['user_id'], detail='account_updated'
@@ -3203,6 +3256,53 @@ def update_user(uid):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify({'ok': True})
+
+@app.route('/api/users/<uid>/admin-reset-password', methods=['POST'])
+@require_auth(roles=['admin'])
+def admin_reset_password(uid):
+    """Set a temporary password for any account without requiring its old one."""
+    data = request.json or {}
+    password = data.get('password') or ''
+    confirmation = data.get('password_confirmation') or ''
+    if not password or not confirmation:
+        return jsonify({'error': 'Password and confirmation are required'}), 400
+    if password != confirmation:
+        return jsonify({'error': 'Passwords do not match'}), 422
+
+    ok, err = _validate_password(password)
+    if not ok:
+        return jsonify({'error': err}), 422
+
+    db = get_db()
+    row = db.execute(
+        "SELECT id, username FROM users WHERE id=?", (uid,)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+
+    changed_at = now()
+    db.execute(
+        '''UPDATE users SET password_hash=?, must_change_password=1,
+           password_changed_at=? WHERE id=?''',
+        (generate_password_hash(password), changed_at, uid)
+    )
+    _revoke_user_sessions(db, uid)
+    _invalidate_account_invitations(
+        db, uid, actor_user_id=g.user['user_id'],
+        detail='password_reset_by_admin'
+    )
+    _record_account_access_event(
+        db, uid, 'password_reset_by_admin',
+        actor_user_id=g.user['user_id'],
+        detail='Temporary password set; change required at next login'
+    )
+    db.commit()
+    log.info('Administrator reset password for user_id=%s', uid)
+    return jsonify({
+        'ok': True,
+        'username': row['username'],
+        'must_change_password': True,
+    })
 
 @app.route('/api/users/<uid>/force-reset', methods=['POST'])
 @require_auth(roles=['admin'])

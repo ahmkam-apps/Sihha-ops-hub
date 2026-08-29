@@ -356,6 +356,7 @@
       }
 
       storeSession(data);
+      sessionStorage.removeItem('sihha_password_change_token');
       window.location.href = data.redirect || '/';
 
     } catch (err) {
@@ -426,17 +427,36 @@
     }
   }
 
-  // If already logged in, redirect immediately
-  (function checkExistingSession() {
+  // Root's compact sign-in form hands a required-change token to this dedicated
+  // password screen without putting the credential in the URL.
+  const resumedPasswordChangeToken = sessionStorage.getItem('sihha_password_change_token');
+  if (resumedPasswordChangeToken) {
+    sessionStorage.removeItem('sihha_password_change_token');
+    tempToken = resumedPasswordChangeToken;
+    document.getElementById('set-pw-reason').textContent =
+      'An administrator reset your password. Choose a private password to continue.';
+    showScreen('screen-set-password');
+  }
+
+  // If already logged in, validate the stored token before redirecting. An
+  // administrator reset revokes server sessions but cannot clear another
+  // browser's local storage, so stale tokens must not trap users in a loop.
+  (async function checkExistingSession() {
+    if (resumedPasswordChangeToken) return;
     const token = localStorage.getItem('token') || localStorage.getItem('portalToken') || localStorage.getItem('familyToken');
     if (!token) return;
-    // Quick validation — if token exists, try to go to the right place
-    const user = JSON.parse(localStorage.getItem('user') || localStorage.getItem('portalVolunteer') || localStorage.getItem('familyUser') || '{}');
-    const role = user.role || '';
-    const redirectMap = {volunteer: '/portal', family: '/family'};
-    const dest = redirectMap[role] || '/';
-    // Soft redirect only if we have a stored role
-    if (role) window.location.href = dest;
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: {'Authorization': `Bearer ${token}`}
+      });
+      if (!res.ok) throw new Error('Stored session is invalid');
+      const user = await res.json();
+      const redirectMap = {volunteer: '/portal', family: '/family'};
+      window.location.href = redirectMap[user.role] || '/';
+    } catch (e) {
+      ['token','user','portalToken','portalVolunteer','familyToken','familyUser','sihaa_token']
+        .forEach(key => localStorage.removeItem(key));
+    }
   })();
 </script>
 </body>
