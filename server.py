@@ -1838,19 +1838,76 @@ def get_session(token):
         (token, now())
     ).fetchone()
 
+LINKED_ACCOUNT_SOURCES = {
+    'family': ('families', 'Family', 'Families'),
+    'volunteer': ('volunteers', 'Volunteer', 'Volunteers'),
+}
+
+
+def _linked_account_state(db, user):
+    """Resolve the linked-record state that controls portal login access."""
+    role = user['role']
+    source = LINKED_ACCOUNT_SOURCES.get(role)
+    if not source:
+        return {
+            'required': False,
+            'exists': True,
+            'status': None,
+            'name': None,
+            'is_active': True,
+            'reason_code': None,
+            'reason': None,
+            'section': None,
+        }
+
+    table, label, section = source
+    linked_id = user['linked_id'] if 'linked_id' in user.keys() else None
+    if not linked_id:
+        return {
+            'required': True,
+            'exists': False,
+            'status': 'missing',
+            'name': None,
+            'is_active': False,
+            'reason_code': 'linked_record_missing',
+            'reason': f'No linked {label.lower()} record. Select an active record in {section}.',
+            'section': section,
+        }
+
+    row = db.execute(
+        f"SELECT id,name,status FROM {table} WHERE id=?", (linked_id,)
+    ).fetchone()
+    if not row:
+        return {
+            'required': True,
+            'exists': False,
+            'status': 'missing',
+            'name': None,
+            'is_active': False,
+            'reason_code': 'linked_record_missing',
+            'reason': f'Linked {label.lower()} record is missing. Select an active record in {section}.',
+            'section': section,
+        }
+
+    linked_status = row['status']
+    is_active = linked_status == 'active'
+    return {
+        'required': True,
+        'exists': True,
+        'status': linked_status,
+        'name': row['name'],
+        'is_active': is_active,
+        'reason_code': None if is_active else 'linked_record_inactive',
+        'reason': None if is_active else (
+            f'Linked {label.lower()} is {linked_status}. Activate it in {section}.'
+        ),
+        'section': section,
+    }
+
+
 def _linked_account_is_active(db, session):
     """Keep application access aligned with the linked family/volunteer record."""
-    if session['role'] == 'volunteer':
-        row = db.execute(
-            "SELECT status FROM volunteers WHERE id=?", (session['linked_id'],)
-        ).fetchone()
-        return bool(row and row['status'] == 'active')
-    if session['role'] == 'family':
-        row = db.execute(
-            "SELECT status FROM families WHERE id=?", (session['linked_id'],)
-        ).fetchone()
-        return bool(row and row['status'] == 'active')
-    return True
+    return _linked_account_state(db, session)['is_active']
 
 def _revoke_user_sessions(db, user_id, except_token=None):
     """Revoke a user's sessions after credential or account-state changes."""
@@ -2463,7 +2520,7 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.2.2', 'time': now(),
+            'status': 'ok', 'version': '1.2.3', 'time': now(),
             'checks': {'database': 'ok', 'schema': 'ok'},
             'communications': {
                 'email_provider': EMAIL_PROVIDER,
@@ -3119,6 +3176,23 @@ def list_users():
     result = []
     for row in rows:
         item = dict(row)
+        linked_state = _linked_account_state(db, row)
+        item['linked_name'] = linked_state['name']
+        item['linked_status'] = linked_state['status']
+        item['linked_record_exists'] = linked_state['exists']
+        item['account_enabled'] = item['active'] == 1
+        item['effective_active'] = item['account_enabled'] and linked_state['is_active']
+        item['inactive_reason'] = (
+            None if item['effective_active']
+            else 'Login account disabled.' if not item['account_enabled']
+            else linked_state['reason']
+        )
+        item['inactive_reason_code'] = (
+            None if item['effective_active']
+            else 'account_disabled' if not item['account_enabled']
+            else linked_state['reason_code']
+        )
+        item['linked_section'] = linked_state['section']
         delivery_email = _account_delivery_email(db, row)
         item['has_access_email'] = bool(delivery_email)
         item['access_email_hint'] = _email_hint(delivery_email)
@@ -3138,6 +3212,42 @@ def _generate_temp_password():
 def _generate_unclaimed_password_hash():
     """Create an unknown placeholder credential for invitation-only accounts."""
     return generate_password_hash(secrets.token_urlsafe(48))
+
+
+def _portal_link_validation_error(db, role, linked_id, linked_type,
+                                  account_active, exclude_user_id=None,
+                                  enforce_unique=True):
+    """Return an actionable validation error for an invalid portal-account link."""
+    if role not in LINKED_ACCOUNT_SOURCES:
+        return None
+
+    _, label, _ = LINKED_ACCOUNT_SOURCES[role]
+    if not linked_id or linked_type != role:
+        return ({
+            'error': f'{label} accounts require a matching linked {label.lower()} record.'
+        }, 422)
+
+    state = _linked_account_state(db, {
+        'role': role,
+        'linked_id': linked_id,
+    })
+    if not state['exists']:
+        return ({'error': state['reason']}, 422)
+
+    if enforce_unique:
+        duplicate = db.execute(
+            '''SELECT id,username FROM users
+               WHERE linked_id=? AND role=? AND id!=COALESCE(?, '') LIMIT 1''',
+            (linked_id, role, exclude_user_id)
+        ).fetchone()
+        if duplicate:
+            return ({
+                'error': f'This {label.lower()} already has login account "{duplicate["username"]}".'
+            }, 409)
+
+    if account_active and not state['is_active']:
+        return ({'error': state['reason']}, 409)
+    return None
 
 @app.route('/api/users', methods=['POST'])
 @require_auth(roles=['admin'])
@@ -3164,15 +3274,25 @@ def create_user():
         if not ok:
             return jsonify({'error': err}), 422
 
-    uid = str(uuid.uuid4())
     linked_id = data.get('linked_id')
     linked_type = data.get('linked_type')
+    if not portal_account:
+        linked_id = None
+        linked_type = None
     must_change = (
         1 if portal_account or not data.get('password')
         else int(data.get('must_change_password', 1))
     )
 
     db = get_db()
+    link_error = _portal_link_validation_error(
+        db, new_role, linked_id, linked_type, account_active=True
+    )
+    if link_error:
+        payload, status = link_error
+        return jsonify(payload), status
+
+    uid = str(uuid.uuid4())
     try:
         db.execute(
             '''INSERT INTO users (id, username, password_hash, name, role, email,
@@ -3231,12 +3351,37 @@ def update_user(uid):
     linked_id = data.get('linked_id', row['linked_id'] if 'linked_id' in row.keys() else None)
     linked_type = data.get('linked_type', row['linked_type'] if 'linked_type' in row.keys() else None)
     must_change = int(data.get('must_change_password', row['must_change_password'] if 'must_change_password' in row.keys() else 0))
+    raw_account_active = data.get('active', row['active'])
+    if raw_account_active not in (0, 1, False, True):
+        return jsonify({'error': 'active must be 0 or 1'}), 422
+    account_active = int(raw_account_active)
+    if new_role not in LINKED_ACCOUNT_SOURCES:
+        linked_id = None
+        linked_type = None
+    elif (not linked_type and linked_id == row['linked_id']
+          and new_role == row['role']):
+        # Normalize legacy portal rows whose link predates linked_type.
+        linked_type = new_role
+
+    same_existing_link = (
+        new_role == row['role'] and linked_id == row['linked_id']
+    )
+    enabling_login = not bool(row['active']) and bool(account_active)
+
+    link_error = _portal_link_validation_error(
+        db, new_role, linked_id, linked_type, account_active,
+        exclude_user_id=uid,
+        enforce_unique=not same_existing_link or enabling_login,
+    )
+    if link_error:
+        payload, status = link_error
+        return jsonify(payload), status
 
     try:
         db.execute(
             '''UPDATE users SET name=?, role=?, active=?, email=?,
                linked_id=?, linked_type=?, must_change_password=? WHERE id=?''',
-            (data.get('name', row['name']), new_role, data.get('active', row['active']),
+            (data.get('name', row['name']), new_role, account_active,
              data.get('email', row['email']),
              linked_id, linked_type, must_change, uid)
         )
@@ -3385,8 +3530,8 @@ def bulk_create_users():
 
         # Skip if linked_id already has an account
         existing = db.execute(
-            "SELECT id FROM users WHERE linked_id=? AND linked_type=?",
-            (rec['id'], linked_type)
+            "SELECT id FROM users WHERE linked_id=? AND role=?",
+            (rec['id'], role)
         ).fetchone()
         if existing:
             skipped.append({'id': rec['id'], 'name': rec['name'], 'reason': 'account exists'})
@@ -3886,9 +4031,10 @@ def family_preview_token(fid):
         uid = str(uuid.uuid4())
         tmp_hash = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
         db.execute(
-            "INSERT INTO users (id, username, password_hash, name, role, active, linked_id, created_at) "
-            "VALUES (?,?,?,?,?,1,?,?)",
-            (uid, f'family_{fam["family_code"]}', tmp_hash, fam['name'], 'family', fid, now())
+            "INSERT INTO users (id, username, password_hash, name, role, active, linked_id, linked_type, created_at) "
+            "VALUES (?,?,?,?,?,1,?,?,?)",
+            (uid, f'family_{fam["family_code"]}', tmp_hash, fam['name'],
+             'family', fid, 'family', now())
         )
         db.commit()
         user_id = uid
@@ -3968,17 +4114,27 @@ def update_family(fid):
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          new_email, now(), fid)
     )
-    linked_user = db.execute(
+    linked_users = db.execute(
         "SELECT id FROM users WHERE linked_id=? AND role='family'", (fid,)
-    ).fetchone()
-    if linked_user:
+    ).fetchall()
+    for linked_user in linked_users:
         is_active = 1 if new_status == 'active' else 0
-        db.execute(
-            "UPDATE users SET active=?, email=?, name=? WHERE id=?",
-            (is_active, new_email, d.get('name', row['name']), linked_user['id'])
-        )
-        if not is_active:
+        if new_status != prev_status:
+            db.execute(
+                "UPDATE users SET active=?, email=?, name=? WHERE id=?",
+                (is_active, new_email, d.get('name', row['name']), linked_user['id'])
+            )
+        else:
+            db.execute(
+                "UPDATE users SET email=?, name=? WHERE id=?",
+                (new_email, d.get('name', row['name']), linked_user['id'])
+            )
+        if new_status != prev_status and not is_active:
             _revoke_user_sessions(db, linked_user['id'])
+            _invalidate_account_invitations(
+                db, linked_user['id'], actor_user_id=g.user['user_id'],
+                detail='linked_family_deactivated'
+            )
     db.commit()
     access_result = None
     # When a family is approved or reactivated, ensure the portal account exists
@@ -4282,17 +4438,27 @@ def update_volunteer(vid):
          d.get('wa_phone', row['wa_phone']), d.get('wa_apikey', row['wa_apikey']),
          new_status, d.get('notes', row['notes']), now(), vid)
     )
-    linked_user = db.execute(
+    linked_users = db.execute(
         "SELECT id FROM users WHERE linked_id=? AND role='volunteer'", (vid,)
-    ).fetchone()
-    if linked_user:
+    ).fetchall()
+    for linked_user in linked_users:
         is_active = 1 if new_status == 'active' else 0
-        db.execute(
-            "UPDATE users SET active=?, email=?, name=? WHERE id=?",
-            (is_active, new_email, d.get('name', row['name']), linked_user['id'])
-        )
-        if not is_active:
+        if new_status != prev_status:
+            db.execute(
+                "UPDATE users SET active=?, email=?, name=? WHERE id=?",
+                (is_active, new_email, d.get('name', row['name']), linked_user['id'])
+            )
+        else:
+            db.execute(
+                "UPDATE users SET email=?, name=? WHERE id=?",
+                (new_email, d.get('name', row['name']), linked_user['id'])
+            )
+        if new_status != prev_status and not is_active:
             _revoke_user_sessions(db, linked_user['id'])
+            _invalidate_account_invitations(
+                db, linked_user['id'], actor_user_id=g.user['user_id'],
+                detail='linked_volunteer_deactivated'
+            )
     db.commit()
 
     access_result = None

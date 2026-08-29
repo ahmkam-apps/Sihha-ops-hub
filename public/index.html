@@ -4445,8 +4445,22 @@ async function renderUsers() {
       return `<span style="font-size:11px">${new Date(r.last_login_at).toLocaleDateString()}</span>`;
     }
     function linkedLabel(r) {
-      if (!r.linked_type) return '—';
-      return `<span style="font-size:11px;color:#888">${r.linked_type}: ${(r.linked_id||'').slice(0,8)}…</span>`;
+      if (r.role !== 'family' && r.role !== 'volunteer') return '—';
+      const linkedType = r.role;
+      const status = r.linked_status || 'missing';
+      const badge = status === 'active' ? 'badge-active' : status === 'pending' ? 'badge-pending' : 'badge-inactive';
+      const label = r.linked_name || linkedType.charAt(0).toUpperCase() + linkedType.slice(1);
+      return `<strong style="font-size:12px">${esc(label)}</strong><br>
+              <span class="badge ${badge}" style="font-size:10px">${esc(status)}</span>`;
+    }
+    function accessLabel(r) {
+      if (r.effective_active) return '<span class="badge badge-active">Active</span>';
+      const label = r.account_enabled ? 'Blocked' : 'Disabled';
+      const badge = r.account_enabled ? 'badge-pending' : 'badge-inactive';
+      const reason = r.inactive_reason
+        ? `<div style="font-size:10px;color:var(--gray-4);max-width:190px;margin-top:4px">${esc(r.inactive_reason)}</div>`
+        : '';
+      return `<span class="badge ${badge}">${label}</span>${reason}`;
     }
 
     document.getElementById('content').innerHTML = `
@@ -4454,7 +4468,7 @@ async function renderUsers() {
         <div class="table-header"><span class="table-title">System Users</span></div>
         <table>
           <thead><tr>
-            <th>Name</th><th>Username</th><th>Role</th><th>Linked To</th><th>Last Login</th><th>Password</th><th>Active</th><th></th>
+            <th>Name</th><th>Username</th><th>Role</th><th>Linked To</th><th>Last Login</th><th>Password</th><th>Login Access</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.map(r => `
@@ -4465,13 +4479,13 @@ async function renderUsers() {
                 <td>${linkedLabel(r)}</td>
                 <td>${lastLoginLabel(r)}</td>
                 <td>${pwAgeLabel(r)}</td>
-                <td>${r.active ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>'}</td>
+                <td>${accessLabel(r)}</td>
                 <td style="white-space:nowrap">
                   <button class="btn btn-sm" onclick="openUserForm('${r.id}')">Edit</button>
                   <button class="btn btn-sm btn-outline" style="margin-left:4px"
                     onclick="openAdminResetPassword('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}')">Reset Password</button>
                   <button class="btn btn-sm btn-outline" style="margin-left:4px"
-                    ${r.has_access_email ? '' : 'disabled title="Add an email address before sending access"'}
+                    ${r.has_access_email && r.effective_active ? '' : `disabled title="${esc(r.inactive_reason || 'Add an email address before sending access')}"`}
                     onclick="openSendAccessLink('${r.id}','${escJs(r.username)}','${escJs(r.name||r.username)}','${escJs(r.access_email_hint||'')}')">✉ Send Access</button>
                 </td>
               </tr>`).join('')}
@@ -4608,10 +4622,19 @@ function openUserForm(idOrObj) {
 
   // Load volunteers and families for linked record dropdown
   Promise.all([GET('/volunteers'), GET('/families')]).then(([vols, fams]) => {
-    const volOpts = vols.filter(v=>v.status==='active').map(v =>
-      `<option value="${v.id}" data-type="volunteer" ${r.linked_id===v.id&&r.linked_type==='volunteer'?'selected':''}>${esc(v.name)}</option>`).join('');
-    const famOpts = fams.filter(f=>f.status==='active').map(f =>
-      `<option value="${f.id}" data-type="family" ${r.linked_id===f.id&&r.linked_type==='family'?'selected':''}>${esc(f.name)} (${esc(f.family_code||'')})</option>`).join('');
+    const linkedOption = (record, type, suffix='') => {
+      const selected = r.linked_id === record.id && r.role === type;
+      const disabled = record.status !== 'active' && !selected;
+      const status = record.status === 'active' ? '' : ` — ${record.status}`;
+      return `<option value="${record.id}" data-type="${type}" data-status="${esc(record.status||'missing')}"
+        ${selected?'selected':''} ${disabled?'disabled':''}>${esc(record.name)}${suffix}${esc(status)}</option>`;
+    };
+    const volOpts = vols.map(v => linkedOption(v, 'volunteer')).join('');
+    const famOpts = fams.map(f => linkedOption(
+      f, 'family', f.family_code ? ` (${esc(f.family_code)})` : ''
+    )).join('');
+    const initialLinkedType = r.linked_id && (r.role === 'family' || r.role === 'volunteer')
+      ? r.role : (r.linked_type || '');
 
     openDrawer(r.id ? 'Edit User' : 'Add User',
       `<div class="form-section">Account</div>
@@ -4636,21 +4659,22 @@ function openUserForm(idOrObj) {
            </select>
          </div>
          ${r.id ? `<div class="form-group">
-           <label>Active</label>
-           <select id="u-active">
-             <option value="1" ${r.active?'selected':''}>Yes</option>
-             <option value="0" ${!r.active?'selected':''}>No</option>
+           <label>Account Enabled</label>
+           <select id="u-active" aria-describedby="u-access-guidance">
+             <option value="1" ${r.account_enabled?'selected':''}>Yes</option>
+             <option value="0" ${!r.account_enabled?'selected':''}>No</option>
            </select>
          </div>` : ''}
        </div>
        <div class="form-group" id="linked-field">
          <label>Linked Volunteer / Family</label>
-         <select id="u-linked-id" onchange="updateLinkedType()">
+         <select id="u-linked-id" onchange="updateLinkedType()" aria-describedby="u-access-guidance">
            <option value="">— None —</option>
            <optgroup label="Volunteers">${volOpts}</optgroup>
            <optgroup label="Families">${famOpts}</optgroup>
          </select>
-         <input type="hidden" id="u-linked-type" value="${r.linked_type||''}">
+         <input type="hidden" id="u-linked-type" value="${initialLinkedType}">
+         <div id="u-access-guidance" role="status" aria-live="polite" style="display:none;background:var(--warning-pale);color:var(--warning);border-radius:6px;padding:9px 10px;font-size:11px;margin-top:8px"></div>
        </div>
        <div class="form-section" style="margin-top:16px">Contact</div>
        <div class="form-group">
@@ -4671,8 +4695,13 @@ function openUserForm(idOrObj) {
        <div class="form-group"><label>Role</label><select id="u-role">
          ${['admin','treasurer','finance','volunteer','family','viewer'].map(v=>`<option value="${v}" ${r.role===v?'selected':''}>${v}</option>`).join('')}
        </select></div>
+       ${r.id ? `<div class="form-group"><label>Account Enabled</label><select id="u-active">
+         <option value="1" ${r.account_enabled?'selected':''}>Yes</option>
+         <option value="0" ${!r.account_enabled?'selected':''}>No</option>
+       </select></div>` : ''}
        <input type="hidden" id="u-linked-id" value="${r.linked_id||''}">
        <input type="hidden" id="u-linked-type" value="${r.linked_type||''}">
+       <div id="u-access-guidance" style="display:none"></div>
        <div class="form-group"><label>Email</label><input type="email" id="u-email" value="${esc(r.email||'')}"></div>
        <div class="alert alert-error" id="user-err" style="display:none"></div>`,
       `<button class="btn" onclick="saveUser()">Save</button><button class="btn btn-outline" onclick="closeDrawer()">Cancel</button>`
@@ -4684,13 +4713,44 @@ function toggleLinkedField() {
   const role = document.getElementById('u-role')?.value;
   const el = document.getElementById('linked-field');
   if (el) el.style.display = (role === 'volunteer' || role === 'family') ? 'block' : 'none';
+  const sel = document.getElementById('u-linked-id');
+  const selectedType = sel?.selectedOptions?.[0]?.dataset?.type || '';
+  if ((role === 'volunteer' || role === 'family') && sel?.value && selectedType !== role) {
+    sel.value = '';
+    const typeInput = document.getElementById('u-linked-type');
+    if (typeInput) typeInput.value = '';
+  }
+  updateUserAccessGuidance();
 }
 
 function updateLinkedType() {
   const sel = document.getElementById('u-linked-id');
   const opt = sel?.selectedOptions?.[0];
   const typeInput = document.getElementById('u-linked-type');
-  if (opt && typeInput) typeInput.value = opt.dataset.type || '';
+  if (typeInput) typeInput.value = opt?.dataset?.type || '';
+  updateUserAccessGuidance();
+}
+
+function updateUserAccessGuidance() {
+  const guidance = document.getElementById('u-access-guidance');
+  if (!guidance) return;
+  const role = document.getElementById('u-role')?.value;
+  const portalRole = role === 'family' || role === 'volunteer';
+  const option = document.getElementById('u-linked-id')?.selectedOptions?.[0];
+  const status = option?.dataset?.status;
+  const section = role === 'family' ? 'Families' : 'Volunteers';
+  const yesOption = document.querySelector('#u-active option[value="1"]');
+  const blocked = portalRole && status !== 'active';
+  if (yesOption) yesOption.disabled = blocked;
+  if (!portalRole || !blocked) {
+    guidance.style.display = 'none';
+    guidance.textContent = '';
+    return;
+  }
+  guidance.textContent = status
+    ? `Login is blocked because the linked ${role} is ${status}. Activate it in ${section}.`
+    : `Login is blocked until an active ${role} record is selected from ${section}.`;
+  guidance.style.display = 'block';
 }
 
 async function saveUser() {
@@ -4703,16 +4763,27 @@ async function saveUser() {
   if (!username) return showErr('Username is required');
   const linkedId   = document.getElementById('u-linked-id')?.value || null;
   const linkedType = document.getElementById('u-linked-type')?.value || null;
+  const role = document.getElementById('u-role').value;
+  const accountActive = parseInt(document.getElementById('u-active')?.value || 1);
+  const portalRole = role === 'family' || role === 'volunteer';
+  const linkedStatus = document.getElementById('u-linked-id')?.selectedOptions?.[0]?.dataset?.status;
+  if (portalRole && (!linkedId || linkedType !== role)) {
+    return showErr(`${role.charAt(0).toUpperCase()+role.slice(1)} accounts require a matching linked record.`);
+  }
+  if (portalRole && accountActive && linkedStatus && linkedStatus !== 'active') {
+    const section = role === 'family' ? 'Families' : 'Volunteers';
+    return showErr(`Activate the linked ${role} in ${section} before enabling login.`);
+  }
   const payload = {
     name:        document.getElementById('u-name').value.trim(),
     username,
-    role:        document.getElementById('u-role').value,
+    role,
     email:       document.getElementById('u-email')?.value.trim() || null,
     linked_id:   linkedId || null,
     linked_type: linkedType || null,
   };
   if (password) payload.password = password;
-  if (STATE.editId) payload.active = parseInt(document.getElementById('u-active')?.value || 1);
+  if (STATE.editId) payload.active = accountActive;
   try {
     let result;
     if (STATE.editId) {
