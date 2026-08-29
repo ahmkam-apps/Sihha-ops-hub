@@ -5,6 +5,7 @@ Run: pytest tests/ -v
 """
 import secrets, uuid, pytest
 from datetime import datetime, timedelta
+from pathlib import Path
 from werkzeug.security import generate_password_hash
 
 
@@ -1447,6 +1448,265 @@ class TestUserManagement:
     def test_bulk_create_requires_auth(self, client):
         res = client.post('/api/users/bulk-create', json={'type': 'volunteer'})
         assert res.status_code == 401
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 14A — ADMINISTRATOR PASSWORD RESET
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAdministratorPasswordReset:
+    """An administrator can set a temporary password for every account role."""
+
+    @staticmethod
+    def _create_target(client, auth, role, *, email=None):
+        tag = uuid.uuid4().hex[:8]
+        username = f'admin_reset_{role}_{tag}'
+        linked_id = None
+        linked_type = None
+
+        if role in ('family', 'volunteer'):
+            linked_id = str(uuid.uuid4())
+            linked_type = role
+            db = _server.make_conn()
+            try:
+                if role == 'family':
+                    db.execute(
+                        '''INSERT INTO families (id,name,status,created_at)
+                           VALUES (?,?,?,?)''',
+                        (linked_id, f'Reset Family {tag}', 'active', _server.now())
+                    )
+                else:
+                    db.execute(
+                        '''INSERT INTO volunteers (id,name,status,created_at)
+                           VALUES (?,?,?,?)''',
+                        (linked_id, f'Reset Volunteer {tag}', 'active', _server.now())
+                    )
+                db.commit()
+            finally:
+                db.close()
+
+        payload = {
+            'username': username,
+            'name': f'Reset {role.title()} {tag}',
+            'role': role,
+            'email': email,
+            'linked_id': linked_id,
+            'linked_type': linked_type,
+        }
+        if role not in ('family', 'volunteer'):
+            payload.update(password='OriginalPass1!', must_change_password=0)
+        created = client.post('/api/users', headers=auth, json=payload)
+        assert created.status_code == 201, created.get_json()
+        return created.get_json()['id'], username
+
+    @pytest.mark.parametrize(
+        'role', ['admin', 'finance', 'treasurer', 'viewer', 'family', 'volunteer']
+    )
+    def test_admin_can_reset_every_account_role(self, client, auth, role):
+        uid, username = self._create_target(client, auth, role)
+
+        reset = client.post(
+            f'/api/users/{uid}/admin-reset-password',
+            headers=auth,
+            json={
+                'password': 'TemporaryReset1!',
+                'password_confirmation': 'TemporaryReset1!',
+            },
+        )
+        assert reset.status_code == 200, reset.get_json()
+        assert reset.get_json()['must_change_password'] is True
+
+        temporary_login = client.post('/api/auth/login', json={
+            'username': username,
+            'password': 'TemporaryReset1!',
+        })
+        assert temporary_login.status_code == 200, temporary_login.get_json()
+        temporary_data = temporary_login.get_json()
+        assert temporary_data['must_change_password'] is True
+
+        completed = client.post('/api/auth/set-password', json={
+            'temp_token': temporary_data['temp_token'],
+            'password': 'PrivatePassword2@',
+        })
+        assert completed.status_code == 200, completed.get_json()
+        final_login = client.post('/api/auth/login', json={
+            'username': username,
+            'password': 'PrivatePassword2@',
+        })
+        assert final_login.status_code == 200
+        assert final_login.get_json().get('must_change_password') is not True
+
+    def test_reset_revokes_sessions_links_and_records_audit_event(
+            self, client, auth, monkeypatch):
+        uid, username = self._create_target(
+            client, auth, 'viewer', email='reset-audit@example.org'
+        )
+        first_login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'OriginalPass1!'
+        }).get_json()
+        second_login = client.post('/api/auth/login', json={
+            'username': username, 'password': 'OriginalPass1!'
+        }).get_json()
+        monkeypatch.setattr(_server, '_email_send', lambda *args, **kwargs: True)
+        invitation = client.post(
+            f'/api/users/{uid}/send-access-link', headers=auth
+        )
+        assert invitation.status_code == 200
+
+        reset = client.post(
+            f'/api/users/{uid}/admin-reset-password',
+            headers=auth,
+            json={
+                'password': 'TemporaryReset1!',
+                'password_confirmation': 'TemporaryReset1!',
+            },
+        )
+        assert reset.status_code == 200
+        for token in (first_login['token'], second_login['token']):
+            assert client.get(
+                '/api/auth/me', headers={'Authorization': f'Bearer {token}'}
+            ).status_code == 401
+
+        db = _server.make_conn()
+        try:
+            outstanding = db.execute(
+                '''SELECT COUNT(*) FROM account_invitations
+                   WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL''',
+                (uid,)
+            ).fetchone()[0]
+            event = db.execute(
+                '''SELECT actor_user_id, detail FROM account_access_events
+                   WHERE user_id=? AND event_type='password_reset_by_admin'
+                   ORDER BY created_at DESC LIMIT 1''',
+                (uid,)
+            ).fetchone()
+        finally:
+            db.close()
+        assert outstanding == 0
+        assert event is not None
+        assert event['actor_user_id'] is not None
+        assert 'Temporary password set' in event['detail']
+
+    def test_reset_requires_admin_and_valid_confirmation(self, client, auth):
+        target_id, _ = self._create_target(client, auth, 'viewer')
+        _, actor_username = self._create_target(client, auth, 'viewer')
+        actor_login = client.post('/api/auth/login', json={
+            'username': actor_username, 'password': 'OriginalPass1!'
+        }).get_json()
+        actor_auth = {'Authorization': f'Bearer {actor_login["token"]}'}
+
+        forbidden = client.post(
+            f'/api/users/{target_id}/admin-reset-password',
+            headers=actor_auth,
+            json={
+                'password': 'TemporaryReset1!',
+                'password_confirmation': 'TemporaryReset1!',
+            },
+        )
+        assert forbidden.status_code == 403
+
+        mismatch = client.post(
+            f'/api/users/{target_id}/admin-reset-password',
+            headers=auth,
+            json={
+                'password': 'TemporaryReset1!',
+                'password_confirmation': 'DifferentReset2!',
+            },
+        )
+        assert mismatch.status_code == 422
+        weak = client.post(
+            f'/api/users/{target_id}/admin-reset-password',
+            headers=auth,
+            json={'password': 'weak', 'password_confirmation': 'weak'},
+        )
+        assert weak.status_code == 422
+
+        legacy_edit = client.put(
+            f'/api/users/{target_id}', headers=auth,
+            json={'password': 'BypassAttempt1!'},
+        )
+        assert legacy_edit.status_code == 422
+        assert 'Reset Password' in legacy_edit.get_json()['error']
+
+    def test_unchanged_environment_does_not_undo_in_app_admin_reset(
+            self, monkeypatch, tmp_path):
+        db_path = tmp_path / 'admin-reset-persistence.db'
+        monkeypatch.setattr(_server, 'DB_PATH', str(db_path))
+        monkeypatch.setattr(_server, 'REQUIRE_EXISTING_DB', False)
+        monkeypatch.setenv('ADMIN_PASSWORD', 'EnvironmentStart1!')
+        _server.bootstrap_db()
+
+        db = _server.make_conn()
+        try:
+            admin_id = db.execute(
+                "SELECT id FROM users WHERE username='admin'"
+            ).fetchone()['id']
+            db.execute(
+                '''UPDATE users SET password_hash=?, must_change_password=1,
+                   password_changed_at=? WHERE id=?''',
+                (_server.generate_password_hash('InAppTemporary2@'),
+                 _server.now(), admin_id)
+            )
+            db.execute(
+                '''INSERT INTO sessions (token,user_id,expires_at,created_at)
+                   VALUES (?,?,?,?)''',
+                ('preserved-session', admin_id, '2999-01-01T00:00:00', _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        _server.bootstrap_db()
+        db = _server.make_conn()
+        try:
+            admin = db.execute(
+                "SELECT password_hash FROM users WHERE username='admin'"
+            ).fetchone()
+            assert _server.check_password_hash(
+                admin['password_hash'], 'InAppTemporary2@'
+            )
+            assert db.execute(
+                "SELECT COUNT(*) FROM sessions WHERE token='preserved-session'"
+            ).fetchone()[0] == 1
+        finally:
+            db.close()
+
+        monkeypatch.setenv('ADMIN_PASSWORD', 'EnvironmentRecovery3#')
+        _server.bootstrap_db()
+        db = _server.make_conn()
+        try:
+            admin = db.execute(
+                "SELECT id,password_hash,must_change_password FROM users WHERE username='admin'"
+            ).fetchone()
+            assert _server.check_password_hash(
+                admin['password_hash'], 'EnvironmentRecovery3#'
+            )
+            assert not _server.check_password_hash(
+                admin['password_hash'], 'InAppTemporary2@'
+            )
+            assert admin['must_change_password'] == 0
+            assert db.execute(
+                "SELECT COUNT(*) FROM sessions WHERE user_id=?", (admin['id'],)
+            ).fetchone()[0] == 0
+            state = db.execute(
+                "SELECT value FROM app_settings WHERE key=?",
+                (_server.ADMIN_PASSWORD_ENV_STATE_KEY,)
+            ).fetchone()['value']
+            assert state != 'EnvironmentRecovery3#'
+            assert _server.check_password_hash(state, 'EnvironmentRecovery3#')
+        finally:
+            db.close()
+
+    def test_admin_reset_ui_and_required_change_handoff_are_wired(self):
+        project_root = Path(__file__).resolve().parents[1]
+        admin_html = (project_root / 'public' / 'index.html').read_text()
+        login_html = (project_root / 'public' / 'login.html').read_text()
+
+        assert 'Reset Password</button>' in admin_html
+        assert "'/admin-reset-password'" in admin_html
+        assert "sessionStorage.setItem('sihha_password_change_token'" in admin_html
+        assert "sessionStorage.getItem('sihha_password_change_token'" in login_html
+        assert "fetch('/api/auth/me'" in login_html
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
