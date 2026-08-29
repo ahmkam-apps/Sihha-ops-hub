@@ -1342,6 +1342,44 @@ class TestPasswordValidation:
 class TestUserManagement:
     """Tests for /api/users CRUD, force-reset, and bulk-create endpoints."""
 
+    @staticmethod
+    def _seed_portal_user(role, linked_status, *, user_active=1):
+        tag = uuid.uuid4().hex[:8]
+        uid = str(uuid.uuid4())
+        linked_id = str(uuid.uuid4())
+        username = f'linked_state_{role}_{tag}'
+        db = _server.make_conn()
+        try:
+            if role == 'family':
+                db.execute(
+                    '''INSERT INTO families
+                       (id,name,phone,family_size,status,created_at)
+                       VALUES (?,?,?,?,?,?)''',
+                    (linked_id, f'Linked Family {tag}', f'507{tag[:7]}', 2,
+                     linked_status, _server.now())
+                )
+            else:
+                db.execute(
+                    '''INSERT INTO volunteers
+                       (id,name,role,status,created_at)
+                       VALUES (?,?,?,?,?)''',
+                    (linked_id, f'Linked Volunteer {tag}', 'delivery',
+                     linked_status, _server.now())
+                )
+            db.execute(
+                '''INSERT INTO users
+                   (id,username,password_hash,name,role,active,linked_id,
+                    linked_type,must_change_password,password_changed_at,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,0,?,?)''',
+                (uid, username, _server.generate_password_hash('StrongPass1!'),
+                 f'Linked {role.title()} {tag}', role, user_active,
+                 linked_id, role, _server.now(), _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+        return uid, username, linked_id
+
     def test_create_user_auto_generates_temp_password(self, client, auth):
         uname = f'usr_{uuid.uuid4().hex[:6]}'
         res = client.post('/api/users', headers=auth,
@@ -1364,6 +1402,322 @@ class TestUserManagement:
         users = res.get_json()
         assert isinstance(users, list)
         assert any(u['username'] == 'admin' for u in users)
+
+    @pytest.mark.parametrize('invalid_active', [2, -1, 'false', None])
+    def test_user_update_rejects_non_boolean_active_values(
+            self, client, auth, invalid_active):
+        created = client.post('/api/users', headers=auth, json={
+            'username': f'invalid_active_{uuid.uuid4().hex[:8]}',
+            'role': 'viewer',
+            'password': 'StrongPass1!',
+        })
+        uid = created.get_json()['id']
+        rejected = client.put(
+            f'/api/users/{uid}', headers=auth, json={'active': invalid_active}
+        )
+        assert rejected.status_code == 422
+        assert rejected.get_json()['error'] == 'active must be 0 or 1'
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT active FROM users WHERE id=?', (uid,)
+            ).fetchone()['active'] == 1
+        finally:
+            db.close()
+
+    @pytest.mark.parametrize(
+        ('role', 'linked_status', 'section'),
+        [('family', 'inactive', 'Families'),
+         ('volunteer', 'pending', 'Volunteers')],
+    )
+    def test_list_users_reports_effective_linked_status_and_login_blocks(
+            self, client, auth, role, linked_status, section):
+        uid, username, _ = self._seed_portal_user(role, linked_status)
+
+        users = client.get('/api/users', headers=auth).get_json()
+        target = next(user for user in users if user['id'] == uid)
+        assert target['active'] == 1
+        assert target['linked_status'] == linked_status
+        assert target['linked_record_exists'] is True
+        assert target['effective_active'] is False
+        assert f'Activate it in {section}' in target['inactive_reason']
+
+        login = client.post('/api/auth/login', json={
+            'username': username,
+            'password': 'StrongPass1!',
+        })
+        assert login.status_code == 403
+        assert login.get_json()['error'] == 'Account inactive'
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT COUNT(*) FROM sessions WHERE user_id=?', (uid,)
+            ).fetchone()[0] == 0
+        finally:
+            db.close()
+
+    def test_list_users_reports_missing_portal_link_as_blocked(self, client, auth):
+        uid = str(uuid.uuid4())
+        username = f'missing_portal_link_{uuid.uuid4().hex[:8]}'
+        db = _server.make_conn()
+        try:
+            db.execute(
+                '''INSERT INTO users
+                   (id,username,password_hash,name,role,active,must_change_password,
+                    password_changed_at,created_at)
+                   VALUES (?,?,?,?,?,1,0,?,?)''',
+                (uid, username, _server.generate_password_hash('StrongPass1!'),
+                 'Missing Portal Link', 'volunteer', _server.now(), _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        users = client.get('/api/users', headers=auth).get_json()
+        target = next(user for user in users if user['id'] == uid)
+        assert target['active'] == 1
+        assert target['linked_status'] == 'missing'
+        assert target['linked_record_exists'] is False
+        assert target['effective_active'] is False
+        assert target['inactive_reason_code'] == 'linked_record_missing'
+        assert 'Select an active record in Volunteers' in target['inactive_reason']
+        assert client.post('/api/auth/login', json={
+            'username': username,
+            'password': 'StrongPass1!',
+        }).status_code == 403
+
+    @pytest.mark.parametrize(
+        ('role', 'linked_status', 'endpoint', 'section'),
+        [('family', 'inactive', 'families', 'Families'),
+         ('volunteer', 'pending', 'volunteers', 'Volunteers')],
+    )
+    def test_portal_user_activation_requires_canonical_link_activation(
+            self, client, auth, role, linked_status, endpoint, section):
+        uid, username, linked_id = self._seed_portal_user(
+            role, linked_status, user_active=0
+        )
+
+        rejected = client.put(
+            f'/api/users/{uid}', headers=auth,
+            json={
+                'role': role,
+                'active': 1,
+                'linked_id': linked_id,
+                'linked_type': role,
+            },
+        )
+        assert rejected.status_code == 409
+        assert f'Activate it in {section}' in rejected.get_json()['error']
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                'SELECT active FROM users WHERE id=?', (uid,)
+            ).fetchone()['active'] == 0
+        finally:
+            db.close()
+
+        activated = client.put(
+            f'/api/{endpoint}/{linked_id}', headers=auth, json={'status': 'active'}
+        )
+        assert activated.status_code == 200, activated.get_json()
+        users = client.get('/api/users', headers=auth).get_json()
+        target = next(user for user in users if user['id'] == uid)
+        assert target['active'] == 1
+        assert target['linked_status'] == 'active'
+        assert target['effective_active'] is True
+
+        login = client.post('/api/auth/login', json={
+            'username': username,
+            'password': 'StrongPass1!',
+        })
+        assert login.status_code == 200
+
+    def test_portal_user_create_rejects_missing_inactive_and_mismatched_links(
+            self, client, auth):
+        missing = client.post('/api/users', headers=auth, json={
+            'username': f'missing_link_{uuid.uuid4().hex[:6]}',
+            'role': 'volunteer',
+        })
+        assert missing.status_code == 422
+        assert 'matching linked volunteer' in missing.get_json()['error']
+
+        inactive_family_id = str(uuid.uuid4())
+        db = _server.make_conn()
+        try:
+            db.execute(
+                '''INSERT INTO families (id,name,status,created_at)
+                   VALUES (?,?,?,?)''',
+                (inactive_family_id, 'Inactive Link Candidate', 'inactive',
+                 _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+        inactive = client.post('/api/users', headers=auth, json={
+            'username': f'inactive_link_{uuid.uuid4().hex[:6]}',
+            'role': 'family',
+            'linked_id': inactive_family_id,
+            'linked_type': 'family',
+        })
+        assert inactive.status_code == 409
+        assert 'Activate it in Families' in inactive.get_json()['error']
+
+        mismatched = client.post('/api/users', headers=auth, json={
+            'username': f'wrong_link_{uuid.uuid4().hex[:6]}',
+            'role': 'volunteer',
+            'linked_id': inactive_family_id,
+            'linked_type': 'family',
+        })
+        assert mismatched.status_code == 422
+
+    def test_portal_user_create_accepts_one_active_matching_link(self, client, auth):
+        tag = uuid.uuid4().hex[:8]
+        linked_id = str(uuid.uuid4())
+        db = _server.make_conn()
+        try:
+            db.execute(
+                '''INSERT INTO volunteers (id,name,role,status,created_at)
+                   VALUES (?,?,?,?,?)''',
+                (linked_id, f'Available Volunteer {tag}', 'delivery',
+                 'active', _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        created = client.post('/api/users', headers=auth, json={
+            'username': f'valid_link_{tag}',
+            'role': 'volunteer',
+            'linked_id': linked_id,
+            'linked_type': 'volunteer',
+        })
+        assert created.status_code == 201, created.get_json()
+        users = client.get('/api/users', headers=auth).get_json()
+        target = next(user for user in users if user['id'] == created.get_json()['id'])
+        assert target['effective_active'] is True
+
+    def test_legacy_duplicate_link_can_be_disabled_but_not_reenabled(
+            self, client, auth):
+        first_id, _, linked_id = self._seed_portal_user(
+            'volunteer', 'active', user_active=1
+        )
+        second_id = str(uuid.uuid4())
+        db = _server.make_conn()
+        try:
+            db.execute(
+                '''INSERT INTO users
+                   (id,username,password_hash,name,role,active,linked_id,
+                    linked_type,must_change_password,created_at)
+                   VALUES (?,?,?,?,?,1,?,?,0,?)''',
+                (second_id, f'legacy_duplicate_{uuid.uuid4().hex[:8]}',
+                 _server.generate_password_hash('StrongPass1!'),
+                 'Legacy Duplicate', 'volunteer', linked_id, 'volunteer',
+                 _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        disabled = client.put(
+            f'/api/users/{first_id}', headers=auth,
+            json={
+                'role': 'volunteer',
+                'active': 0,
+                'linked_id': linked_id,
+                'linked_type': 'volunteer',
+            },
+        )
+        assert disabled.status_code == 200
+        reenabled = client.put(
+            f'/api/users/{first_id}', headers=auth,
+            json={
+                'role': 'volunteer',
+                'active': 1,
+                'linked_id': linked_id,
+                'linked_type': 'volunteer',
+            },
+        )
+        assert reenabled.status_code == 409
+        assert 'already has login account' in reenabled.get_json()['error']
+
+    def test_linked_metadata_edit_does_not_reenable_disabled_login(
+            self, client, auth):
+        uid, username, linked_id = self._seed_portal_user(
+            'volunteer', 'active', user_active=1
+        )
+        disabled = client.put(
+            f'/api/users/{uid}', headers=auth,
+            json={
+                'role': 'volunteer',
+                'active': 0,
+                'linked_id': linked_id,
+                'linked_type': 'volunteer',
+            },
+        )
+        assert disabled.status_code == 200
+
+        metadata_edit = client.put(
+            f'/api/volunteers/{linked_id}', headers=auth,
+            json={'name': 'Updated Volunteer Name'},
+        )
+        assert metadata_edit.status_code == 200, metadata_edit.get_json()
+        users = client.get('/api/users', headers=auth).get_json()
+        target = next(user for user in users if user['id'] == uid)
+        assert target['active'] == 0
+        assert target['linked_status'] == 'active'
+        assert target['effective_active'] is False
+        assert target['inactive_reason_code'] == 'account_disabled'
+        assert client.post('/api/auth/login', json={
+            'username': username,
+            'password': 'StrongPass1!',
+        }).status_code == 401
+
+    def test_family_preview_account_is_not_duplicated_by_bulk_create(
+            self, client, auth):
+        family_id = str(uuid.uuid4())
+        db = _server.make_conn()
+        try:
+            db.execute(
+                '''INSERT INTO families
+                   (id,name,family_code,status,created_at)
+                   VALUES (?,?,?,?,?)''',
+                (family_id, 'Preview Family', f'PREV-{uuid.uuid4().hex[:6]}',
+                 'active', _server.now())
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        preview = client.post(
+            f'/api/families/{family_id}/preview-token', headers=auth
+        )
+        assert preview.status_code == 200
+        bulk = client.post(
+            '/api/users/bulk-create', headers=auth, json={'type': 'family'}
+        )
+        assert bulk.status_code == 200
+        db = _server.make_conn()
+        try:
+            rows = db.execute(
+                '''SELECT role,linked_type FROM users
+                   WHERE linked_id=?''',
+                (family_id,)
+            ).fetchall()
+        finally:
+            db.close()
+        assert len(rows) == 1
+        assert rows[0]['role'] == 'family'
+        assert rows[0]['linked_type'] == 'family'
+
+    def test_users_ui_uses_effective_login_status_and_preserves_inactive_links(self):
+        html = (Path(__file__).resolve().parents[1] / 'public' / 'index.html').read_text()
+        assert '<th>Login Access</th>' in html
+        assert 'r.effective_active' in html
+        assert 'r.linked_status' in html
+        assert 'Activate it in ${section}' in html
+        assert "record.status !== 'active' && !selected" in html
+        assert "linkedStatus && linkedStatus !== 'active'" in html
+        assert '<td>${r.active ?' not in html
 
     def test_list_users_requires_auth(self, client):
         res = client.get('/api/users')
@@ -1917,7 +2271,7 @@ class TestAccountInvitations:
         assert 'temp_password' not in created
         assert any(call[1] == 'Create Your Sihha Password' for call in email_calls)
 
-    def test_general_user_form_does_not_disclose_portal_passwords(
+    def test_general_user_form_rejects_unlinked_portal_accounts_without_disclosure(
             self, client, auth):
         username = f'portal_{uuid.uuid4().hex[:8]}'
         created = client.post('/api/users', headers=auth, json={
@@ -1925,10 +2279,9 @@ class TestAccountInvitations:
             'name': 'Unlinked Portal User',
             'role': 'volunteer',
         })
-        assert created.status_code == 201
+        assert created.status_code == 422
         data = created.get_json()
-        assert data['username'] == username
-        assert data['access_email_sent'] is False
+        assert 'matching linked volunteer' in data['error']
         assert 'temp_password' not in data
 
     def test_general_user_form_rejects_admin_set_portal_password(
@@ -3588,9 +3941,29 @@ class TestAuditRegressions:
             headers=fam_temp, json={'bundle_size': 'L'}
         ).status_code == 401
 
-    def test_deactivation_revokes_linked_accounts_and_sessions(self, client, auth):
-        vol, vol_headers = self._active_volunteer(client, auth)
+    def test_deactivation_revokes_linked_accounts_sessions_and_access_links(
+            self, client, auth, monkeypatch):
+        monkeypatch.setattr(_server, '_email_send', lambda *args, **kwargs: True)
+        vol, vol_headers = self._active_volunteer(
+            client, auth, email='deactivation-audit@example.org'
+        )
         assert client.get('/api/portal/cycles', headers=vol_headers).status_code == 200
+        db = _server.make_conn()
+        try:
+            vol_user = db.execute(
+                "SELECT id FROM users WHERE linked_id=? AND role='volunteer'",
+                (vol['id'],)
+            ).fetchone()
+            invitation = db.execute(
+                '''SELECT id FROM account_invitations
+                   WHERE user_id=? AND invalidated_at IS NULL AND used_at IS NULL
+                   ORDER BY created_at DESC LIMIT 1''',
+                (vol_user['id'],)
+            ).fetchone()
+        finally:
+            db.close()
+        assert invitation is not None
+
         assert client.put(
             f'/api/volunteers/{vol["id"]}', headers=auth, json={'status': 'inactive'}
         ).status_code == 200
@@ -3614,6 +3987,22 @@ class TestAuditRegressions:
             assert db.execute(
                 "SELECT active FROM users WHERE linked_id=? AND role='family'", (fam['id'],)
             ).fetchone()['active'] == 0
+            assert db.execute(
+                '''SELECT invalidated_at FROM account_invitations WHERE id=?''',
+                (invitation['id'],)
+            ).fetchone()['invalidated_at'] is not None
+        finally:
+            db.close()
+
+        assert client.put(
+            f'/api/volunteers/{vol["id"]}', headers=auth, json={'status': 'active'}
+        ).status_code == 200
+        db = _server.make_conn()
+        try:
+            assert db.execute(
+                '''SELECT invalidated_at FROM account_invitations WHERE id=?''',
+                (invitation['id'],)
+            ).fetchone()['invalidated_at'] is not None
         finally:
             db.close()
 
