@@ -2195,10 +2195,18 @@ class TestUserDeletion:
         assert 'Delete User' in account_actions
         assert 'openDeleteUser' in account_actions
         assert 'userDeleteProtection' in html
-        assert "confirm_username: input.value" in html
+        assert "confirm_username: confirmation" in html
         assert "DEL('/users/' + uid" in html
         assert 'user-delete-submit' in html
         assert 'Type <strong>${esc(r.username)}</strong> to confirm' in html
+        assert 'id="user-delete-form"' in html
+        assert 'onsubmit="event.preventDefault();deleteUserAccount(' in html
+        assert 'type="submit" form="user-delete-form"' in html
+        assert "input.value.trim()" in html
+        assert 'Select Delete User or press Enter to continue.' in html
+        assert 'form.dataset.pending' in html
+        assert "form.setAttribute('aria-busy', 'true')" in html
+        assert 'input.disabled = true' in html
         assert edit_user.count('${userAccountActionsMarkup(r)}') == 2
         assert 'function showToast(message)' in html
         assert "toast.setAttribute('role', 'status')" in html

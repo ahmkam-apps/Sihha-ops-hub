@@ -4712,16 +4712,19 @@ function openDeleteUser(uid) {
        <strong>This permanently deletes the login account.</strong><br>
        Active sessions and unused access links will be revoked. ${linkedRecord}
      </div>
-     <div class="form-group">
-       <label for="user-delete-confirmation">Type <strong>${esc(r.username)}</strong> to confirm</label>
-       <input type="text" id="user-delete-confirmation" autocomplete="off" autocapitalize="none" spellcheck="false"
-         aria-describedby="user-delete-help" oninput="updateDeleteUserConfirmation('${escJs(r.id)}')">
-       <div id="user-delete-help" style="font-size:11px;color:var(--gray-4);margin-top:6px">This action cannot be undone.</div>
-     </div>
-     <div class="alert alert-error" id="user-delete-error" role="alert" style="display:none"></div>`,
+     <form id="user-delete-form" aria-busy="false" onsubmit="event.preventDefault();deleteUserAccount('${escJs(r.id)}')">
+       <div class="form-group">
+         <label for="user-delete-confirmation">Type <strong>${esc(r.username)}</strong> to confirm</label>
+         <input type="text" id="user-delete-confirmation" autocomplete="off" autocapitalize="none" spellcheck="false"
+           enterkeyhint="done" aria-describedby="user-delete-help"
+           oninput="updateDeleteUserConfirmation('${escJs(r.id)}')">
+         <div id="user-delete-help" aria-live="polite" style="font-size:11px;color:var(--gray-4);margin-top:6px">Enter the exact username. Leading and trailing spaces are ignored.</div>
+       </div>
+       <div class="alert alert-error" id="user-delete-error" role="alert" style="display:none"></div>
+     </form>`,
     `<button class="btn btn-outline" type="button" onclick="closeDrawer()">Cancel</button>
-     <button class="btn" type="button" id="user-delete-submit" disabled
-       style="background:var(--danger);margin-left:8px" onclick="deleteUserAccount('${escJs(r.id)}')">Delete User</button>`
+     <button class="btn" type="submit" form="user-delete-form" id="user-delete-submit" disabled
+       style="background:var(--danger);margin-left:8px">Delete User</button>`
   );
   requestAnimationFrame(() => document.getElementById('user-delete-confirmation')?.focus());
 }
@@ -4730,7 +4733,19 @@ function updateDeleteUserConfirmation(uid) {
   const r = window._users && window._users[uid];
   const input = document.getElementById('user-delete-confirmation');
   const submit = document.getElementById('user-delete-submit');
-  if (submit) submit.disabled = !r || !input || input.value !== r.username;
+  const help = document.getElementById('user-delete-help');
+  const form = document.getElementById('user-delete-form');
+  const confirmation = input ? input.value.trim() : '';
+  const matches = !!r && confirmation === r.username;
+  const pending = form?.dataset.pending === 'true';
+  if (submit) submit.disabled = pending || !matches;
+  if (help) {
+    help.textContent = matches
+      ? 'Username matches. Select Delete User or press Enter to continue.'
+      : confirmation
+        ? 'Username does not match. Check capitalization and spelling.'
+        : 'Enter the exact username. Leading and trailing spaces are ignored.';
+  }
 }
 
 async function deleteUserAccount(uid) {
@@ -4738,20 +4753,30 @@ async function deleteUserAccount(uid) {
   const input = document.getElementById('user-delete-confirmation');
   const submit = document.getElementById('user-delete-submit');
   const err = document.getElementById('user-delete-error');
-  if (!r || !input || input.value !== r.username) return;
+  const form = document.getElementById('user-delete-form');
+  const confirmation = input ? input.value.trim() : '';
+  if (!r || !input || !submit || !form || submit.disabled ||
+      form.dataset.pending === 'true' || confirmation !== r.username) return;
   err.style.display = 'none';
+  form.dataset.pending = 'true';
+  form.setAttribute('aria-busy', 'true');
+  input.disabled = true;
   submit.disabled = true;
   submit.textContent = 'Deleting…';
   try {
-    await DEL('/users/' + uid, {confirm_username: input.value});
+    await DEL('/users/' + uid, {confirm_username: confirmation});
     closeDrawer();
     showToast(`${r.username}'s login account was deleted.`);
     await renderUsers();
   } catch(e) {
     err.textContent = e.message;
     err.style.display = 'block';
+    form.dataset.pending = 'false';
+    form.setAttribute('aria-busy', 'false');
+    input.disabled = false;
     submit.textContent = 'Delete User';
     updateDeleteUserConfirmation(uid);
+    input.focus();
   }
 }
 

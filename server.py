@@ -2520,7 +2520,7 @@ def health():
             raise RuntimeError('database integrity check failed')
         conn.execute('SELECT 1 FROM users LIMIT 1').fetchone()
         return jsonify({
-            'status': 'ok', 'version': '1.2.4', 'time': now(),
+            'status': 'ok', 'version': '1.2.5', 'time': now(),
             'checks': {'database': 'ok', 'schema': 'ok'},
             'communications': {
                 'email_provider': EMAIL_PROVIDER,
