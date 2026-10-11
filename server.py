@@ -52,7 +52,9 @@ def add_security_headers(response):
     if (request.path.startswith('/confirm/')
             or request.path.startswith('/api/family/confirm/')
             or request.path == '/activate'
-            or request.path.startswith('/api/auth/access-invitation')):
+            or request.path.startswith('/api/auth/access-invitation')
+            or request.path in ('/forgot-password', '/reset-password')
+            or request.path.startswith('/api/auth/password-recovery')):
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Cache-Control'] = 'no-store'
     if request.is_secure:
@@ -75,6 +77,8 @@ UPLOAD_TOTAL_BYTES = int(os.environ.get('UPLOAD_TOTAL_BYTES', 2 * 1024 * 1024 * 
 CONFIRMATION_TOKEN_HOURS = int(os.environ.get('CONFIRMATION_TOKEN_HOURS', 168))
 ACCOUNT_INVITATION_MINUTES = 60
 ACCOUNT_INVITATION_URL = 'https://ops.sihha.org/activate'
+PASSWORD_RECOVERY_MINUTES = 45
+PASSWORD_RECOVERY_URL = 'https://ops.sihha.org/reset-password'
 EMAIL_PROVIDER = os.environ.get('EMAIL_PROVIDER', 'sendgrid').strip().lower() or 'sendgrid'
 SENDGRID_API_KEY  = os.environ.get('SENDGRID_API_KEY', '').strip()
 NOTIFY_FROM_EMAIL = os.environ.get('NOTIFY_FROM_EMAIL', 'ops@sihha.org')
@@ -196,6 +200,7 @@ def _sync_admin_password_from_env(conn, admin_pw):
                WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL''',
             (changed_at, admin_row['id'])
         )
+        _invalidate_password_recoveries(conn, admin_row['id'])
         conn.execute(
             '''INSERT INTO account_access_events
                (id,user_id,event_type,actor_user_id,detail,created_at)
@@ -358,6 +363,27 @@ def bootstrap_db():
             detail           TEXT,
             created_at       TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS account_recovery_email_verifications (
+            user_id TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            invitation_id TEXT NOT NULL,
+            verified_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS account_password_recoveries (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token_hash TEXT UNIQUE NOT NULL,
+            account_fingerprint TEXT NOT NULL,
+            delivery_email TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            email_sent_at TEXT,
+            used_at TEXT,
+            invalidated_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_password_recovery_user
+            ON account_password_recoveries(user_id, created_at);
 
         -- Internal operational state. Values must never contain raw secrets.
         CREATE TABLE IF NOT EXISTS app_settings (
@@ -1821,10 +1847,322 @@ def bootstrap_db():
     except Exception as _e:
         log.warning(f'Active-slot unique index skipped (duplicate CLAIMED slots need manual review): {_e}')
 
+    _bootstrap_password_recovery(conn)
     conn.commit()
     conn.close()
     final_size_kb = os.path.getsize(abs_db) / 1024
     log.info(f'Database bootstrapped. Size: {final_size_kb:.1f} KB  Path: {abs_db}')
+
+# ── Self-service password recovery ─────────────────────────────────────────────
+
+def _verify_recovery_email(db, user_id, email, invitation_id, verified_at):
+    db.execute('''INSERT INTO account_recovery_email_verifications
+                  (user_id,email,invitation_id,verified_at) VALUES (?,?,?,?)
+                  ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,
+                    invitation_id=excluded.invitation_id, verified_at=excluded.verified_at''',
+               (user_id, email.strip().lower(), invitation_id, verified_at))
+
+
+def _bootstrap_password_recovery(db):
+    """Once only: preserve objectively demonstrated ownership from used invitations.
+
+    An email on file or provider acceptance alone is never verification. This
+    migration is not repeated after a later edit clears verification.
+    """
+    if db.execute("SELECT 1 FROM app_settings WHERE key='recovery_email_backfill_v1'").fetchone():
+        return
+    # Claim the migration in the same transaction as its backfill. Concurrent
+    # bootstraps must neither fail on the marker nor replay cleared evidence.
+    claimed = db.execute("INSERT OR IGNORE INTO app_settings (key,value,updated_at) VALUES (?,?,?)",
+                         ('recovery_email_backfill_v1', 'completed', now())).rowcount
+    if not claimed:
+        return
+    for user in db.execute('SELECT * FROM users').fetchall():
+        if not user['active'] or not _linked_account_is_active(db, user):
+            continue
+        email = _account_delivery_email(db, user).strip().lower()
+        if not email or not _valid_public_email(email):
+            continue
+        proof = db.execute('''SELECT id,used_at FROM account_invitations
+                              WHERE user_id=? AND lower(trim(delivery_email))=?
+                                AND email_sent_at IS NOT NULL AND used_at IS NOT NULL
+                              ORDER BY used_at DESC LIMIT 1''', (user['id'], email)).fetchone()
+        if proof:
+            _verify_recovery_email(db, user['id'], email, proof['id'], proof['used_at'])
+
+
+def _invalidate_password_recoveries(db, user_id):
+    changed = db.execute('''UPDATE account_password_recoveries SET invalidated_at=?
+                           WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL''',
+                         (now(), user_id)).rowcount
+    if changed:
+        _record_account_access_event(db, user_id, 'password_recovery_invalidated')
+
+
+def _clear_recovery_email(db, user_id):
+    db.execute('DELETE FROM account_recovery_email_verifications WHERE user_id=?', (user_id,))
+    _invalidate_password_recoveries(db, user_id)
+
+
+def _recovery_account_fingerprint(db, user):
+    """Bind the link to current credentials, email proof and account ownership."""
+    import json
+    if not user or not user['active'] or not _linked_account_is_active(db, user):
+        return None
+    email = _account_delivery_email(db, user).strip().lower()
+    proof = db.execute('SELECT * FROM account_recovery_email_verifications WHERE user_id=?',
+                       (user['id'],)).fetchone()
+    if not email or not _valid_public_email(email) or not proof or proof['email'] != email:
+        return None
+    fields = [user[k] for k in ('id', 'username', 'password_hash', 'role', 'active',
+                               'linked_id', 'linked_type', 'must_change_password')]
+    fields += [email, proof['invitation_id'], proof['verified_at']]
+    return hashlib.sha256(json.dumps(fields, separators=(',', ':')).encode()).hexdigest()
+
+
+def _recovery_token(data):
+    import re
+    value = data.get('token') if isinstance(data, dict) else None
+    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{43}', value) else ''
+
+
+def _valid_password_recovery(db, token):
+    if not token:
+        return None
+    row = db.execute('''SELECT * FROM account_password_recoveries
+                        WHERE token_hash=? AND email_sent_at IS NOT NULL AND used_at IS NULL
+                          AND invalidated_at IS NULL AND expires_at>?''',
+                     (_account_invitation_digest(token), now())).fetchone()
+    if not row:
+        return None
+    user = db.execute('SELECT * FROM users WHERE id=?', (row['user_id'],)).fetchone()
+    if _recovery_account_fingerprint(db, user) != row['account_fingerprint']:
+        return None
+    return row
+
+
+# No threads start until a request arrives (safe with Gunicorn preload). Queue
+# capacity is bounded, including waiting tasks, rather than spawning per request.
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore
+_recovery_mail_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='recovery-mail')
+_recovery_mail_slots = BoundedSemaphore(8)
+
+
+def _queue_recovery_mail(job, *args):
+    if not _recovery_mail_slots.acquire(blocking=False):
+        return False
+    def run():
+        try:
+            job(*args)
+        except Exception:
+            # Exception strings/tracebacks can contain request URLs or mail bodies.
+            log.warning('Password recovery background task failed')
+        finally:
+            _recovery_mail_slots.release()
+    try:
+        _recovery_mail_pool.submit(run)
+        return True
+    except Exception:
+        _recovery_mail_slots.release()
+        return False
+
+
+def _deliver_password_recovery(recovery_id, raw_token):
+    db = make_conn()
+    try:
+        row = db.execute('SELECT * FROM account_password_recoveries WHERE id=?',
+                         (recovery_id,)).fetchone()
+        if not row or row['invalidated_at'] or row['used_at'] or row['expires_at'] <= now():
+            return
+        user = db.execute('SELECT * FROM users WHERE id=?', (row['user_id'],)).fetchone()
+        if _recovery_account_fingerprint(db, user) != row['account_fingerprint']:
+            return
+        # Fixed canonical URL; never use Host, forwarded host, next, or user URLs.
+        url = f'{PASSWORD_RECOVERY_URL}#token={raw_token}'
+        body = (f'A password reset was requested for your Sihha account.\n\n'
+                f'Reset your password: {url}\n\n'
+                f'This link works once and expires in {PASSWORD_RECOVERY_MINUTES} minutes. '
+                f'If you did not request it, ignore this email. Your password has not changed.\n\n'
+                f'Need help? Contact info@sihha.org.')
+        try:
+            import html
+            html_body = (f'<p>A password reset was requested for your Sihha account.</p>'
+                         f'<p><a href="{html.escape(url, quote=True)}">Reset your Sihha password</a></p>'
+                         f'<p>This link works once and expires in {PASSWORD_RECOVERY_MINUTES} minutes. '
+                         f'If you did not request it, ignore this email. Your password has not changed.</p>'
+                         f'<p>Need help? Contact info@sihha.org.</p>')
+            sent = _email_send(row['delivery_email'], 'Reset Your Sihha Password', body,
+                               html_body=html_body)
+        except Exception:
+            sent = False
+        db.execute('BEGIN IMMEDIATE')
+        user = db.execute('SELECT * FROM users WHERE id=?', (row['user_id'],)).fetchone()
+        still_valid = _recovery_account_fingerprint(db, user) == row['account_fingerprint']
+        stamp = now()
+        changed = db.execute('''UPDATE account_password_recoveries
+                               SET email_sent_at=?, invalidated_at=?
+                               WHERE id=? AND used_at IS NULL AND invalidated_at IS NULL''',
+                             (stamp if sent and still_valid else None,
+                              None if sent and still_valid else stamp, recovery_id)).rowcount
+        if changed:
+            _record_account_access_event(db, row['user_id'],
+                'password_recovery_email_sent' if sent and still_valid else 'password_recovery_email_failed')
+        db.commit()
+    finally:
+        db.close()
+
+
+def _recovery_invalid_response():
+    return jsonify({'error': 'This reset link is invalid or has expired. Request a new link.'}), 400
+
+
+@app.route('/api/auth/password-recovery', methods=['POST'])
+def request_password_recovery():
+    data = request.get_json(silent=True)
+    value = data.get('username') if isinstance(data, dict) else None
+    username = value.strip() if isinstance(value, str) and len(value) <= 200 else ''
+    response = jsonify({'ok': True, 'message':
+        'If this account is eligible for recovery, a reset link will be sent to its verified email. '
+        'Check your inbox and spam folder. If no email arrives, contact your Sihha coordinator.'})
+    response.status_code = 202
+    db = get_db()
+    # Serialize checking AND recording all buckets across workers. Identity
+    # buckets are recorded for unknown accounts too; never disclose their limit.
+    db.execute('BEGIN IMMEDIATE')
+    if _rate_limit_blocked(db, 'recovery_request_ip', _client_ip(), 20, 3600):
+        db.rollback()
+        return _rate_limit_response(3600)
+    _rate_limit_record(db, 'recovery_request_ip', _client_ip())
+    limited = (_rate_limit_blocked(db, 'recovery_request_identity', username.lower(), 3, 3600)
+               or _rate_limit_blocked(db, 'recovery_request_identity', username.lower(), 1, 60))
+    if not limited:
+        _rate_limit_record(db, 'recovery_request_identity', username.lower())
+    user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+    fingerprint = _recovery_account_fingerprint(db, user)
+    if limited or not fingerprint:
+        db.commit()
+        return response
+    # Keep transient capabilities bounded; append-only security events remain.
+    db.execute('''DELETE FROM account_password_recoveries
+                  WHERE expires_at<? AND created_at<?''',
+               (now(), (datetime.utcnow() - timedelta(days=30)).isoformat()))
+    # Keep an emailed link usable across repeats. Retry a stranded pending send
+    # after two minutes; an old worker cannot resurrect the invalidated record.
+    pending_cutoff = (datetime.utcnow() - timedelta(minutes=2)).isoformat()
+    db.execute('''UPDATE account_password_recoveries SET invalidated_at=?
+                  WHERE user_id=? AND account_fingerprint!=? AND used_at IS NULL
+                    AND invalidated_at IS NULL''', (now(), user['id'], fingerprint))
+    db.execute('''UPDATE account_password_recoveries SET invalidated_at=?
+                  WHERE user_id=? AND email_sent_at IS NULL AND used_at IS NULL
+                    AND invalidated_at IS NULL AND created_at<?''',
+               (now(), user['id'], pending_cutoff))
+    outstanding = db.execute('''SELECT 1 FROM account_password_recoveries
+                               WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL
+                                 AND expires_at>?''', (user['id'], now())).fetchone()
+    if outstanding:
+        db.commit()
+        return response
+    recovery_id = str(uuid.uuid4())
+    token = secrets.token_urlsafe(32)
+    db.execute('''INSERT INTO account_password_recoveries
+                  (id,user_id,token_hash,account_fingerprint,delivery_email,created_at,expires_at)
+                  VALUES (?,?,?,?,?,?,?)''',
+               (recovery_id, user['id'], _account_invitation_digest(token), fingerprint,
+                _account_delivery_email(db, user).strip(), now(),
+                (datetime.utcnow() + timedelta(minutes=PASSWORD_RECOVERY_MINUTES)).isoformat()))
+    _record_account_access_event(db, user['id'], 'password_recovery_requested')
+    db.commit()
+    if not _queue_recovery_mail(_deliver_password_recovery, recovery_id, token):
+        db.execute('UPDATE account_password_recoveries SET invalidated_at=? WHERE id=?',
+                   (now(), recovery_id))
+        _record_account_access_event(db, user['id'], 'password_recovery_email_failed')
+        db.commit()
+    return response
+
+
+def _recovery_attempt_allowed(db, token):
+    db.execute('BEGIN IMMEDIATE')
+    if (_rate_limit_blocked(db, 'recovery_link_ip', _client_ip(), 60, 3600)
+            or _rate_limit_blocked(db, 'recovery_link_token', token or 'missing', 20, 3600)):
+        db.rollback()
+        return False
+    _rate_limit_record(db, 'recovery_link_ip', _client_ip())
+    _rate_limit_record(db, 'recovery_link_token', token or 'missing')
+    db.commit()
+    return True
+
+
+@app.route('/api/auth/password-recovery/validate', methods=['POST'])
+def password_recovery_info():
+    token = _recovery_token(request.get_json(silent=True))
+    db = get_db()
+    if not _recovery_attempt_allowed(db, token):
+        return _rate_limit_response(3600)
+    if not _valid_password_recovery(db, token):
+        return _recovery_invalid_response()
+    return jsonify({'valid': True})
+
+
+@app.route('/api/auth/password-recovery/reset', methods=['POST'])
+def reset_password_recovery():
+    data = request.get_json(silent=True)
+    token = _recovery_token(data)
+    db = get_db()
+    if not _recovery_attempt_allowed(db, token):
+        return _rate_limit_response(3600)
+    password = data.get('password') if isinstance(data, dict) else None
+    confirmation = data.get('password_confirmation') if isinstance(data, dict) else None
+    if not isinstance(password, str) or len(password) > 1024:
+        return jsonify({'error': 'Enter a password of at most 1024 characters.'}), 422
+    if password != confirmation:
+        return jsonify({'error': 'Passwords do not match.'}), 422
+    valid, error = _validate_password(password)
+    if not valid:
+        return jsonify({'error': error}), 422
+    # Throttle and validate the capability before expensive password hashing.
+    if not _valid_password_recovery(db, token):
+        return _recovery_invalid_response()
+    password_hash = generate_password_hash(password)
+    db.execute('BEGIN IMMEDIATE')
+    recovery = _valid_password_recovery(db, token)
+    if not recovery:
+        db.rollback()
+        return _recovery_invalid_response()
+    used_at = now()
+    db.execute('UPDATE account_password_recoveries SET used_at=? WHERE id=?',
+               (used_at, recovery['id']))
+    db.execute('''UPDATE users SET password_hash=?, must_change_password=0,
+                  password_changed_at=? WHERE id=?''',
+               (password_hash, used_at, recovery['user_id']))
+    _revoke_user_sessions(db, recovery['user_id'])
+    user = db.execute('SELECT * FROM users WHERE id=?', (recovery['user_id'],)).fetchone()
+    if user['role'] == 'volunteer' and user['linked_id']:
+        db.execute('DELETE FROM portal_sessions WHERE volunteer_id=?', (user['linked_id'],))
+    _invalidate_account_invitations(db, recovery['user_id'], detail='password_recovered')
+    _record_account_access_event(db, recovery['user_id'], 'password_recovered')
+    db.commit()
+    if not _queue_recovery_mail(_send_recovery_confirmation, recovery['user_id'], recovery['delivery_email']):
+        _record_account_access_event(db, recovery['user_id'], 'recovery_confirmation_failed')
+        db.commit()
+    return jsonify({'ok': True, 'login_url': '/login'})
+
+
+def _send_recovery_confirmation(user_id, email):
+    try:
+        sent = _email_send(email, 'Your Sihha Password Was Reset',
+            'Your Sihha password was reset. Existing sessions have been signed out.\n\n'
+            'Sign in at https://ops.sihha.org/login. If you did not make this change, '
+            'contact info@sihha.org immediately.')
+    except Exception:
+        sent = False
+    db = make_conn()
+    try:
+        _record_account_access_event(db, user_id,
+            'recovery_confirmation_sent' if sent else 'recovery_confirmation_failed')
+        db.commit()
+    finally:
+        db.close()
 
 # ── Auth Helpers ──────────────────────────────────────────────────────────────
 
@@ -2710,6 +3048,7 @@ def _record_account_access_event(db, user_id, event_type,
 def _invalidate_account_invitations(db, user_id, actor_user_id=None, detail=None,
                                     except_invitation_id=None):
     """Invalidate every outstanding link for a user and append one audit event."""
+    _invalidate_password_recoveries(db, user_id)
     invalidated_at = now()
     sql = '''UPDATE account_invitations SET invalidated_at=?
              WHERE user_id=? AND used_at IS NULL AND invalidated_at IS NULL'''
@@ -2916,6 +3255,9 @@ def activate_account_invitation():
     _record_account_access_event(
         db, invitation['user_id'], 'password_created', invitation['id']
     )
+    user = db.execute('SELECT * FROM users WHERE id=?', (invitation['user_id'],)).fetchone()
+    if _account_delivery_email(db, user).strip().lower() == invitation['delivery_email'].strip().lower():
+        _verify_recovery_email(db, user['id'], invitation['delivery_email'], invitation['id'], used_at)
     db.commit()
 
     confirmation_body = (
@@ -3385,16 +3727,17 @@ def update_user(uid):
              data.get('email', row['email']),
              linked_id, linked_type, must_change, uid)
         )
-        if any(k in data for k in (
-                'role', 'active', 'linked_id', 'linked_type',
-                'must_change_password')):
+        updated = db.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone()
+        if any(updated[k] != row[k] for k in (
+                'role', 'active', 'linked_id', 'linked_type', 'must_change_password')):
             _revoke_user_sessions(db, uid)
-        if any(k in data for k in (
-                'email', 'role', 'active', 'linked_id',
-                'linked_type', 'must_change_password')):
+        if any(updated[k] != row[k] for k in (
+                'email', 'role', 'active', 'linked_id', 'linked_type', 'must_change_password')):
             _invalidate_account_invitations(
                 db, uid, actor_user_id=g.user['user_id'], detail='account_updated'
             )
+        if any(updated[k] != row[k] for k in ('email', 'role', 'active', 'linked_id', 'linked_type')):
+            db.execute('DELETE FROM account_recovery_email_verifications WHERE user_id=?', (uid,))
         db.commit()
     except sqlite3.IntegrityError as e:
         return jsonify({'error': str(e)}), 400
@@ -3481,6 +3824,8 @@ def delete_user(uid):
             (uid,)
         )
         db.execute('DELETE FROM account_invitations WHERE user_id=?', (uid,))
+        db.execute('DELETE FROM account_recovery_email_verifications WHERE user_id=?', (uid,))
+        db.execute('DELETE FROM account_password_recoveries WHERE user_id=?', (uid,))
         import json as _json
         deletion_snapshot = _json.dumps({
             'action': 'login_account_deleted',
@@ -4224,6 +4569,10 @@ def update_family(fid):
     ).fetchall()
     for linked_user in linked_users:
         is_active = 1 if new_status == 'active' else 0
+        if new_email != row['email'] or new_status != prev_status:
+            _clear_recovery_email(db, linked_user['id'])
+            _invalidate_account_invitations(db, linked_user['id'],
+                actor_user_id=g.user['user_id'], detail='linked_family_updated')
         if new_status != prev_status:
             db.execute(
                 "UPDATE users SET active=?, email=?, name=? WHERE id=?",
@@ -4347,6 +4696,8 @@ def delete_family(fid):
             db.execute("DELETE FROM reminder_log WHERE slot_id=?", (sid,))
         for uid in user_ids:
             db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+            _clear_recovery_email(db, uid)
+            db.execute('DELETE FROM account_password_recoveries WHERE user_id=?', (uid,))
 
         db.execute("DELETE FROM order_change_requests WHERE family_id=?", (fid,))
         db.execute("DELETE FROM food_requests          WHERE family_id=?", (fid,))
@@ -4548,6 +4899,10 @@ def update_volunteer(vid):
     ).fetchall()
     for linked_user in linked_users:
         is_active = 1 if new_status == 'active' else 0
+        if new_email != row['email'] or new_status != prev_status:
+            _clear_recovery_email(db, linked_user['id'])
+            _invalidate_account_invitations(db, linked_user['id'],
+                actor_user_id=g.user['user_id'], detail='linked_volunteer_updated')
         if new_status != prev_status:
             db.execute(
                 "UPDATE users SET active=?, email=?, name=? WHERE id=?",
@@ -7702,6 +8057,14 @@ def login_page():
 @app.route('/activate')
 def activate_page():
     return send_from_directory('public', 'activate.html')
+
+@app.route('/forgot-password')
+def forgot_password_page():
+    return send_from_directory('public', 'forgot-password.html')
+
+@app.route('/reset-password')
+def reset_password_page():
+    return send_from_directory('public', 'reset-password.html')
 
 @app.route('/family')
 def family_page():

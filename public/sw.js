@@ -25,7 +25,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
   // API calls: always network, never cache
-  if (url.pathname.startsWith('/api/')) {
+  if (url.pathname.startsWith('/api/') || ['/forgot-password', '/reset-password'].includes(url.pathname)) {
     e.respondWith(fetch(e.request));
     return;
   }
